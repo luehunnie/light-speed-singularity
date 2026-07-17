@@ -1,0 +1,52 @@
+# Godot 4+ specific ignores
+.godot/
+/android/
+
+# 本地编辑器与开发工具配置
+.vscode/
+.idea/
+.claude/
+.mcp.json
+*.code-workspace
+
+# AI 开发过程文档，仅保留在本地
+/docs/ai/
+
+# Godot 翻译生成文件
+*.translation
+
+# 构建与导出产物
+build/
+dist/
+export/
+exports/
+
+*.exe
+*.pck
+*.zip
+*.tar
+*.tar.gz
+
+# 临时文件与日志
+*.log
+*.tmp
+*.bak
+*.swp
+*.autosave
+*~
+
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# 本地环境和敏感文件
+.env
+.env.*
+!.env.example
+
+*.pem
+*.key
+*.pfx
+*.p12
+
+export_credentials.cfg

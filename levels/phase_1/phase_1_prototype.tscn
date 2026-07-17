@@ -1,0 +1,59 @@
+[gd_scene format=3 uid="uid://bw4ulmdm0mei0"]
+
+[ext_resource type="Script" uid="uid://cfkidx57m3yqa" path="res://gameplay/phase_1/basic_crystal.gd" id="1_crystal"]
+[ext_resource type="Script" uid="uid://do7wigwkihxy0" path="res://levels/phase_1/phase_1_prototype.gd" id="2_proto"]
+
+[node name="Phase1Prototype" type="Node2D" unique_id=1552304930]
+script = ExtResource("2_proto")
+
+[node name="TerrainLayer" type="TileMapLayer" parent="." unique_id=400361494]
+
+[node name="Walls" type="Node2D" parent="." unique_id=2031640143]
+
+[node name="Wall5x3" type="ColorRect" parent="Walls" unique_id=1708163415]
+offset_left = 320.0
+offset_top = 192.0
+offset_right = 384.0
+offset_bottom = 256.0
+color = Color(0.25, 0.25, 0.28, 1)
+
+[node name="RuntimeObjects" type="Node2D" parent="." unique_id=820444864]
+
+[node name="Emitter" type="Node2D" parent="RuntimeObjects" unique_id=1264479859]
+
+[node name="EmitterVisual" type="ColorRect" parent="RuntimeObjects/Emitter" unique_id=1309797398]
+offset_left = 64.0
+offset_top = 192.0
+offset_right = 128.0
+offset_bottom = 256.0
+color = Color(0.2, 0.85, 1, 1)
+
+[node name="Crystal" type="Node2D" parent="RuntimeObjects" unique_id=1716045995]
+script = ExtResource("1_crystal")
+cell = Vector2i(3, 3)
+
+[node name="CrystalVisual" type="ColorRect" parent="RuntimeObjects/Crystal" unique_id=964004285]
+offset_left = 192.0
+offset_top = 192.0
+offset_right = 256.0
+offset_bottom = 256.0
+color = Color(0.35, 0.45, 0.7, 1)
+
+[node name="LightPathLayer" type="Node2D" parent="." unique_id=1467401346]
+
+[node name="CanvasLayer" type="CanvasLayer" parent="." unique_id=1859400072]
+
+[node name="HintLabel" type="Label" parent="CanvasLayer" unique_id=2000846429]
+offset_left = 16.0
+offset_top = 16.0
+offset_right = 320.0
+offset_bottom = 48.0
+text = "Space：发射"
+
+[node name="CompleteLabel" type="Label" parent="CanvasLayer" unique_id=1847718236]
+visible = false
+offset_left = 16.0
+offset_top = 56.0
+offset_right = 320.0
+offset_bottom = 88.0
+text = "关卡完成"
