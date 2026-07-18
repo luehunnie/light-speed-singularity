@@ -1,9 +1,9 @@
 class_name BasicCrystal
 extends Node2D
 
-## 第一阶段普通独立水晶占位脚本（plan §4.3 / v0.8 水晶规则）。
+## 核心闭环原型普通独立水晶占位脚本（plan §4.3 / v0.8 水晶规则）。
 ## 职责：保存格子坐标与点亮状态，提供 activate() / reset_runtime()，并用当前 ColorRect 的透明度表现未点亮和点亮。
-## 位置：由第一阶段原型关卡控制器 phase_1_prototype.gd 按 Vector2i 格子命中后调用。
+## 位置：由核心闭环原型关卡控制器 core_loop_prototype.gd 按 Vector2i 格子命中后调用。
 ## 依赖：当前场景结构中必须存在名为 CrystalVisual 的 ColorRect 子节点；水晶基础 RGB 来自该视觉节点的初始颜色。
 ## 不负责：光是否经过、墙体阻挡、通关判断、颜色/光形式条件、同时组、顺序组或通用 ObjectiveController。
 ## 注意：普通独立水晶合法点亮后保持到玩家按 R 重置，不随普通光线路径约 1 秒后消失而熄灭。
