@@ -5,8 +5,12 @@ extends Node2D
 ## 用 Vector2i 立即计算直线路径、查询墙体与边界、通知普通独立水晶点亮、
 ## 判断并保持关卡完成结果、在脉冲结束时只清理光路视觉、在 R 重置时恢复运行状态；
 ## 持有轻量占用表 OccupancyRegistry，提供“格子—机关”统一查询入口。
+## 最小运行状态职责：在当前原型内保存 SETUP、PULSE_ACTIVE、MOVE_WINDOW、COMPLETED，
+## 第一次合法发射后锁定人工配置，脉冲结束后按完成结果进入 MOVE_WINDOW 或 COMPLETED，
+## R 恢复 SETUP 并解除锁定。
 ## 依赖：OccupancyRegistry（gameplay/phase_1/occupancy_registry.gd）、BasicCrystal 的 activate() / reset_runtime()。
-## 不负责：镜面反射、分光、颜色、成就、存档、正式关卡加载、拖拽放置、运行期移动、完整状态机、同时组、顺序组或通用水晶条件系统。
+## 不负责：镜面反射、分光、颜色、成就、存档、正式关卡加载、拖拽放置、运行期移动、完整 RunStateController、
+## 移动次数、同时组、顺序组或通用水晶条件系统。
 ## 光路判定完全基于 Vector2i 格子坐标，不使用 Area2D 碰撞、Tween 或物理射线检测作为核心逻辑。
 
 
@@ -14,6 +18,17 @@ extends Node2D
 const CELL_SIZE: int = 64
 const MAX_PROPAGATION_STEPS: int = 128
 const PULSE_VISUAL_DURATION_SECONDS: float = 1.0
+
+## 当前原型的最小运行状态。
+## SETUP 表示尚未开始本次运行；PULSE_ACTIVE 表示普通脉冲仍在统一显示窗口内；
+## MOVE_WINDOW 表示脉冲结束但未通关，未来可在此提交有限移动；COMPLETED 表示通关结果已成立。
+## 本枚举只服务当前关卡控制器，不是完整 RunStateController。
+enum RunState {
+	SETUP,
+	PULSE_ACTIVE,
+	MOVE_WINDOW,
+	COMPLETED,
+}
 
 @export var emitter_cell: Vector2i = Vector2i(1, 3)
 @export var emitter_direction: Vector2i = Vector2i.RIGHT
@@ -33,12 +48,13 @@ const PULSE_VISUAL_DURATION_SECONDS: float = 1.0
 const _OccupancyRegistry: GDScript = preload("res://gameplay/phase_1/occupancy_registry.gd")
 var occupancy: _OccupancyRegistry = _OccupancyRegistry.new()
 
-## 当前是否存在仍在显示窗口内的普通脉冲。
-## 用于拒绝重叠 Space 请求，避免同一时间存在多条普通脉冲或多个有效清理流程。
-var is_pulse_active: bool = false
+## 当前显式运行状态，是运行阶段的唯一事实来源。
+## 配置锁定与脉冲活动状态都由它推导；完成目标事实由 is_level_completed 独立保存。
+var current_run_state: RunState = RunState.SETUP
 
 ## 当前运行是否已经完成关卡。
 ## 与光路视觉生命周期分离；普通独立水晶和完成结果都保持到 R 重置。
+## 命中时可先于 current_run_state 变为 true，current_run_state 会在脉冲视觉结束后进入 COMPLETED。
 var is_level_completed: bool = false
 
 ## 当前脉冲版本号。
@@ -48,12 +64,13 @@ var pulse_generation: int = 0
 
 ## 初始化第一阶段原型关卡。
 ## [br]本函数无参数、无返回值。
-## [br]副作用：仅在调试构建中执行 OccupancyRegistry 启动期自检；自检结束后会清空占用表，
-## 保证运行期仍从空占用表开始，不改变 Space 发射、墙体、水晶、脉冲生命周期或 R 重置逻辑。
+## [br]副作用：仅在调试构建中执行 OccupancyRegistry 启动期自检和 MOVE_WINDOW / COMPLETED 纯逻辑状态自检；
+## 自检结束后占用表为空，真实运行状态、配置锁定、水晶和完成标签不被改变。
 ## [br]边界条件：发布构建不执行自检，避免把调试断言作为运行期必需流程。
 func _ready() -> void:
 	if OS.is_debug_build():
 		_run_occupancy_registry_self_check()
+		_run_post_pulse_state_self_check()
 
 
 ## 执行 OccupancyRegistry 启动期轻量自检。
@@ -86,10 +103,51 @@ func _run_occupancy_registry_self_check() -> void:
 	assert(occupancy.is_consistent(), "占用表自检：清空后仍应一致")
 
 
+## 执行脉冲结束目标状态决策的调试自检。
+## [br]本函数无参数、无返回值。
+## [br]副作用：仅在调试构建中用 assert 验证 _get_post_pulse_state(false) 返回 MOVE_WINDOW、true 返回 COMPLETED，
+## 并验证配置锁定和编辑权限均由 current_run_state 推导。
+## [br]状态变化：会临时调用 _set_run_state() 检查权限推导，结束前恢复原始 current_run_state；不修改 is_level_completed 或 pulse_generation。
+## [br]边界条件：当前演示关卡可能首次发射直接完成，无法人工进入 MOVE_WINDOW，因此此处只做不改场景的逻辑检查。
+func _run_post_pulse_state_self_check() -> void:
+	var original_state: RunState = current_run_state
+	var original_level_completed: bool = is_level_completed
+	var original_pulse_generation: int = pulse_generation
+
+	# 当前正常关卡可能无法自然进入 MOVE_WINDOW；这里只验证纯函数，不改变真实运行结果。
+	assert(_get_post_pulse_state(false) == RunState.MOVE_WINDOW, "运行状态自检：未完成脉冲结束后应进入 MOVE_WINDOW")
+	assert(_get_post_pulse_state(true) == RunState.COMPLETED, "运行状态自检：已完成脉冲结束后应进入 COMPLETED")
+
+	_set_run_state(RunState.SETUP)
+	assert(can_edit_configuration(), "运行状态自检：SETUP 应允许编辑配置")
+	assert(not is_configuration_locked(), "运行状态自检：SETUP 不应锁定配置")
+	assert(not is_current_pulse_active(), "运行状态自检：SETUP 不应有活动脉冲")
+
+	_set_run_state(RunState.PULSE_ACTIVE)
+	assert(not can_edit_configuration(), "运行状态自检：PULSE_ACTIVE 不允许编辑配置")
+	assert(is_configuration_locked(), "运行状态自检：PULSE_ACTIVE 应锁定配置")
+	assert(is_current_pulse_active(), "运行状态自检：PULSE_ACTIVE 应表示脉冲活动")
+
+	_set_run_state(RunState.MOVE_WINDOW)
+	assert(not can_edit_configuration(), "运行状态自检：MOVE_WINDOW 不允许编辑配置")
+	assert(is_configuration_locked(), "运行状态自检：MOVE_WINDOW 应锁定配置")
+	assert(not is_current_pulse_active(), "运行状态自检：MOVE_WINDOW 不应有活动脉冲")
+
+	_set_run_state(RunState.COMPLETED)
+	assert(not can_edit_configuration(), "运行状态自检：COMPLETED 不允许编辑配置")
+	assert(is_configuration_locked(), "运行状态自检：COMPLETED 应锁定配置")
+	assert(not is_current_pulse_active(), "运行状态自检：COMPLETED 不应有活动脉冲")
+
+	_set_run_state(original_state)
+	assert(current_run_state == original_state, "运行状态自检：结束后必须恢复 current_run_state")
+	assert(is_level_completed == original_level_completed, "运行状态自检：不得修改 is_level_completed")
+	assert(pulse_generation == original_pulse_generation, "运行状态自检：不得修改 pulse_generation")
+
+
 ## 处理关卡输入动作。
 ## [br]event 是 Godot 传入的输入事件。
-## [br]无返回值；副作用是 fire_light 动作在空闲且未完成时触发一次脉冲，reset_level 动作执行完整运行重置。
-## [br]边界条件：脉冲活动中和关卡完成后的 Space 会在 fire_light() 中被忽略；其他按键不触发发射或重置。
+## [br]无返回值；副作用是 fire_light 动作在 SETUP 或 MOVE_WINDOW 时触发一次脉冲，reset_level 动作执行完整运行重置。
+## [br]边界条件：PULSE_ACTIVE 和 COMPLETED 中的 Space 会在 fire_light() 中被忽略；其他按键不触发发射或重置。
 func _unhandled_input(event: InputEvent) -> void:
 	if event.is_action_pressed("fire_light"):
 		fire_light()
@@ -97,17 +155,72 @@ func _unhandled_input(event: InputEvent) -> void:
 		reset_runtime()
 
 
+## 查询当前是否允许发射普通脉冲。
+## [br]本函数无参数。
+## [br]返回 true 表示 SETUP 或 MOVE_WINDOW 可以发射；返回 false 表示 PULSE_ACTIVE 或 COMPLETED 必须拒绝 Space。
+## [br]本函数无副作用；边界条件：完成标签已显示但脉冲尚未视觉结束时，状态仍是 PULSE_ACTIVE，因此重复 Space 仍被拒绝。
+func can_fire_light() -> bool:
+	return current_run_state == RunState.SETUP or current_run_state == RunState.MOVE_WINDOW
+
+
+## 查询当前是否允许人工编辑配置。
+## [br]本函数无参数。
+## [br]返回 true 仅表示当前处于 SETUP；其他状态全部返回 false。
+## [br]本函数无副作用；边界条件：当前原型尚无真实配置 UI、拖拽或机关栏，本函数只提供未来模块调用的权限事实。
+func can_edit_configuration() -> bool:
+	return current_run_state == RunState.SETUP
+
+
+## 查询当前人工配置是否已锁定。
+## [br]本函数无参数。
+## [br]返回 true 表示当前不在 SETUP，人工配置已由运行阶段状态推导为锁定。
+## [br]本函数无副作用；边界条件：锁定只表示玩家手动配置不可改，不阻止未来受控机关自动改变自身运行状态。
+func is_configuration_locked() -> bool:
+	return current_run_state != RunState.SETUP
+
+
+## 查询当前是否处于普通脉冲活动窗口。
+## [br]本函数无参数。
+## [br]返回 true 表示 current_run_state 为 PULSE_ACTIVE；其他状态返回 false。
+## [br]本函数无副作用；边界条件：通关目标可在 PULSE_ACTIVE 期间已成立，脉冲活动仍以运行状态为准。
+func is_current_pulse_active() -> bool:
+	return current_run_state == RunState.PULSE_ACTIVE
+
+
+## 集中切换当前最小运行状态。
+## [br]new_state 是目标 RunState。
+## [br]无返回值；副作用是更新 current_run_state，并在调试构建中拒绝未知枚举值。
+## [br]状态变化：只改变 current_run_state；配置锁定和脉冲活动都由状态查询函数推导，is_level_completed 由目标完成流程单独维护。
+## [br]边界条件：必须允许 PULSE_ACTIVE 且 is_level_completed 为 true 的中间状态，表示通关条件已成立但脉冲视觉尚未结束。
+func _set_run_state(new_state: RunState) -> void:
+	if new_state < RunState.SETUP or new_state > RunState.COMPLETED:
+		push_error("Phase1Prototype: 非法运行状态：%s" % [new_state])
+		return
+
+	current_run_state = new_state
+
+
+## 决定有效普通脉冲结束后应进入的目标状态。
+## [br]level_completed 表示脉冲结算后关卡完成条件是否已经成立。
+## [br]返回 COMPLETED 表示已完成，返回 MOVE_WINDOW 表示未完成且可等待未来移动或再次发射。
+## [br]本函数无副作用，不读取或修改真实场景状态。
+## [br]边界条件：只负责 PULSE_ACTIVE 结束后的二选一状态，不处理 R、非法发射、拖拽或移动次数。
+func _get_post_pulse_state(level_completed: bool) -> RunState:
+	return RunState.COMPLETED if level_completed else RunState.MOVE_WINDOW
+
+
 ## 发射一次第一阶段最小脉冲光线。
 ## [br]本函数无参数、无返回值。
-## [br]副作用：空闲且关卡未完成时，清理上一轮光路视觉，立即按当前布局计算完整直线路径，
-## 立即生成光路视觉、点亮普通独立水晶并判断完成，然后启动约 1 秒的光路视觉保持流程。
-## [br]状态变化：开始时设置 is_pulse_active 为 true 并递增 pulse_generation；若全部必需水晶被本次脉冲满足，设置 is_level_completed 为 true。
-## [br]失败条件：方向非法时报告错误并不创建脉冲；脉冲活动中或关卡已完成时忽略请求。
+## [br]副作用：SETUP 或 MOVE_WINDOW 中，清理上一轮光路视觉，按当前布局计算完整直线路径，
+## 生成光路视觉、点亮普通独立水晶并判断完成，然后启动约 1 秒的光路视觉保持流程。
+## [br]状态变化：开始时通过 _set_run_state(RunState.PULSE_ACTIVE) 进入脉冲活动并递增 pulse_generation；
+## 若全部必需水晶被本次脉冲满足，update_completion_state() 会先设置 is_level_completed，current_run_state 等脉冲视觉结束后再进入 COMPLETED。
+## [br]失败条件：方向非法时报告错误并不创建脉冲；PULSE_ACTIVE 或 COMPLETED 中忽略 Space。
 ## [br]边界条件：遇到地图边界、墙体或 MAX_PROPAGATION_STEPS 上限时停止传播；路径、命中和通关判断均在发射当下完成，不等待 1 秒；普通独立水晶点亮后保持到 R。
 func fire_light() -> void:
-	if is_level_completed:
-		return
-	if is_pulse_active:
+	if not can_fire_light():
+		if OS.is_debug_build():
+			print_debug("Phase1Prototype: 当前运行状态拒绝 Space 发射：%s。" % [current_run_state])
 		return
 
 	var direction: Vector2i = emitter_direction
@@ -117,8 +230,8 @@ func fire_light() -> void:
 
 	_prepare_for_new_pulse()
 
-	# 脉冲开始：只允许一个有效脉冲进入约 1 秒显示窗口。
-	is_pulse_active = true
+	# 脉冲开始：PULSE_ACTIVE 同时表示配置已锁定且存在活动脉冲。
+	_set_run_state(RunState.PULSE_ACTIVE)
 	pulse_generation += 1
 	var current_pulse_generation: int = pulse_generation
 
@@ -155,7 +268,7 @@ func fire_light() -> void:
 	if steps >= MAX_PROPAGATION_STEPS:
 		push_warning("Light propagation stopped by MAX_PROPAGATION_STEPS")
 
-	# 通关判断立即完成；完成结果与约 1 秒光路视觉生命周期分离保存。
+	# 通关判断立即完成；CompleteLabel 可立刻显示，但 current_run_state 保持 PULSE_ACTIVE 到脉冲视觉结束。
 	update_completion_state()
 
 	_finish_pulse_after_delay(current_pulse_generation)
@@ -164,7 +277,7 @@ func fire_light() -> void:
 ## 执行下一次脉冲前的光路视觉清理。
 ## [br]本函数无参数、无返回值。
 ## [br]副作用：清除旧光路视觉，不改变已经点亮的普通独立水晶。
-## [br]状态变化：不改变 is_level_completed、CompleteLabel、pulse_generation、is_pulse_active 或水晶点亮状态。
+## [br]状态变化：不改变 current_run_state、is_level_completed、CompleteLabel 或 pulse_generation。
 ## [br]边界条件：只作为 Space 发射前的轻量清理，不承担 R 的完整运行重置职责。
 func _prepare_for_new_pulse() -> void:
 	clear_light_path()
@@ -172,54 +285,59 @@ func _prepare_for_new_pulse() -> void:
 
 ## 等待当前脉冲的视觉保持时间并尝试结束脉冲。
 ## [br]expected_generation 是发起等待时记录的脉冲版本号。
-## [br]无返回值；副作用是在等待约 PULSE_VISUAL_DURATION_SECONDS 后，若版本仍有效则结束当前脉冲。
+## [br]无返回值；副作用是在等待约 PULSE_VISUAL_DURATION_SECONDS 后，若版本仍有效则结束当前脉冲并进入 MOVE_WINDOW 或 COMPLETED。
 ## [br]失败条件：若 R 重置或新脉冲已递增 pulse_generation，本回调视为过期并直接返回。
-## [br]边界条件：该等待只控制光路视觉，不参与路径、墙体、水晶命中、普通独立水晶保持或通关结果计算。
+## [br]边界条件：该等待只控制统一脉冲结束事件和光路视觉清理，不参与路径、墙体、水晶命中、普通独立水晶保持或通关结果计算。
 func _finish_pulse_after_delay(expected_generation: int) -> void:
 	await get_tree().create_timer(PULSE_VISUAL_DURATION_SECONDS).timeout
-	# 过期回调保护：旧脉冲等待结束后不得清理 R 后新发射的脉冲。
+	# 过期回调保护：旧脉冲等待结束后不得清理 R 后新发射的脉冲或改变新脉冲状态。
 	if expected_generation != pulse_generation:
 		return
-	if not is_pulse_active:
+	if not is_current_pulse_active():
 		return
 	_finish_current_pulse(expected_generation)
 
 
 ## 结束当前仍有效的普通脉冲。
 ## [br]expected_generation 是调用方确认的脉冲版本号。
-## [br]无返回值；副作用：清除当前光路视觉，并将 is_pulse_active 设为 false。
-## [br]状态变化：不清除普通独立水晶，不清除 is_level_completed；水晶点亮状态和 CompleteLabel 都保持到 R 重置。
+## [br]无返回值；副作用：清除当前光路视觉，并根据完成结果把状态切换到 MOVE_WINDOW 或 COMPLETED。
+## [br]状态变化：通过 _set_run_state() 将 PULSE_ACTIVE 转为 _get_post_pulse_state(is_level_completed) 的结果；
+## 不清除普通独立水晶，完成状态和 CompleteLabel 都保持到 R 重置。
 ## [br]失败条件：版本不匹配或当前无活动脉冲时直接返回，避免重复结束或旧回调误清理。
-## [br]边界条件：不修改 OccupancyRegistry，不处理同时组、顺序组、移动窗口或完整状态机。
+## [br]边界条件：不修改 OccupancyRegistry，不处理同时组、顺序组、移动次数或完整 RunStateController。
 func _finish_current_pulse(expected_generation: int) -> void:
 	# 过期回调保护：结束清理前再次确认这是当前有效脉冲。
 	if expected_generation != pulse_generation:
 		return
-	if not is_pulse_active:
+	if not is_current_pulse_active():
 		return
 
 	# 脉冲结束：普通光路视觉消失，普通独立水晶继续保持点亮。
 	clear_light_path()
-	is_pulse_active = false
+
+	# 脉冲结束后的目标状态：完成则进入 COMPLETED，否则进入 MOVE_WINDOW。
+	var next_state: RunState = _get_post_pulse_state(is_level_completed)
+	_set_run_state(next_state)
 
 	# 完成结果保留：路径消失后，已经成立的关卡完成标签继续显示。
-	if is_level_completed:
+	if current_run_state == RunState.COMPLETED:
 		complete_label.visible = true
 
 
 ## 重置本次原型运行状态。
 ## [br]本函数无参数、无返回值。
 ## [br]副作用：取消当前脉冲、使旧等待回调失效、清除当前光路视觉、重置全部普通独立水晶点亮状态，并隐藏完成标签。
-## [br]状态变化：将 is_pulse_active 设为 false，is_level_completed 设为 false，并递增 pulse_generation。
+## [br]状态变化：递增 pulse_generation，清除 is_level_completed，并通过 _set_run_state(RunState.SETUP) 恢复 SETUP。
 ## [br]边界条件：不清空玩家布局和占用表；当前阶段没有移动次数、同时组、顺序组或完整 RunStateController 需要恢复。
 func reset_runtime() -> void:
 	# R取消当前脉冲：递增版本号，使已经挂起的旧等待回调全部失效。
 	pulse_generation += 1
-	is_pulse_active = false
 	is_level_completed = false
 	clear_light_path()
 	_reset_independent_crystals()
 	complete_label.visible = false
+	# R解除锁定：SETUP 通过状态推导为未锁定、可编辑。
+	_set_run_state(RunState.SETUP)
 
 
 ## 重置普通独立水晶为未点亮状态。
@@ -305,8 +423,8 @@ func all_required_crystals_activated() -> bool:
 
 ## 根据当前水晶状态更新关卡完成状态和完成标签。
 ## [br]本函数无参数、无返回值。
-## [br]副作用：当全部必需水晶在当前脉冲中已激活时显示 CompleteLabel。
-## [br]状态变化：首次满足条件时将 is_level_completed 设为 true；此后不因光路视觉消失而清除完成结果。
+## [br]副作用：当全部必需水晶在当前脉冲中已激活时立即显示 CompleteLabel。
+## [br]状态变化：首次满足条件时将 is_level_completed 设为 true；current_run_state 仍保持 PULSE_ACTIVE，直到脉冲视觉结束后进入 COMPLETED。
 ## [br]边界条件：普通独立水晶和通关结果都保持到 R；只有 R 重置会清除完成状态和隐藏标签。
 func update_completion_state() -> void:
 	if is_level_completed:
