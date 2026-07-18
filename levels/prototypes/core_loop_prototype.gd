@@ -1,6 +1,6 @@
 extends Node2D
 
-## 第一阶段关卡控制器（plan §4.2 / §5 / §6）。
+## 核心闭环原型关卡控制器（plan §4.2 / §5 / §6）。
 ## 职责：读取 fire_light / reset_level 输入、发起普通主发射源的最小脉冲光线、
 ## 用 Vector2i 立即计算直线路径、查询墙体与边界、通知普通独立水晶点亮、
 ## 判断并保持关卡完成结果、在脉冲结束时只清理光路视觉、在 R 重置时恢复运行状态；
@@ -8,7 +8,7 @@ extends Node2D
 ## 最小运行状态职责：在当前原型内保存 SETUP、PULSE_ACTIVE、MOVE_WINDOW、COMPLETED，
 ## 第一次合法发射后锁定人工配置，脉冲结束后按完成结果进入 MOVE_WINDOW 或 COMPLETED，
 ## R 恢复 SETUP 并解除锁定。
-## 依赖：OccupancyRegistry（gameplay/phase_1/occupancy_registry.gd）、BasicCrystal 的 activate() / reset_runtime()。
+## 依赖：OccupancyRegistry（gameplay/placement/occupancy_registry.gd）、BasicCrystal 的 activate() / reset_runtime()。
 ## 不负责：镜面反射、分光、颜色、成就、存档、正式关卡加载、拖拽放置、运行期移动、完整 RunStateController、
 ## 移动次数、同时组、顺序组或通用水晶条件系统。
 ## 光路判定完全基于 Vector2i 格子坐标，不使用 Area2D 碰撞、Tween 或物理射线检测作为核心逻辑。
@@ -36,7 +36,7 @@ enum RunState {
 @export var wall_cells: Array[Vector2i] = [Vector2i(5, 3)]
 
 # terrain_layer 保留以满足 plan §3.1 / step 5 的节点树与成员约定；
-# 第一阶段不使用 TileSet，cell_to_world 用 CELL_SIZE 常量实现，不依赖 map_to_local。
+# 当前核心闭环原型不使用 TileSet，cell_to_world 用 CELL_SIZE 常量实现，不依赖 map_to_local。
 @onready var terrain_layer: TileMapLayer = $TerrainLayer
 @onready var light_path_layer: Node2D = $LightPathLayer
 @onready var complete_label: Label = $CanvasLayer/CompleteLabel
@@ -45,7 +45,7 @@ enum RunState {
 ## 轻量机关占用表：格子坐标 ↔ 机关 ID 的双向索引。
 ## 本阶段只做基础读写与查询入口，传播循环暂不据其改变光路。
 # 用 preload 引用脚本而非依赖全局 class_name 缓存，保证运行期可直接解析。
-const _OccupancyRegistry: GDScript = preload("res://gameplay/phase_1/occupancy_registry.gd")
+const _OccupancyRegistry: GDScript = preload("res://gameplay/placement/occupancy_registry.gd")
 var occupancy: _OccupancyRegistry = _OccupancyRegistry.new()
 
 ## 当前显式运行状态，是运行阶段的唯一事实来源。
@@ -62,7 +62,7 @@ var is_level_completed: bool = false
 var pulse_generation: int = 0
 
 
-## 初始化第一阶段原型关卡。
+## 初始化核心闭环原型关卡。
 ## [br]本函数无参数、无返回值。
 ## [br]副作用：仅在调试构建中执行 OccupancyRegistry 启动期自检和 MOVE_WINDOW / COMPLETED 纯逻辑状态自检；
 ## 自检结束后占用表为空，真实运行状态、配置锁定、水晶和完成标签不被改变。
@@ -194,7 +194,7 @@ func is_current_pulse_active() -> bool:
 ## [br]边界条件：必须允许 PULSE_ACTIVE 且 is_level_completed 为 true 的中间状态，表示通关条件已成立但脉冲视觉尚未结束。
 func _set_run_state(new_state: RunState) -> void:
 	if new_state < RunState.SETUP or new_state > RunState.COMPLETED:
-		push_error("Phase1Prototype: 非法运行状态：%s" % [new_state])
+		push_error("CoreLoopPrototype: 非法运行状态：%s" % [new_state])
 		return
 
 	current_run_state = new_state
@@ -209,7 +209,7 @@ func _get_post_pulse_state(level_completed: bool) -> RunState:
 	return RunState.COMPLETED if level_completed else RunState.MOVE_WINDOW
 
 
-## 发射一次第一阶段最小脉冲光线。
+## 发射一次核心闭环原型最小脉冲光线。
 ## [br]本函数无参数、无返回值。
 ## [br]副作用：SETUP 或 MOVE_WINDOW 中，清理上一轮光路视觉，按当前布局计算完整直线路径，
 ## 生成光路视觉、点亮普通独立水晶并判断完成，然后启动约 1 秒的光路视觉保持流程。
@@ -220,7 +220,7 @@ func _get_post_pulse_state(level_completed: bool) -> RunState:
 func fire_light() -> void:
 	if not can_fire_light():
 		if OS.is_debug_build():
-			print_debug("Phase1Prototype: 当前运行状态拒绝 Space 发射：%s。" % [current_run_state])
+			print_debug("CoreLoopPrototype: 当前运行状态拒绝 Space 发射：%s。" % [current_run_state])
 		return
 
 	var direction: Vector2i = emitter_direction
@@ -251,7 +251,7 @@ func fire_light() -> void:
 		if is_cell_blocking_light(next_cell):
 			break
 
-		# 机关查询入口（占位）：当前阶段只查询占用表，不据其改变光路。
+		# 机关查询入口（占位）：当前核心闭环原型只查询占用表，不据其改变光路。
 		# 后续接入镜面时，在此调用 get_mechanism_at(next_cell) 决定反射或交互，
 		# 不另写硬编码机关列表，保证占用事实来源唯一。
 		# var mechanism_id := get_mechanism_at(next_cell)  # TODO: 镜面任务启用
@@ -328,7 +328,7 @@ func _finish_current_pulse(expected_generation: int) -> void:
 ## [br]本函数无参数、无返回值。
 ## [br]副作用：取消当前脉冲、使旧等待回调失效、清除当前光路视觉、重置全部普通独立水晶点亮状态，并隐藏完成标签。
 ## [br]状态变化：递增 pulse_generation，清除 is_level_completed，并通过 _set_run_state(RunState.SETUP) 恢复 SETUP。
-## [br]边界条件：不清空玩家布局和占用表；当前阶段没有移动次数、同时组、顺序组或完整 RunStateController 需要恢复。
+## [br]边界条件：不清空玩家布局和占用表；当前核心闭环原型没有移动次数、同时组、顺序组或完整 RunStateController 需要恢复。
 func reset_runtime() -> void:
 	# R取消当前脉冲：递增版本号，使已经挂起的旧等待回调全部失效。
 	pulse_generation += 1
@@ -383,7 +383,7 @@ func is_cell_blocking_light(cell: Vector2i) -> bool:
 ## 查询指定格子被哪个机关占用（占用表对外查询入口）。
 ## [br]cell 是要查询的格子坐标。
 ## [br]返回占用该格的机关 ID；未被占用时返回空 StringName（&""），不报错。
-## [br]本函数无副作用；当前阶段传播循环不据此改变光路，仅提供统一入口供后续镜面等机关使用。
+## [br]本函数无副作用；当前核心闭环原型传播循环不据此改变光路，仅提供统一入口供后续镜面等机关使用。
 func get_mechanism_at(cell: Vector2i) -> StringName:
 	return occupancy.get_mechanism_at(cell)
 
@@ -399,7 +399,7 @@ func has_mechanism_at(cell: Vector2i) -> bool:
 ## 尝试点亮指定格子上的普通独立水晶。
 ## [br]cell 是当前光线进入的格子坐标。
 ## [br]无返回值；副作用是在存在坐标匹配的 BasicCrystal 时调用 activate() 改变其点亮状态和视觉。
-## [br]边界条件：没有匹配水晶时安全无效果；当前阶段不处理颜色、形式、同时组或顺序组，普通独立水晶保持到 R 重置。
+## [br]边界条件：没有匹配水晶时安全无效果；当前核心闭环原型不处理颜色、形式、同时组或顺序组，普通独立水晶保持到 R 重置。
 func try_activate_crystal_at(cell: Vector2i) -> void:
 	for crystal: BasicCrystal in crystals:
 		if crystal.cell == cell:
@@ -412,7 +412,7 @@ func try_activate_crystal_at(cell: Vector2i) -> void:
 ## [br]本函数无副作用；边界条件：crystals 为空表示关卡未配置必需水晶，会输出明确错误并返回 false，防止误判通关。
 func all_required_crystals_activated() -> bool:
 	if crystals.is_empty():
-		push_error("Phase1Prototype: 当前关卡未配置任何必需水晶，不能判定为完成。")
+		push_error("CoreLoopPrototype: 当前关卡未配置任何必需水晶，不能判定为完成。")
 		return false
 
 	for crystal: BasicCrystal in crystals:
@@ -453,7 +453,7 @@ func add_light_visual(cell: Vector2i) -> void:
 ## 将格子坐标转换为当前原型使用的世界坐标中心点。
 ## [br]cell 是要转换的格子坐标。
 ## [br]返回该格中心点的世界坐标；本函数无副作用。
-## [br]边界条件：当前阶段使用 CELL_SIZE 常量直接计算，不依赖 TileMapLayer.map_to_local()，因此必须与场景中 64 像素格子对齐。
+## [br]边界条件：当前核心闭环原型使用 CELL_SIZE 常量直接计算，不依赖 TileMapLayer.map_to_local()，因此必须与场景中 64 像素格子对齐。
 func cell_to_world(cell: Vector2i) -> Vector2:
 	return Vector2(
 		cell.x * CELL_SIZE + CELL_SIZE / 2.0,

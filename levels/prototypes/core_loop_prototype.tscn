@@ -1,9 +1,9 @@
 [gd_scene format=3 uid="uid://bw4ulmdm0mei0"]
 
-[ext_resource type="Script" uid="uid://cfkidx57m3yqa" path="res://gameplay/phase_1/basic_crystal.gd" id="1_crystal"]
-[ext_resource type="Script" uid="uid://do7wigwkihxy0" path="res://levels/phase_1/phase_1_prototype.gd" id="2_proto"]
+[ext_resource type="Script" uid="uid://cfkidx57m3yqa" path="res://gameplay/crystals/basic_crystal.gd" id="1_crystal"]
+[ext_resource type="Script" uid="uid://do7wigwkihxy0" path="res://levels/prototypes/core_loop_prototype.gd" id="2_proto"]
 
-[node name="Phase1Prototype" type="Node2D" unique_id=1552304930]
+[node name="CoreLoopPrototype" type="Node2D" unique_id=1552304930]
 script = ExtResource("2_proto")
 
 [node name="TerrainLayer" type="TileMapLayer" parent="." unique_id=400361494]
