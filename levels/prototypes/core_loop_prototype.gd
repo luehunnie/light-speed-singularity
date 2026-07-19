@@ -2,14 +2,14 @@ extends Node2D
 
 ## 核心闭环原型关卡控制器（plan §4.2 / §5 / §6）。
 ## 职责：读取 fire_light / reset_level 输入、发起普通主发射源的最小脉冲光线、
-## 用 Vector2i 立即计算直线路径、查询墙体与边界、通知普通独立水晶点亮、
+## 用 Vector2i 计算路径、查询墙体与边界、通过 OccupancyRegistry 解析单格镜面并在光进入镜面格后更新传播方向、通知普通独立水晶点亮、
 ## 判断并保持关卡完成结果、在脉冲结束时只清理光路视觉、在 R 重置时恢复运行状态；
-## 持有轻量占用表 OccupancyRegistry，提供“格子—机关”统一查询入口，并实现最小原型机关库存、拖拽放置、移动与回收。
+## 持有轻量占用表 OccupancyRegistry，提供“格子—机关”统一查询入口，并实现最小镜面库存、拖拽放置、移动、回收与 SETUP 右键朝向配置。
 ## 最小运行状态职责：在当前原型内保存 SETUP、PULSE_ACTIVE、MOVE_WINDOW、COMPLETED，
-## 第一次合法发射后锁定主发射源方向、机关内部模式等人工配置，但 SETUP、PULSE_ACTIVE 和 MOVE_WINDOW 仍允许编辑布局，
-## COMPLETED 冻结全部关卡交互；R 恢复 SETUP 并解除锁定，但保留玩家已经放置的原型机关布局和库存事实。
-## 依赖：OccupancyRegistry（gameplay/placement/occupancy_registry.gd）、BasicCrystal 的 activate() / reset_runtime()、PlaceableToken 场景。
-## 不负责：镜面反射、分光、颜色、成就、存档、正式关卡加载、运行期移动、完整 RunStateController、
+## 第一次合法发射后锁定主发射源方向、镜面朝向等人工内部配置，但 SETUP、PULSE_ACTIVE 和 MOVE_WINDOW 仍允许编辑布局，
+## COMPLETED 冻结全部关卡交互；R 恢复 SETUP 并解除锁定，但保留玩家已经放置的镜面位置、当前朝向和库存事实。
+## 依赖：OccupancyRegistry（gameplay/placement/occupancy_registry.gd）、BasicCrystal 的 activate() / reset_runtime()、SingleCellMirror 场景。
+## 不负责：分光、颜色、光粒、成就、存档、正式关卡加载、运行期移动配额、完整 RunStateController、
 ## 移动次数、同时组、顺序组、通用水晶条件系统或正式机关继承体系。
 ## 光路判定完全基于 Vector2i 格子坐标，不使用 Area2D 碰撞、Tween 或物理射线检测作为核心逻辑。
 
@@ -19,7 +19,7 @@ const CELL_SIZE: int = 32
 const MAX_PROPAGATION_STEPS: int = 128
 const PULSE_VISUAL_DURATION_SECONDS: float = 1.0
 const PROTOTYPE_TOKEN_TOTAL: int = 1
-const PROTOTYPE_TOKEN_TYPE_ID: StringName = &"prototype_single_cell"
+const MIRROR_TOKEN_TYPE_ID: StringName = &"basic_single_cell_mirror"
 const INVALID_CELL: Vector2i = Vector2i(-999999, -999999)
 
 ## 当前原型的最小运行状态。
@@ -60,10 +60,11 @@ enum DragSource {
 @onready var crystals: Array[BasicCrystal] = [$RuntimeObjects/Crystal]
 
 ## 轻量机关占用表：格子坐标 ↔ 机关 ID 的双向索引。
-## 本阶段用于原型单格机关放置、移动和回收，传播循环暂不据其改变光路。
+## 本阶段用于基础单格镜面放置、移动、回收和传播循环中的镜面节点解析。
 # 用 preload 引用脚本而非依赖全局 class_name 缓存，保证运行期可直接解析。
 const _OccupancyRegistry: GDScript = preload("res://gameplay/placement/occupancy_registry.gd")
-const _PlaceableTokenScene: PackedScene = preload("res://gameplay/placement/placeable_token.tscn")
+const _SingleCellMirrorScript: GDScript = preload("res://gameplay/mechanisms/mirrors/single_cell_mirror.gd")
+const _SingleCellMirrorScene: PackedScene = preload("res://gameplay/mechanisms/mirrors/single_cell_mirror.tscn")
 var occupancy: _OccupancyRegistry = _OccupancyRegistry.new()
 
 ## 当前显式运行状态，是运行阶段的唯一事实来源。
@@ -98,14 +99,15 @@ var _dragged_placed_token: Variant = null
 
 ## 初始化核心闭环原型关卡。
 ## [br]本函数无参数、无返回值。
-## [br]副作用：刷新机关栏 UI；仅在调试构建中执行 OccupancyRegistry、32 像素逻辑格坐标换算、运行状态和库存一致性断言。
-## 自检结束后真实占用表、运行状态、布局编辑权限、水晶、玩家布局和完成标签不被改变。
+## [br]副作用：刷新机关栏 UI；仅在调试构建中执行 OccupancyRegistry、32 像素逻辑格坐标换算、基础单格镜面反射、运行状态和库存一致性断言。
+## 自检结束后真实占用表、运行状态、布局编辑权限、水晶、玩家布局、镜面朝向和完成标签不被改变。
 ## [br]边界条件：发布构建不执行自检，避免把调试断言作为运行期必需流程。
 func _ready() -> void:
 	_update_inventory_ui()
 	if OS.is_debug_build():
 		_run_occupancy_registry_self_check()
 		_run_grid_coordinate_self_check()
+		_run_single_cell_mirror_reflection_self_check()
 		_run_post_pulse_state_self_check()
 		_assert_inventory_consistency()
 
@@ -158,6 +160,52 @@ func _run_grid_coordinate_self_check() -> void:
 	var vertical_spacing: float = cell_to_world(Vector2i(0, 1)).y - cell_to_world(Vector2i(0, 0)).y
 	assert(horizontal_spacing == float(CELL_SIZE), "32像素逻辑格自检：横向相邻格中心间距应为 %d，实际为 %s" % [CELL_SIZE, horizontal_spacing])
 	assert(vertical_spacing == float(CELL_SIZE), "32像素逻辑格自检：纵向相邻格中心间距应为 %d，实际为 %s" % [CELL_SIZE, vertical_spacing])
+
+## 执行基础单格镜面八方向反射纯函数自检。
+## [br]本函数无参数、无返回值，仅由 _ready() 在调试构建中调用。
+## [br]副作用：只用 SingleCellMirror 的静态纯函数验证 SLASH 和 BACKSLASH 各 8 组合法映射，以及 Vector2i.ZERO 和超过单位长度向量的非法返回规则；不创建镜面节点、不修改真实镜面、OccupancyRegistry、库存、水晶、RunState 或光路。
+## [br]边界条件：orientation 是运行中镜面方向的唯一事实来源；自检只把目标朝向作为参数传入纯函数，避免为了测试反射而实例化或改变场景中的真实机关。
+func _run_single_cell_mirror_reflection_self_check() -> void:
+	var slash_cases: Dictionary[Vector2i, Vector2i] = {
+		Vector2i.RIGHT: Vector2i.UP,
+		Vector2i.UP: Vector2i.RIGHT,
+		Vector2i.LEFT: Vector2i.DOWN,
+		Vector2i.DOWN: Vector2i.LEFT,
+		Vector2i(1, -1): Vector2i(1, -1),
+		Vector2i(-1, 1): Vector2i(-1, 1),
+		Vector2i(-1, -1): Vector2i(1, 1),
+		Vector2i(1, 1): Vector2i(-1, -1),
+	}
+	var backslash_cases: Dictionary[Vector2i, Vector2i] = {
+		Vector2i.RIGHT: Vector2i.DOWN,
+		Vector2i.DOWN: Vector2i.RIGHT,
+		Vector2i.LEFT: Vector2i.UP,
+		Vector2i.UP: Vector2i.LEFT,
+		Vector2i(1, 1): Vector2i(1, 1),
+		Vector2i(-1, -1): Vector2i(-1, -1),
+		Vector2i(1, -1): Vector2i(-1, 1),
+		Vector2i(-1, 1): Vector2i(1, -1),
+	}
+
+	for incoming_direction: Vector2i in slash_cases:
+		var reflected_direction: Vector2i = _SingleCellMirrorScript.reflect_direction_for_orientation(
+			_SingleCellMirrorScript.MirrorOrientation.SLASH,
+			incoming_direction
+		)
+		assert(reflected_direction == slash_cases[incoming_direction], "单格镜面反射自检：SLASH %s 应反射为 %s，实际为 %s" % [incoming_direction, slash_cases[incoming_direction], reflected_direction])
+
+	for incoming_direction: Vector2i in backslash_cases:
+		var reflected_direction: Vector2i = _SingleCellMirrorScript.reflect_direction_for_orientation(
+			_SingleCellMirrorScript.MirrorOrientation.BACKSLASH,
+			incoming_direction
+		)
+		assert(reflected_direction == backslash_cases[incoming_direction], "单格镜面反射自检：BACKSLASH %s 应反射为 %s，实际为 %s" % [incoming_direction, backslash_cases[incoming_direction], reflected_direction])
+
+	assert(not _SingleCellMirrorScript.is_valid_incoming_direction_value(Vector2i.ZERO), "单格镜面反射自检：Vector2i.ZERO 必须非法")
+	assert(_SingleCellMirrorScript.reflect_direction_for_orientation(_SingleCellMirrorScript.MirrorOrientation.SLASH, Vector2i.ZERO) == Vector2i.ZERO, "单格镜面反射自检：零方向反射应安全返回 ZERO")
+	assert(not _SingleCellMirrorScript.is_valid_incoming_direction_value(Vector2i(2, 0)), "单格镜面反射自检：超过单位长度的方向必须非法")
+	assert(_SingleCellMirrorScript.reflect_direction_for_orientation(_SingleCellMirrorScript.MirrorOrientation.BACKSLASH, Vector2i(2, 0)) == Vector2i.ZERO, "单格镜面反射自检：超过单位长度方向反射应安全返回 ZERO")
+
 
 ## 执行当前原型运行状态权限自检。
 ## [br]本函数无参数、无返回值。
@@ -304,12 +352,12 @@ func _get_post_pulse_state(level_completed: bool) -> RunState:
 
 ## 发射一次核心闭环原型最小脉冲光线。
 ## [br]本函数无参数、无返回值。
-## [br]副作用：SETUP 或 MOVE_WINDOW 且未拖拽时，清理上一轮光路视觉，按发射瞬间的当前布局计算完整直线路径，
-## 生成光路视觉、点亮普通独立水晶并判断完成，然后启动约 1 秒的光路视觉保持流程。
+## [br]副作用：SETUP 或 MOVE_WINDOW 且未拖拽时，清理上一轮光路视觉，按发射瞬间的当前布局计算完整路径，
+## 光进入镜面格后先显示路径和点亮同格水晶，再通过 OccupancyRegistry 找到 SingleCellMirror 并使用其 orientation 更新传播方向，随后启动约 1 秒的光路视觉保持流程。
 ## [br]状态变化：开始时通过 _set_run_state(RunState.PULSE_ACTIVE) 进入脉冲活动并递增 pulse_generation；
 ## 若全部必需水晶被本次脉冲满足，update_completion_state() 会先设置 is_level_completed，current_run_state 等脉冲视觉结束后再进入 COMPLETED。
-## [br]失败条件：方向非法时报告错误并不创建脉冲；拖拽中、PULSE_ACTIVE 或 COMPLETED 中忽略 Space。
-## [br]边界条件：遇到地图边界、墙体或 MAX_PROPAGATION_STEPS 上限时停止传播；原型机关不阻挡、不反射、不参与通关。PULSE_ACTIVE 期间玩家可以继续改布局，但不会重新计算或回溯修改这一次已经完成逻辑计算的光路结果。
+## [br]失败条件：方向非法时报告错误并不创建脉冲；拖拽中、PULSE_ACTIVE 或 COMPLETED 中忽略 Space；镜面反射返回 Vector2i.ZERO 时安全停止传播。
+## [br]边界条件：遇到地图边界、墙体或 MAX_PROPAGATION_STEPS 上限时停止传播；未知机关本轮保持无光学效果且不得崩溃。PULSE_ACTIVE 期间玩家可以继续改布局，但不会重新计算或回溯修改这一次已经完成逻辑计算的光路结果。
 func fire_light() -> void:
 	if is_dragging():
 		if OS.is_debug_build():
@@ -336,30 +384,32 @@ func fire_light() -> void:
 	var current_cell: Vector2i = emitter_cell
 	var steps: int = 0
 
-	# 逐格传播，直到遇到边界、墙体或安全步数上限。
+	# 逐格传播，直到遇到边界、墙体、非法反射或安全步数上限。
 	while steps < MAX_PROPAGATION_STEPS:
 		var next_cell: Vector2i = current_cell + direction
 
-		# 边界停止。
+		# 1. 边界停止。
 		if not map_bounds.has_point(next_cell):
 			break
 
-		# 墙体停止。
+		# 2. 墙体停止。
 		if is_cell_blocking_light(next_cell):
 			break
 
-		# 机关查询入口：原型单格机关本轮只验证占用，不阻挡、不反射、不改变光形式或颜色。
-		# 后续接入镜面时，在此调用 get_mechanism_at(next_cell) 决定反射或交互，
-		# 不另写硬编码机关列表，保证占用事实来源唯一。
-		var mechanism_id: StringName = get_mechanism_at(next_cell)
-		if mechanism_id != &"" and OS.is_debug_build():
-			print_debug("CoreLoopPrototype: 光路经过原型机关 %s，但本轮不产生光学效果。" % [mechanism_id])
-
-		# 显示光路并立即点亮普通独立水晶；通关判断不依赖 1 秒等待。
+		# 3-5. 光先进入 next_cell，再显示该格光路并结算该格普通独立水晶。
+		# 镜面方向只在进入镜面格之后影响后续传播方向，不回头改变已经进入的当前格。
 		add_light_visual(next_cell)
 		try_activate_crystal_at(next_cell)
 
-		# 更新当前位置。
+		# 6-8. 通过 OccupancyRegistry 按格查 ID，再从 placed_tokens_by_id 找正式节点；orientation 是镜面方向唯一事实来源。
+		var mechanism_id: StringName = get_mechanism_at(next_cell)
+		if mechanism_id != &"":
+			var reflected_direction: Vector2i = _get_reflected_direction_from_mechanism(mechanism_id, direction)
+			if reflected_direction == Vector2i.ZERO:
+				break
+			direction = reflected_direction
+
+		# 9. 更新当前位置；下一轮循环使用反射后的 direction。
 		current_cell = next_cell
 		steps += 1
 
@@ -486,9 +536,38 @@ func is_cell_blocking_light(cell: Vector2i) -> bool:
 ## 查询指定格子被哪个机关占用（占用表对外查询入口）。
 ## [br]cell 是要查询的格子坐标。
 ## [br]返回占用该格的机关 ID；未被占用时返回空 StringName（&""），不报错。
-## [br]本函数无副作用；当前核心闭环原型传播循环不据此改变光路，仅提供统一入口供后续镜面等机关使用。
+## [br]本函数无副作用；当前核心闭环原型传播循环会据此解析基础单格镜面，未知机关保持无光学效果。
 func get_mechanism_at(cell: Vector2i) -> StringName:
 	return occupancy.get_mechanism_at(cell)
+
+
+## 根据指定机关 ID 尝试取得反射后的传播方向。
+## [br]mechanism_id 是 OccupancyRegistry 在当前光进入格查到的机关 ID，incoming_direction 是进入该格时的传播方向。
+## [br]返回值为后续传播方向；SingleCellMirror 返回其 reflect_direction() 结果，未知机关返回原方向，镜面非法方向返回 Vector2i.ZERO 让传播安全停止。
+## [br]本函数不修改 OccupancyRegistry、库存、节点位置或水晶状态；只读取 placed_tokens_by_id 中正式节点的 orientation 事实。
+## [br]边界条件：传播循环已经先完成边界、墙体、入格视觉和水晶处理，本函数只处理“进入镜面格后再更新方向”的接入点；未知 PlaceableToken 派生机关本轮不产生光学效果，调试构建输出明确提示。
+func _get_reflected_direction_from_mechanism(mechanism_id: StringName, incoming_direction: Vector2i) -> Vector2i:
+	if not placed_tokens_by_id.has(mechanism_id):
+		if OS.is_debug_build():
+			print_debug("CoreLoopPrototype: 光路经过占用表机关 %s，但没有对应正式节点，本轮保持原方向。" % [mechanism_id])
+		return incoming_direction
+
+	var token: Variant = placed_tokens_by_id[mechanism_id]
+	if not is_instance_valid(token):
+		if OS.is_debug_build():
+			print_debug("CoreLoopPrototype: 光路经过机关 %s，但节点已失效，停止传播。" % [mechanism_id])
+		return Vector2i.ZERO
+
+	if token is not SingleCellMirror:
+		if OS.is_debug_build():
+			print_debug("CoreLoopPrototype: 光路经过未知机关 %s，本轮不产生光学效果。" % [mechanism_id])
+		return incoming_direction
+
+	var mirror: SingleCellMirror = token as SingleCellMirror
+	var reflected_direction: Vector2i = mirror.reflect_direction(incoming_direction)
+	if reflected_direction == Vector2i.ZERO and OS.is_debug_build():
+		print_debug("CoreLoopPrototype: 镜面 %s 收到非法入射方向 %s，停止传播。" % [mechanism_id, incoming_direction])
+	return reflected_direction
 
 
 ## 判断指定格子是否被任意机关占用（占用表对外查询入口）。
@@ -576,11 +655,16 @@ func world_to_cell(world_position: Vector2) -> Vector2i:
 	)
 
 
-## 处理鼠标左键按下与松开。
+## 处理鼠标左键拖拽与右键镜面朝向配置。
 ## [br]event 是 Godot 鼠标按键事件。
-## [br]无返回值；副作用是在 SETUP、PULSE_ACTIVE 或 MOVE_WINDOW 中开始库存拖拽或已放置机关拖拽，并在松开时提交、回收或取消。
-## [br]边界条件：非左键忽略；COMPLETED 冻结整个关卡交互，不能开始新拖拽；已有拖拽仍可通过松开、进入 COMPLETED 前自动取消或 R 安全收束。
+## [br]无返回值；副作用是左键在 SETUP、PULSE_ACTIVE 或 MOVE_WINDOW 中开始库存拖拽或已放置机关拖拽，并在松开时提交、回收或取消；右键仅在 SETUP 且未拖拽时切换已放置镜面的 orientation。
+## [br]边界条件：其他按键忽略；COMPLETED 冻结整个关卡交互，不能开始新拖拽或切换朝向；PULSE_ACTIVE 和 MOVE_WINDOW 仍可编辑布局但内部配置已锁定，因此右键不改变镜面方向；InventoryBar 区域阻止右键穿透到世界镜面。
 func _handle_mouse_button(event: InputEventMouseButton) -> void:
+	if event.button_index == MOUSE_BUTTON_RIGHT:
+		if event.pressed:
+			_try_toggle_mirror_at_mouse()
+		return
+
 	if event.button_index != MOUSE_BUTTON_LEFT:
 		return
 
@@ -590,6 +674,36 @@ func _handle_mouse_button(event: InputEventMouseButton) -> void:
 
 	if is_dragging():
 		_finish_drag_at_mouse()
+
+
+## 尝试右键切换鼠标所在已放置镜面的内部朝向。
+## [br]本函数无参数、无返回值。
+## [br]副作用：仅当鼠标位于世界中已放置 SingleCellMirror 且 can_edit_configuration() 为 true 时调用 toggle_orientation() 修改该镜面的 orientation 和视觉。
+## [br]状态变化：SETUP 可切换；PULSE_ACTIVE 和 MOVE_WINDOW 布局仍可移动但内部配置锁定，COMPLETED 冻结全部操作，三者都不会改变 orientation。
+## [br]边界条件：拖拽进行中忽略右键；InventoryBar 整体区域阻止右键穿透到世界镜面；未知机关和空格安全忽略。
+func _try_toggle_mirror_at_mouse() -> void:
+	if is_dragging():
+		return
+	var viewport_mouse_position: Vector2 = get_viewport().get_mouse_position()
+	if _is_mouse_over_inventory_bar(viewport_mouse_position):
+		return
+	if not can_edit_configuration():
+		if OS.is_debug_build():
+			print_debug("CoreLoopPrototype: 当前运行状态锁定内部配置，忽略镜面右键切换：%s。" % [current_run_state])
+		return
+
+	var target_cell: Vector2i = world_to_cell(get_global_mouse_position())
+	var mechanism_id: StringName = get_mechanism_at(target_cell)
+	if mechanism_id == &"" or not placed_tokens_by_id.has(mechanism_id):
+		return
+
+	var token: Variant = placed_tokens_by_id[mechanism_id]
+	if not is_instance_valid(token):
+		return
+	if token is not SingleCellMirror:
+		return
+	var mirror: SingleCellMirror = token as SingleCellMirror
+	mirror.toggle_orientation()
 
 
 ## 尝试根据当前鼠标位置开始一次拖拽。
@@ -619,9 +733,9 @@ func _try_begin_drag() -> void:
 	_begin_placed_drag(mechanism_id, target_cell)
 
 
-## 从机关栏开始一次原型机关拖拽。
+## 从机关栏开始一次基础单格镜面拖拽。
 ## [br]本函数无参数、无返回值。
-## [br]副作用：创建一个预览节点并设置拖拽来源为 INVENTORY。
+## [br]副作用：创建一个默认 SLASH 朝向的镜面预览节点并设置拖拽来源为 INVENTORY。
 ## [br]边界条件：从库存拖拽但不提前扣数量；若之后非法松手或松回机关栏，库存和 OccupancyRegistry 都不变化。
 func _begin_inventory_drag() -> void:
 	var start_cell: Vector2i = world_to_cell(get_global_mouse_position())
@@ -630,8 +744,8 @@ func _begin_inventory_drag() -> void:
 	_drag_original_cell = INVALID_CELL
 	_drag_preview_cell = start_cell
 	_dragged_placed_token = null
-	# 从库存拖拽但不提前扣数量：只有合法松手提交后才减少 prototype_token_remaining。
-	_drag_preview_token = _create_token_node(&"preview_prototype_token", start_cell, true)
+	# 从库存拖拽但不提前扣数量：只有合法松手提交后才减少 prototype_token_remaining；新拿出的镜面默认 SLASH。
+	_drag_preview_token = _create_token_node(StringName("preview_%s" % MIRROR_TOKEN_TYPE_ID), start_cell, true)
 	_update_drag_preview_from_mouse()
 
 
@@ -645,9 +759,10 @@ func _begin_placed_drag(mechanism_id: StringName, original_cell: Vector2i) -> vo
 	_drag_original_cell = original_cell
 	_drag_preview_cell = original_cell
 	_dragged_placed_token = placed_tokens_by_id[mechanism_id]
-	# 已放置机关拖拽期间保留旧逻辑占用，只隐藏正式视觉，直到松手后再原子更新。
+	# 已放置机关拖拽期间保留旧逻辑占用，只隐藏正式视觉，直到松手后再原子更新；预览必须复制当前镜面朝向。
 	_dragged_placed_token.set_placed_visible(false)
 	_drag_preview_token = _create_token_node(mechanism_id, original_cell, true)
+	_copy_mirror_orientation_if_possible(_dragged_placed_token, _drag_preview_token)
 	_update_drag_preview_from_mouse()
 
 
@@ -826,12 +941,12 @@ func _reset_drag_state() -> void:
 	_dragged_placed_token = null
 
 
-## 创建一个 PlaceableToken 节点并加入 RuntimeObjects。
+## 创建一个 SingleCellMirror 节点并加入 RuntimeObjects。
 ## [br]mechanism_id 是节点显示和正式登记使用的 ID，cell 是初始逻辑格子，is_preview 表示是否为拖拽预览。
-## [br]返回新创建的 PlaceableToken 节点；副作用是实例化场景并加入节点树。
-## [br]边界条件：节点世界坐标由 cell_to_world() 统一计算；本函数不写库存、不写 OccupancyRegistry、不判断放置合法性。
+## [br]返回新创建的 SingleCellMirror 节点；副作用是实例化镜面场景并加入节点树。
+## [br]边界条件：节点世界坐标由 cell_to_world() 统一计算；本函数不写库存、不写 OccupancyRegistry、不判断放置合法性；从机关栏新建镜面默认保持 SLASH，拖动已有镜面时由调用方复制原 orientation。
 func _create_token_node(mechanism_id: StringName, cell: Vector2i, is_preview: bool) -> Variant:
-	var token = _PlaceableTokenScene.instantiate()
+	var token = _SingleCellMirrorScene.instantiate()
 	runtime_objects.add_child(token)
 	token.configure(mechanism_id, cell)
 	token.set_world_position(cell_to_world(cell))
@@ -839,12 +954,26 @@ func _create_token_node(mechanism_id: StringName, cell: Vector2i, is_preview: bo
 	return token
 
 
-## 生成下一个正式原型机关唯一 ID。
+## 在两个镜面节点之间复制朝向配置。
+## [br]source_token 是已有正式镜面，target_token 是刚创建的拖拽预览镜面。
+## [br]无返回值；副作用是在两者都是 SingleCellMirror 时把 source_token.orientation 写入 target_token，保证拖动已有镜面时预览保留当前“/”或“\”朝向。
+## [br]边界条件：本函数只复制内部配置，不写 OccupancyRegistry、库存或位置；若任一节点不是镜面则安全忽略，避免未来未知机关拖拽崩溃。
+func _copy_mirror_orientation_if_possible(source_token: Variant, target_token: Variant) -> void:
+	if not is_instance_valid(source_token) or not is_instance_valid(target_token):
+		return
+	if source_token is not SingleCellMirror or target_token is not SingleCellMirror:
+		return
+	var source_mirror: SingleCellMirror = source_token as SingleCellMirror
+	var target_mirror: SingleCellMirror = target_token as SingleCellMirror
+	target_mirror.set_orientation(source_mirror.orientation)
+
+
+## 生成下一个正式镜面机关唯一 ID。
 ## [br]本函数无参数。
 ## [br]返回新的 StringName 机关 ID；副作用是递增内部序号。
-## [br]边界条件：即使机关被回收，旧 ID 不复用，避免占用表和节点映射调试时混淆。
+## [br]边界条件：即使镜面被回收，旧 ID 不复用，避免占用表和节点映射调试时混淆。
 func _make_next_prototype_token_id() -> StringName:
-	var mechanism_id: StringName = StringName("prototype_token_%d" % _next_prototype_token_serial)
+	var mechanism_id: StringName = StringName("%s_%d" % [MIRROR_TOKEN_TYPE_ID, _next_prototype_token_serial])
 	_next_prototype_token_serial += 1
 	return mechanism_id
 
