@@ -30,13 +30,13 @@ color = Color(0.2, 0.85, 1, 1)
 
 [node name="Crystal" type="Node2D" parent="RuntimeObjects" unique_id=1716045995]
 script = ExtResource("1_crystal")
-cell = Vector2i(3, 3)
+cell = Vector2i(3, 1)
 
 [node name="CrystalVisual" type="ColorRect" parent="RuntimeObjects/Crystal" unique_id=964004285]
 offset_left = 96.0
-offset_top = 96.0
+offset_top = 32.0
 offset_right = 128.0
-offset_bottom = 128.0
+offset_bottom = 64.0
 color = Color(0.35, 0.45, 0.7, 1)
 
 [node name="LightPathLayer" type="Node2D" parent="." unique_id=1467401346]
@@ -104,7 +104,7 @@ layout_mode = 2
 
 [node name="NameLabel" type="Label" parent="CanvasLayer/InventoryBar/MarginContainer/HBoxContainer/PrototypeTokenSlot/SlotMargin/SlotContent/SlotTexts"]
 layout_mode = 2
-text = "原型单格机关"
+text = "基础单格镜面"
 
 [node name="RemainingLabel" type="Label" parent="CanvasLayer/InventoryBar/MarginContainer/HBoxContainer/PrototypeTokenSlot/SlotMargin/SlotContent/SlotTexts"]
 layout_mode = 2
