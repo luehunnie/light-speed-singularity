@@ -58,6 +58,13 @@ offset_right = 320.0
 offset_bottom = 88.0
 text = "关卡完成"
 
+[node name="RuntimeMoveLabel" type="Label" parent="CanvasLayer"]
+offset_left = 16.0
+offset_top = 88.0
+offset_right = 320.0
+offset_bottom = 120.0
+text = "运行期移动：1 / 1"
+
 [node name="InventoryBar" type="PanelContainer" parent="CanvasLayer"]
 anchors_preset = 12
 anchor_top = 1.0
