@@ -3,18 +3,19 @@ extends Node2D
 ## 核心闭环原型关卡控制器（plan §4.2 / §5 / §6）。
 ## 职责：读取 fire_light / reset_level 输入、发起普通主发射源的最小脉冲光线、
 ## 用 Vector2i 计算路径、查询墙体与边界、通过 OccupancyRegistry 解析单格镜面并在光进入镜面格后更新传播方向、通知普通独立水晶点亮、
-## 判断并保持关卡完成结果、在脉冲结束时只清理光路视觉、在 R 重置时恢复运行状态；
+## 判断并保持关卡完成结果、在脉冲结束时只清理光路视觉、在 R 完整关卡重置时清除光路、水晶、完成状态、运行次数并将全部玩家放置机关退回库存；
 ## 持有轻量占用表 OccupancyRegistry，提供“格子—机关”统一查询入口，并实现最小镜面库存、拖拽放置、移动、回收与 SETUP 右键朝向配置。
 ## 最小运行状态职责：在当前原型内保存 SETUP、PULSE_ACTIVE、MOVE_WINDOW、COMPLETED。
 ## 正式运行权限：SETUP 允许完整布置（拿取、首次放置、移动、回收、右键配置）且移动不计次；
 ## PULSE_ACTIVE 与 MOVE_WINDOW 同样允许拿取、首次放置、移动与回收，但右键配置锁定、PULSE_ACTIVE 禁止 Space；只有"已放置机关跨格直接移动"在成功提交后消耗 runtime_move_limit 一次，拿取/首次放置/回收均不消耗次数；
-## COMPLETED 冻结全部关卡交互，只允许 R。当前 runtime_move_limit 只限制直接移动，不覆盖回收再放置，属已知临时边界，留给 MoveRequest 处理。
-## R 恢复 SETUP，runtime_moves_used 清零，恢复拿取/移动/回收/配置权限，保留玩家镜面位置、朝向、库存与占用关系。
+## COMPLETED 冻结全部关卡交互，只允许 R。已知临时边界：当前 runtime_move_limit 只限制已有机关从世界格 A 直接移动到世界格 B，运行期回收后重新放置不消耗直接移动次数；单纯 MoveRequest 不能自动解决该问题，后续需要机关身份跨库存保留或运行期迁移事务规则，本阶段如实记录，不改变用户确认的拿取和回收权限。
+## R 是完整关卡重置：安全取消拖拽，正常情况下删除全部玩家放置机关，逐个注销玩家机关 OccupancyRegistry 占用，清空 placed_tokens_by_id，恢复完整库存，清零 runtime_moves_used，重置光路、水晶和完成状态并返回 SETUP；若检测到 OccupancyRegistry 残留且无法通过公共 unregister 接口确认清理，相关机关会保留在场上且不会重复退回库存，以避免制造重复机关；不删除发射器、墙体、水晶或未来关卡静态内容。R 后重新从库存拿出的镜面使用 single_cell_mirror.tscn 默认 SLASH 朝向。
 ## 依赖：OccupancyRegistry（gameplay/placement/occupancy_registry.gd）、BasicCrystal 的 activate() / reset_runtime()、SingleCellMirror 场景。
 ## 运行期移动次数职责：由本关卡控制器持有 runtime_move_limit / runtime_moves_used，remaining = max(limit - used, 0)；
 ## 开始拖拽与提交移动均做权限检查，提交前在修改 OccupancyRegistry 之前再次校验状态与剩余次数，成功原子提交后才扣次；
 ## SETUP 移动不计次，失败、取消、原格松手、回滚均不扣。RuntimeMoveLabel 只显示剩余 / 上限，不直接修改次数。
-## MoveRequest 请求队列与安全批次原子提交尚未实现，当前仍是同步原子提交，本分支不引入第二套移动次数系统。
+## 当前普通光线原型采用同步提交前二次校验与 OccupancyRegistry 原子迁移，已满足第二阶段安全要求；当前不是 deferred 批次系统。
+## 正式 MoveRequest 请求队列延后到光粒/Tick 传播引入时实现，不得把 MoveRequest 写成第二阶段未完成阻塞项，本分支不引入第二套移动次数系统。
 ## 不负责：分光、颜色、光粒、成就、存档、正式关卡加载、MoveRequest 请求队列、Tick 批次提交、完整 RunStateController、
 ## 同时组、顺序组、通用水晶条件系统或正式机关继承体系。
 ## 光路判定完全基于 Vector2i 格子坐标，不使用 Area2D 碰撞、Tween 或物理射线检测作为核心逻辑。
@@ -113,7 +114,7 @@ var _dragged_placed_token: Variant = null
 
 ## 初始化核心闭环原型关卡。
 ## [br]本函数无参数、无返回值。
-## [br]副作用：刷新机关栏 UI；仅在调试构建中执行 OccupancyRegistry、32 像素逻辑格坐标换算、基础单格镜面反射、运行状态和库存一致性断言。
+## [br]副作用：刷新机关栏 UI；仅在调试构建中执行 OccupancyRegistry、32 像素逻辑格坐标换算、基础单格镜面反射、运行状态、运行期移动次数、玩家机关 ID 快照和库存一致性断言。
 ## 自检结束后真实占用表、运行状态、布局编辑权限、水晶、玩家布局、镜面朝向和完成标签不被改变。
 ## [br]边界条件：发布构建不执行自检，避免把调试断言作为运行期必需流程。
 func _ready() -> void:
@@ -125,7 +126,118 @@ func _ready() -> void:
 		_run_single_cell_mirror_reflection_self_check()
 		_run_post_pulse_state_self_check()
 		_run_runtime_move_self_check()
+		_run_player_mechanism_id_snapshot_self_check()
 		_assert_inventory_consistency()
+
+
+## 复制玩家机关 ID 快照（纯函数，无副作用）。
+## [br]source 是要复制键集合的玩家机关映射，通常为 placed_tokens_by_id，也可由自检传入临时 Dictionary。
+## [br]返回 Array[StringName]，包含源 Dictionary 当前键的去重快照；返回后源 Dictionary 的增删不会影响快照。
+## [br]本静态函数不读取或修改真实 OccupancyRegistry、库存、节点树、拖拽状态、RunState、光路或水晶。
+## [br]边界条件：调用方会在清理玩家机关时遍历该快照，而不是边遍历 placed_tokens_by_id 边 erase，避免 Dictionary 迭代器被修改导致漏项或未定义行为；若未来传入非 StringName 键，会按 StringName 语义转换并去重。
+static func _copy_player_mechanism_ids(source: Dictionary) -> Array[StringName]:
+	var mechanism_ids: Array[StringName] = []
+	for key: Variant in source.keys():
+		var mechanism_id: StringName = StringName(key)
+		if not mechanism_ids.has(mechanism_id):
+			mechanism_ids.append(mechanism_id)
+	return mechanism_ids
+
+
+## 计算 R 重置清理玩家机关后的库存剩余数量（纯函数，无副作用）。
+## [br]total 是该机关类型的总库存数量，unresolved_player_token_count 是因 OccupancyRegistry 残留引用而未能确认清理、仍保留在场上的玩家机关数量。
+## [br]返回 clampi(total - unresolved_player_token_count, 0, total)：全部清理时恢复 total，仍有未清理机关时扣除对应数量，异常超量或负数输入也夹在合法库存区间内。
+## [br]本静态函数不读取或修改真实库存、玩家机关映射、OccupancyRegistry、节点树、拖拽状态、RunState、光路或水晶。
+static func _compute_inventory_remaining_after_reset(total: int, unresolved_player_token_count: int) -> int:
+	return clampi(total - unresolved_player_token_count, 0, total)
+
+
+## 查询指定 OccupancyRegistry 是否仍有任一索引引用指定机关 ID（只读，无副作用）。
+## [br]registry 是要检查的占用表实例，mechanism_id 是要查找的玩家机关 ID。
+## [br]返回 true 表示 ID→格子索引或格子→ID 索引中仍存在该 ID；返回 false 表示两个方向都没有该 ID 引用。
+## [br]边界条件：本函数不调用 clear()，不修复、不删除、不改写 registry 内部 Dictionary；它刻意同时检查 occupied_cells_by_id 与 mechanism_at，便于在 unregister 失败时区分“占用已提前缺失”和“仍存在残留引用”。
+static func _registry_has_any_reference_to_mechanism(registry: _OccupancyRegistry, mechanism_id: StringName) -> bool:
+	if registry.has_mechanism(mechanism_id):
+		return true
+
+	for cell: Vector2i in registry.mechanism_at:
+		if registry.mechanism_at[cell] == mechanism_id:
+			return true
+
+	return false
+
+
+## 查询当前真实 OccupancyRegistry 是否仍有任一索引引用指定机关 ID（只读，无副作用）。
+## [br]mechanism_id 是要查找的玩家机关 ID。
+## [br]返回 true 表示当前真实 occupancy 的 ID→格子或格子→ID 任一方向仍引用该 ID；返回 false 表示未发现引用。
+## [br]边界条件：本函数只委托纯查询函数读取真实 occupancy，不调用 occupancy.clear()，不删除索引，不修改玩家节点或库存；R 重置用它决定 unregister 失败时是否必须失败关闭。
+func _occupancy_has_any_reference_to_mechanism(mechanism_id: StringName) -> bool:
+	return _registry_has_any_reference_to_mechanism(occupancy, mechanism_id)
+
+
+## 执行玩家机关 ID 快照、R 库存恢复计算与临时占用残留查询自检。
+## [br]本函数无参数、无返回值，仅由 _ready() 在调试构建中调用。
+## [br]副作用：只创建和修改临时 Dictionary 与临时 OccupancyRegistry，并用 assert 验证空表、单个 ID、多个 ID、源表删除后快照独立、String 或 StringName 形式的等价机关 ID 在转换为 StringName 快照后只产生一个逻辑 ID、R 库存恢复计算边界，以及临时 registry 残留引用查询；不调用真实 reset_runtime()，不删除真实玩家机关，不修改真实库存、OccupancyRegistry、拖拽状态或 current_run_state。
+## [br]边界条件：该自检只覆盖 R 完整重置所需的无副作用快照、计算和查询规则；真实玩家机关删除流程由 Godot 运行验证与人工测试共同覆盖，避免启动自检破坏真实场景状态。
+func _run_player_mechanism_id_snapshot_self_check() -> void:
+	var empty_source: Dictionary = {}
+	assert(_copy_player_mechanism_ids(empty_source).is_empty(), "玩家机关 ID 快照自检：空 Dictionary 应返回空数组")
+
+	var one_source: Dictionary = {&"mirror_one": null}
+	var one_snapshot: Array[StringName] = _copy_player_mechanism_ids(one_source)
+	assert(one_snapshot.size() == 1, "玩家机关 ID 快照自检：单个 ID 应完整复制")
+	assert(one_snapshot.has(&"mirror_one"), "玩家机关 ID 快照自检：单个 ID 内容应保留")
+
+	var multi_source: Dictionary = {&"mirror_a": null, &"mirror_b": null, &"mirror_c": null}
+	var multi_snapshot: Array[StringName] = _copy_player_mechanism_ids(multi_source)
+	assert(multi_snapshot.size() == 3, "玩家机关 ID 快照自检：多个 ID 数量不应遗漏")
+	assert(multi_snapshot.has(&"mirror_a"), "玩家机关 ID 快照自检：应包含 mirror_a")
+	assert(multi_snapshot.has(&"mirror_b"), "玩家机关 ID 快照自检：应包含 mirror_b")
+	assert(multi_snapshot.has(&"mirror_c"), "玩家机关 ID 快照自检：应包含 mirror_c")
+
+	multi_source.clear()
+	assert(multi_snapshot.size() == 3, "玩家机关 ID 快照自检：删除源 Dictionary 不应影响快照")
+	assert(multi_snapshot.has(&"mirror_a") and multi_snapshot.has(&"mirror_b") and multi_snapshot.has(&"mirror_c"), "玩家机关 ID 快照自检：快照内容应独立于源 Dictionary")
+
+	var seen_ids: Dictionary[StringName, bool] = {}
+	for snapshot_id: StringName in multi_snapshot:
+		assert(not seen_ids.has(snapshot_id), "玩家机关 ID 快照自检：快照中不应出现重复 ID：%s" % [snapshot_id])
+		seen_ids[snapshot_id] = true
+
+	var equivalent_source: Dictionary = {}
+	equivalent_source["mirror_equivalent"] = null
+	equivalent_source[&"mirror_equivalent"] = null
+	var equivalent_snapshot: Array[StringName] = _copy_player_mechanism_ids(equivalent_source)
+	assert(equivalent_snapshot.size() == 1, "玩家机关 ID 快照自检：String/StringName 等价 ID 应只产生一个逻辑 ID")
+	assert(equivalent_snapshot.has(&"mirror_equivalent"), "玩家机关 ID 快照自检：等价 ID 快照应包含 mirror_equivalent")
+	var seen_equivalent_ids: Dictionary[StringName, bool] = {}
+	for equivalent_id: StringName in equivalent_snapshot:
+		assert(not seen_equivalent_ids.has(equivalent_id), "玩家机关 ID 快照自检：等价 ID 快照中不应出现重复 ID：%s" % [equivalent_id])
+		seen_equivalent_ids[equivalent_id] = true
+	equivalent_source.clear()
+	assert(equivalent_snapshot.size() == 1, "玩家机关 ID 快照自检：删除等价源 Dictionary 不应影响快照")
+	assert(equivalent_snapshot.has(&"mirror_equivalent"), "玩家机关 ID 快照自检：等价快照内容应独立于源 Dictionary")
+
+	assert(_compute_inventory_remaining_after_reset(0, 0) == 0, "R库存计算自检：total=0 unresolved=0 应返回 0")
+	assert(_compute_inventory_remaining_after_reset(1, 0) == 1, "R库存计算自检：total=1 unresolved=0 应返回 1")
+	assert(_compute_inventory_remaining_after_reset(1, 1) == 0, "R库存计算自检：total=1 unresolved=1 应返回 0")
+	assert(_compute_inventory_remaining_after_reset(2, 1) == 1, "R库存计算自检：total=2 unresolved=1 应返回 1")
+	assert(_compute_inventory_remaining_after_reset(2, 2) == 0, "R库存计算自检：total=2 unresolved=2 应返回 0")
+	assert(_compute_inventory_remaining_after_reset(1, 5) == 0, "R库存计算自检：未清理数量超过总数时应夹到 0")
+	assert(_compute_inventory_remaining_after_reset(2, -1) == 2, "R库存计算自检：负数未清理数量应安全夹到完整库存")
+
+	var residual_registry: _OccupancyRegistry = _OccupancyRegistry.new()
+	var residual_id: StringName = &"residual_probe"
+	var residual_cell: Vector2i = Vector2i(12, 12)
+	assert(not _registry_has_any_reference_to_mechanism(residual_registry, residual_id), "残留占用查询自检：空 registry 不应引用任意 ID")
+	assert(residual_registry.register_single_cell(residual_id, residual_cell), "残留占用查询自检：临时 registry 正常登记应成功")
+	assert(_registry_has_any_reference_to_mechanism(residual_registry, residual_id), "残留占用查询自检：正常登记后应能查询到 ID 引用")
+	assert(residual_registry.unregister(residual_id), "残留占用查询自检：临时 registry 注销应成功")
+	assert(not _registry_has_any_reference_to_mechanism(residual_registry, residual_id), "残留占用查询自检：注销后不应再查询到 ID 引用")
+	residual_registry.mechanism_at[residual_cell] = residual_id
+	assert(_registry_has_any_reference_to_mechanism(residual_registry, residual_id), "残留占用查询自检：只有 cell→ID 单向残留时也应查询到 ID 引用")
+	residual_registry.mechanism_at.clear()
+	assert(residual_registry.is_consistent(), "残留占用查询自检：清理临时单向残留后 registry 应恢复一致")
 
 
 ## 执行 OccupancyRegistry 启动期轻量自检。
@@ -352,13 +464,10 @@ func _run_runtime_move_self_check() -> void:
 
 ## 处理关卡输入动作和鼠标拖拽事件。
 ## [br]event 是 Godot 传入的输入事件。
-## [br]无返回值；副作用是 fire_light 动作在 SETUP 或 MOVE_WINDOW 且未拖拽时触发一次脉冲，reset_level 动作会先取消拖拽再执行运行重置；鼠标左键按正式运行权限驱动放置、移动和回收。
-## [br]边界条件：拖拽中按 Space 会被安全忽略，玩家必须先松手完成放置、移动、回收或取消；SETUP/PULSE_ACTIVE/MOVE_WINDOW 均允许拿取、放置、移动与回收（仅已放置机关跨格直接移动受 runtime_move_limit 限制），COMPLETED 中只有 R 可用。PULSE_ACTIVE 中的布局变化只影响后续发射，不回溯当前脉冲。
+## [br]无返回值；副作用是 fire_light 动作在 SETUP 或 MOVE_WINDOW 且未拖拽时触发一次脉冲，reset_level 动作直接调用 reset_runtime() 执行完整关卡重置；鼠标左键按正式运行权限驱动放置、移动和回收。
+## [br]边界条件：拖拽中按 Space 会被安全忽略，玩家必须先松手完成放置、移动、回收或取消；拖拽中按 R 不依赖 _input 预先取消，而由 reset_runtime() 统一安全取消拖拽并回收全部玩家放置机关；SETUP/PULSE_ACTIVE/MOVE_WINDOW 均允许拿取、放置、移动与回收（仅已放置机关跨格直接移动受 runtime_move_limit 限制），COMPLETED 中只有 R 可用。PULSE_ACTIVE 中的布局变化只影响后续发射，不回溯当前脉冲。
 func _input(event: InputEvent) -> void:
 	if event.is_action_pressed("reset_level"):
-		# R取消拖拽：库存拖拽不改库存，已放置机关拖拽恢复旧位置和旧占用。
-		if is_dragging():
-			_cancel_current_drag()
 		reset_runtime()
 		return
 
@@ -478,7 +587,7 @@ static func _can_begin_placed_drag(run_state: RunState) -> bool:
 ## 判断当前运行状态是否允许从机关栏拿取新机关（纯判断，无副作用）。
 ## [br]run_state 是当前运行状态。
 ## [br]返回 true 表示当前不是 COMPLETED：SETUP、PULSE_ACTIVE、MOVE_WINDOW 均允许拿取；COMPLETED 与未知值返回 false。
-## [br]边界条件：用户最终权限允许运行期拿取与首次放置；拿取/首次放置不消耗 runtime_moves_used（直接移动次数只限制已放置机关跨格移动）。回收再放置可绕过直接移动次数属已知临时边界，留给 MoveRequest 处理。
+## [br]边界条件：用户最终权限允许运行期拿取与首次放置；拿取/首次放置不消耗 runtime_moves_used（直接移动次数只限制已有机关从世界格 A 直接移动到世界格 B）。运行期回收后重新放置不消耗直接移动次数属已知临时边界；单纯 MoveRequest 不能自动解决该问题，后续需要机关身份跨库存保留或运行期迁移事务规则，本阶段如实记录，不改变用户确认的拿取和回收权限。
 static func _can_take_from_inventory_for_state(run_state: RunState) -> bool:
 	match run_state:
 		RunState.SETUP, RunState.PULSE_ACTIVE, RunState.MOVE_WINDOW:
@@ -490,7 +599,7 @@ static func _can_take_from_inventory_for_state(run_state: RunState) -> bool:
 ## 判断当前运行状态是否允许把已放置机关拖回机关栏回收（纯判断，无副作用）。
 ## [br]run_state 是当前运行状态。
 ## [br]返回 true 表示当前不是 COMPLETED：SETUP、PULSE_ACTIVE、MOVE_WINDOW 均允许回收；COMPLETED 与未知值返回 false。
-## [br]边界条件：用户最终权限允许运行期回收；回收不消耗 runtime_moves_used。回收后再放置可绕过直接移动次数属已知临时边界，留给 MoveRequest 处理。
+## [br]边界条件：用户最终权限允许运行期回收；回收不消耗 runtime_moves_used。运行期回收后重新放置不消耗直接移动次数属已知临时边界；单纯 MoveRequest 不能自动解决该问题，后续需要机关身份跨库存保留或运行期迁移事务规则，本阶段如实记录，不改变用户确认的拿取和回收权限。
 static func _can_recycle_placed_token_for_state(run_state: RunState) -> bool:
 	match run_state:
 		RunState.SETUP, RunState.PULSE_ACTIVE, RunState.MOVE_WINDOW:
@@ -702,27 +811,85 @@ func _finish_current_pulse(expected_generation: int) -> void:
 		complete_label.visible = true
 
 
-## 重置本次原型运行状态。
+## 重置本次原型关卡到完整初始运行状态。
 ## [br]本函数无参数、无返回值。
-## [br]副作用：如正在拖拽则先安全取消；取消当前脉冲、使旧等待回调失效、清除当前光路视觉、重置全部普通独立水晶点亮状态，并隐藏完成标签。
-## [br]状态变化：递增 pulse_generation，清除 is_level_completed，把 runtime_moves_used 清零，并通过 _set_run_state(RunState.SETUP) 恢复 SETUP；玩家已放置原型机关位置、朝向和库存状态保持。
-## [br]边界条件：不清空玩家布局和占用表，不删除玩家镜面，不强制镜面回 SLASH；只把运行期已用移动次数恢复为 0。当前核心闭环原型没有同时组、顺序组或完整 RunStateController 需要恢复。
+## [br]副作用：最先安全取消当前拖拽；随后递增 pulse_generation 使旧脉冲等待回调失效；清除当前光路视觉、普通独立水晶点亮状态、完成状态和完成标签；逐个注销并删除可确认清理的玩家 PlaceableToken；按未能清理的玩家机关数量恢复机关栏库存；刷新机关栏与运行期移动 UI。
+## [br]状态变化：is_level_completed 设为 false，runtime_moves_used 清零，current_run_state 通过 _set_run_state(RunState.SETUP) 返回 SETUP；正常情况下 placed_tokens_by_id 清空且 prototype_token_remaining 恢复为 PROTOTYPE_TOKEN_TOTAL。
+## [br]边界条件：reset_runtime() 是 R 和脚本直接调用的唯一完整重置入口，不依赖 _input 预先取消拖拽；拖动已放置机关时先恢复正式节点原格和可见性，再统一注销占用并删除节点，避免隐藏节点遗留；只清理玩家放置机关，不调用 occupancy.clear()，不删除发射器、墙体、水晶或未来静态/预置机关。正常情况下 R 将全部玩家机关退回库存；若检测到 OccupancyRegistry 残留且无法通过公共 unregister 接口确认清理，相关机关会保留在场上且不会重复退回库存，以避免制造重复机关。
 func reset_runtime() -> void:
-	# R取消拖拽：即使 reset_runtime() 被脚本直接调用，也先恢复拖拽前的库存、视觉和旧占用。
+	# R完整重置首先取消拖拽：库存预览只删除预览；已放置机关先恢复旧格、旧世界位置和可见性，随后再由玩家机关清理流程统一删除。
 	if is_dragging():
-		_cancel_current_drag()
-	# R取消当前脉冲：递增版本号，使已经挂起的旧等待回调全部失效。
+		_cancel_current_drag(false)
+
+	# R取消当前脉冲：递增版本号，使已经挂起的旧等待回调全部失效，不能再清理或切换 R 后的新状态。
 	pulse_generation += 1
 	is_level_completed = false
-	# R恢复运行期移动次数：已用次数清零，但 runtime_move_limit、玩家镜面位置与朝向、库存与占用关系全部保留。
 	runtime_moves_used = 0
+
 	clear_light_path()
 	_reset_independent_crystals()
 	complete_label.visible = false
-	# R解除锁定：SETUP 通过状态推导为未锁定、可编辑；玩家布局和库存事实不清空。
+
+	var all_player_tokens_returned: bool = _return_all_player_placed_tokens_to_inventory()
+	if not all_player_tokens_returned:
+		push_error("CoreLoopPrototype: R重置玩家机关清理未完全成功，部分机关已保留在场上且未退回库存。")
+
 	_set_run_state(RunState.SETUP)
 	_update_runtime_move_ui()
-	_assert_inventory_consistency()
+
+	if OS.is_debug_build():
+		_assert_inventory_consistency()
+
+
+## 将全部可确认清理的玩家放置机关退回机关栏库存。
+## [br]本函数无参数；输入事实来自 placed_tokens_by_id 中登记的玩家 PlaceableToken 映射。
+## [br]返回 true 表示全部玩家机关均确认完成占用注销、节点删除和映射移除；返回 false 表示至少一个玩家机关因为 OccupancyRegistry 仍残留引用而未被清理和退回库存。
+## [br]副作用：复制玩家 mechanism_id 快照，按 ID 逐个调用 occupancy.unregister() 注销玩家机关占用；成功注销或确认 registry 已无残留引用时，安全 queue_free() 对应玩家机关节点并移除 placed_tokens_by_id 记录；最终按仍留在 placed_tokens_by_id 中的未清理数量计算 prototype_token_remaining，并刷新机关栏 UI。
+## [br]状态变化：只修改可确认清理的玩家机关映射、玩家机关节点、玩家机关 OccupancyRegistry 占用和库存数量；不修改发射器、墙体、水晶、LightPathLayer、current_run_state、runtime_moves_used、pulse_generation 或完成状态。
+## [br]异常处理：unregister 返回 false 且 registry 已无该 ID 任一方向引用时，说明占用可能已提前缺失，调试构建输出 warning 后继续删除节点和回库；unregister 返回 false 且 registry 仍有该 ID 任一方向残留引用时，失败关闭：输出错误、保留节点、保留 placed_tokens_by_id 记录、不退回库存，并继续处理其他玩家机关。节点失效但占用已清理时输出错误、移除映射并恢复对应库存；节点失效且占用仍残留时不试图 queue_free，也不回库，保留异常事实供一致性断言暴露。
+## [br]边界条件：必须先使用 ID 快照，因为遍历 Dictionary 时直接 erase 会改变迭代中的集合，可能导致漏删或未定义行为；不得调用 occupancy.clear()，不得强制修改 OccupancyRegistry 内部索引修复异常，因为未来 OccupancyRegistry 可能包含关卡预置机关或静态机关占用，完整 R 只允许清理 placed_tokens_by_id 登记的玩家放置机关。
+func _return_all_player_placed_tokens_to_inventory() -> bool:
+	var mechanism_ids: Array[StringName] = _copy_player_mechanism_ids(placed_tokens_by_id)
+	var all_tokens_returned: bool = true
+
+	for mechanism_id: StringName in mechanism_ids:
+		var token: PlaceableToken = placed_tokens_by_id.get(mechanism_id) as PlaceableToken
+
+		var was_unregistered: bool = occupancy.unregister(mechanism_id)
+		var has_residual_reference: bool = _occupancy_has_any_reference_to_mechanism(mechanism_id)
+
+		if has_residual_reference:
+			all_tokens_returned = false
+			push_error(
+				"CoreLoopPrototype: R重置无法清理玩家机关占用，机关将保留在场上且不会退回库存：%s"
+				% [mechanism_id]
+			)
+			if not is_instance_valid(token):
+				push_error(
+					"CoreLoopPrototype: R重置时玩家机关节点已失效且占用仍有残留，保留映射供一致性断言暴露：%s"
+					% [mechanism_id]
+				)
+			continue
+
+		if not was_unregistered and OS.is_debug_build():
+			push_warning(
+				"CoreLoopPrototype: R重置时玩家机关占用已提前不存在，继续清理玩家节点：%s"
+				% [mechanism_id]
+			)
+
+		if is_instance_valid(token):
+			token.queue_free()
+		elif OS.is_debug_build():
+			push_error("CoreLoopPrototype: R重置时玩家机关节点已失效：%s" % [mechanism_id])
+
+		placed_tokens_by_id.erase(mechanism_id)
+
+	prototype_token_remaining = _compute_inventory_remaining_after_reset(
+		PROTOTYPE_TOKEN_TOTAL,
+		placed_tokens_by_id.size()
+	)
+	_update_inventory_ui()
+	return all_tokens_returned
 
 
 ## 重置普通独立水晶为未点亮状态。
@@ -1217,10 +1384,11 @@ func _recycle_dragged_placed_token() -> void:
 
 
 ## 取消当前拖拽并恢复拖拽前状态。
-## [br]本函数无参数、无返回值。
-## [br]副作用：删除预览节点；若拖动的是已放置机关且节点仍有效，则恢复正式机关原位置和可见状态。
-## [br]边界条件：从库存取消不改变库存；已放置机关取消不改变 OccupancyRegistry，因为旧占用从未清除。若 _dragged_placed_token 已失效，不再解引用，只清理预览与拖拽状态，并在调试构建报告一致性异常；不静默重建 placed_tokens_by_id 或 OccupancyRegistry，也不实现自动恢复。
-func _cancel_current_drag() -> void:
+## [br]should_assert_consistency 表示取消完成后是否立即执行库存/占用一致性断言，普通拖拽取消使用默认 true；R 完整重置会传 false，把断言延后到玩家机关统一清理完成之后。
+## [br]无返回值。
+## [br]副作用：删除预览节点；若拖动的是已放置机关且节点仍有效，则恢复正式机关原位置和可见状态；随后清空拖拽状态字段。
+## [br]边界条件：从库存取消不改变库存；已放置机关取消不改变 OccupancyRegistry，因为旧占用从未清除。若 _dragged_placed_token 已失效，不再解引用，只清理预览与拖拽状态，并在调试构建报告一致性异常；不静默重建 placed_tokens_by_id 或 OccupancyRegistry，也不实现自动恢复。R 完整重置传 false 是为了避免中间态断言早于后续玩家机关删除和占用注销流程。
+func _cancel_current_drag(should_assert_consistency: bool = true) -> void:
 	if _drag_source == DragSource.PLACED and _dragged_placed_token != null:
 		if is_instance_valid(_dragged_placed_token):
 			# 已放置机关拖拽期间保留旧逻辑占用，取消时只恢复正式视觉即可。
@@ -1232,7 +1400,8 @@ func _cancel_current_drag() -> void:
 			push_error("CoreLoopPrototype: 取消拖拽时已放置机关节点已失效，未恢复视觉，请检查 placed_tokens_by_id 与 OccupancyRegistry 一致性。")
 	_clear_drag_preview_only()
 	_reset_drag_state()
-	_assert_inventory_consistency()
+	if should_assert_consistency:
+		_assert_inventory_consistency()
 
 
 ## 删除当前拖拽预览节点。
