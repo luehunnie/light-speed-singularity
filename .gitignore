@@ -8,6 +8,9 @@
 .claude/
 .mcp.json
 *.code-workspace
+.omo/
+opencode.json
+AGENTS.md
 
 # AI 开发过程文档，仅保留在本地
 /docs/ai/
