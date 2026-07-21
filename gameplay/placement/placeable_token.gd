@@ -5,6 +5,9 @@ extends Node2D
 ## 职责：保存原型机关的唯一 ID 与逻辑格子，按关卡控制器传入的位置刷新显示，提供普通放置态与拖拽预览态。
 ## 位置：由 levels/prototypes/core_loop_prototype.gd 在布置阶段实例化和驱动，用于验证库存、拖拽、占用登记、移动和回收流程。
 ## 依赖：Vector2i 格子坐标、StringName 机关 ID，以及本场景内 Shadow、TokenBody、InnerMark 三个 ColorRect 子节点。
+## 世界机关尺寸：本节点世界主体占位视觉由场景 placeable_token.tscn 定义，已对齐 GridMetrics.SINGLE_CELL_WORLD_SIZE（64×64 世界像素），
+## 未来张梓涵的 64×64 正式美术素材可 1:1 替换该占位视觉；本脚本不自行换算坐标，世界位置统一由关卡控制器的 cell_to_world() 传入。
+## UI 分离：CanvasLayer 机关栏 TokenIcon 等 UI 图标尺寸与世界机关尺寸相互独立，不随 64 世界格强制缩放。
 ## 不负责：地图合法性判断、OccupancyRegistry 写入、库存数量、RunState、光传播、阻挡、反射、颜色转换或通关判断。
 
 var mechanism_id: StringName = &""

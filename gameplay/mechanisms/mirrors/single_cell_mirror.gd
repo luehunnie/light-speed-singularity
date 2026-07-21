@@ -19,8 +19,9 @@ var orientation: MirrorOrientation = MirrorOrientation.SLASH
 
 @onready var _mirror_line: Line2D = $MirrorLine
 
-var _slash_points: PackedVector2Array = PackedVector2Array([Vector2(-10.0, 10.0), Vector2(10.0, -10.0)])
-var _backslash_points: PackedVector2Array = PackedVector2Array([Vector2(-10.0, -10.0), Vector2(10.0, 10.0)])
+# 镜面方向线占位点位，覆盖 64 世界格内可读范围（±28），不碰格边；最终以张梓涵 64×64 正式美术素材替换为准。
+var _slash_points: PackedVector2Array = PackedVector2Array([Vector2(-28.0, 28.0), Vector2(28.0, -28.0)])
+var _backslash_points: PackedVector2Array = PackedVector2Array([Vector2(-28.0, -28.0), Vector2(28.0, 28.0)])
 const _PLACED_LINE_COLOR: Color = Color(0.03, 0.09, 0.14, 1.0)
 const _VALID_PREVIEW_LINE_COLOR: Color = Color(0.02, 0.18, 0.06, 1.0)
 const _INVALID_PREVIEW_LINE_COLOR: Color = Color(0.95, 0.95, 0.95, 1.0)

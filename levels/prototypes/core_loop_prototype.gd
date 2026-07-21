@@ -22,7 +22,10 @@ extends Node2D
 
 
 ## 基本参数
-const CELL_SIZE: int = 32
+# 世界格尺寸唯一来源：preload 共享常量模块，避免 64 世界格尺寸分散手写；不加 class_name 以避开 MCP 全局类型缓存问题。
+const GridMetrics: GDScript = preload("res://gameplay/grid/grid_metrics.gd")
+# 当前原型在正式 TileMapLayer 接管坐标转换前，统一通过 GridMetrics.CELL_SIZE 做格↔世界换算；64 世界格对应半格 32。
+const CELL_SIZE: int = GridMetrics.CELL_SIZE
 const MAX_PROPAGATION_STEPS: int = 128
 const PULSE_VISUAL_DURATION_SECONDS: float = 1.0
 const PROTOTYPE_TOKEN_TOTAL: int = 1
@@ -114,7 +117,7 @@ var _dragged_placed_token: Variant = null
 
 ## 初始化核心闭环原型关卡。
 ## [br]本函数无参数、无返回值。
-## [br]副作用：刷新机关栏 UI；仅在调试构建中执行 OccupancyRegistry、32 像素逻辑格坐标换算、基础单格镜面反射、运行状态、运行期移动次数、玩家机关 ID 快照和库存一致性断言。
+## [br]副作用：刷新机关栏 UI；仅在调试构建中执行 OccupancyRegistry、64 像素逻辑格坐标换算、基础单格镜面反射、运行状态、运行期移动次数、玩家机关 ID 快照和库存一致性断言。
 ## 自检结束后真实占用表、运行状态、布局编辑权限、水晶、玩家布局、镜面朝向和完成标签不被改变。
 ## [br]边界条件：发布构建不执行自检，避免把调试断言作为运行期必需流程。
 func _ready() -> void:
@@ -269,10 +272,10 @@ func _run_occupancy_registry_self_check() -> void:
 	assert(self_check_registry.is_consistent(), "占用表自检：清空后仍应一致")
 
 
-## 执行当前原型 32 像素逻辑格坐标换算自检。
+## 执行当前原型 64 像素逻辑格坐标换算自检。
 ## [br]本函数无参数、无返回值，仅由 _ready() 在调试构建中调用。
 ## [br]副作用：只用 Vector2i 测试格调用 cell_to_world() 与 world_to_cell() 并执行 assert；不修改场景节点、OccupancyRegistry、库存、拖拽状态、RunState 或光线发射。
-## [br]边界条件：当前原型在正式 TileMapLayer 接管坐标转换前使用 CELL_SIZE 常量；逻辑坐标仍为 Vector2i，32 像素只表示当前世界视觉格中心间距，窗口分辨率或 UI 尺寸变化不应改变逻辑结果。
+## [br]边界条件：当前原型在正式 TileMapLayer 接管坐标转换前使用 CELL_SIZE 常量；逻辑坐标仍为 Vector2i，64 像素只表示当前世界视觉格中心间距，窗口分辨率或 UI 尺寸变化不应改变逻辑结果。
 func _run_grid_coordinate_self_check() -> void:
 	var test_cells: Array[Vector2i] = [Vector2i.ZERO, emitter_cell]
 	for crystal: BasicCrystal in crystals:
@@ -282,12 +285,12 @@ func _run_grid_coordinate_self_check() -> void:
 	test_cells.append(Vector2i(map_bounds.end.x - 1, map_bounds.end.y - 1))
 
 	for cell: Vector2i in test_cells:
-		assert(world_to_cell(cell_to_world(cell)) == cell, "32像素逻辑格自检：cell_to_world/world_to_cell 必须互逆：%s" % [cell])
+		assert(world_to_cell(cell_to_world(cell)) == cell, "64像素逻辑格自检：cell_to_world/world_to_cell 必须互逆：%s" % [cell])
 
 	var horizontal_spacing: float = cell_to_world(Vector2i(1, 0)).x - cell_to_world(Vector2i(0, 0)).x
 	var vertical_spacing: float = cell_to_world(Vector2i(0, 1)).y - cell_to_world(Vector2i(0, 0)).y
-	assert(horizontal_spacing == float(CELL_SIZE), "32像素逻辑格自检：横向相邻格中心间距应为 %d，实际为 %s" % [CELL_SIZE, horizontal_spacing])
-	assert(vertical_spacing == float(CELL_SIZE), "32像素逻辑格自检：纵向相邻格中心间距应为 %d，实际为 %s" % [CELL_SIZE, vertical_spacing])
+	assert(horizontal_spacing == float(CELL_SIZE), "64像素逻辑格自检：横向相邻格中心间距应为 %d，实际为 %s" % [CELL_SIZE, horizontal_spacing])
+	assert(vertical_spacing == float(CELL_SIZE), "64像素逻辑格自检：纵向相邻格中心间距应为 %d，实际为 %s" % [CELL_SIZE, vertical_spacing])
 
 ## 执行基础单格镜面八方向反射纯函数自检。
 ## [br]本函数无参数、无返回值，仅由 _ready() 在调试构建中调用。
@@ -1033,9 +1036,10 @@ func add_light_visual(cell: Vector2i) -> void:
 
 ## 将格子坐标转换为当前原型使用的世界坐标中心点。
 ## [br]cell 是要转换的 Vector2i 逻辑格坐标。
-## [br]返回该 32 像素逻辑格中心点的世界坐标；本函数无副作用。
+## [br]返回该 64 像素逻辑格中心点的世界坐标；本函数无副作用。
 ## [br]边界条件：当前核心闭环原型使用 CELL_SIZE 常量直接计算，不依赖 TileMapLayer.map_to_local()；逻辑位置仍为 Vector2i，窗口分辨率和 CanvasLayer UI 尺寸不改变格子换算结果，正式 TileMapLayer 接入后再由 map_to_local/local_to_map 接管。
 func cell_to_world(cell: Vector2i) -> Vector2:
+	# 格中心 = 格原点 + 半格偏移；CELL_SIZE=64 时半格为 32，即 cell_to_world(Vector2i.ZERO) == Vector2(32, 32)。
 	return Vector2(
 		cell.x * CELL_SIZE + CELL_SIZE / 2.0,
 		cell.y * CELL_SIZE + CELL_SIZE / 2.0
@@ -1045,7 +1049,7 @@ func cell_to_world(cell: Vector2i) -> Vector2:
 ## 将世界坐标转换为当前原型使用的格子坐标。
 ## [br]world_position 是鼠标或节点的世界坐标。
 ## [br]返回包含该世界点的 Vector2i 逻辑格坐标；本函数无副作用。
-## [br]边界条件：与 cell_to_world() 使用同一个 CELL_SIZE，32 像素逻辑格中心点必然换回同一个 cell；负坐标会向下取整，地图合法性另由放置检查处理。
+## [br]边界条件：与 cell_to_world() 使用同一个 CELL_SIZE，64 像素逻辑格中心点必然换回同一个 cell；负坐标会向下取整，地图合法性另由放置检查处理。
 func world_to_cell(world_position: Vector2) -> Vector2i:
 	# 坐标转换统一在关卡控制器中完成，避免机关或 UI 产生第二套换算规则。
 	return Vector2i(
