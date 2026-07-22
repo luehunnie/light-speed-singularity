@@ -2,6 +2,8 @@
 
 [ext_resource type="Script" uid="uid://cfkidx57m3yqa" path="res://gameplay/crystals/basic_crystal.gd" id="1_crystal"]
 [ext_resource type="Script" uid="uid://do7wigwkihxy0" path="res://levels/prototypes/core_loop_prototype.gd" id="2_proto"]
+[ext_resource type="PackedScene" uid="uid://dbjvvisualview0" path="res://gameplay/visuals/object_visual_view.tscn" id="3_view"]
+[ext_resource type="Resource" path="res://assets/visual_profiles/basic_crystal_visuals.tres" id="4_profile"]
 
 [node name="CoreLoopPrototype" type="Node2D" unique_id=1552304930]
 script = ExtResource("2_proto")
@@ -32,12 +34,10 @@ color = Color(0.2, 0.85, 1, 1)
 script = ExtResource("1_crystal")
 cell = Vector2i(3, 1)
 
-[node name="CrystalVisual" type="ColorRect" parent="RuntimeObjects/Crystal" unique_id=964004285]
-offset_left = 192.0
-offset_top = 64.0
-offset_right = 256.0
-offset_bottom = 128.0
-color = Color(0.35, 0.45, 0.7, 1)
+[node name="VisualView" parent="RuntimeObjects/Crystal" instance=ExtResource("3_view")]
+position = Vector2(224, 96)
+visual_profile = ExtResource("4_profile")
+initial_state_id = "unlit"
 
 [node name="LightPathLayer" type="Node2D" parent="." unique_id=1467401346]
 
