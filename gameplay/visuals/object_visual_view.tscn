@@ -1,0 +1,35 @@
+[gd_scene load_steps=2 format=3 uid="uid://dbjvvisualview0"]
+
+[ext_resource type="Script" path="res://gameplay/visuals/object_visual_view.gd" id="1_view"]
+
+[node name="ObjectVisualView" type="Node2D"]
+script = ExtResource("1_view")
+
+[node name="Shadow" type="ColorRect" parent="."]
+offset_left = -32.0
+offset_top = -32.0
+offset_right = 32.0
+offset_bottom = 32.0
+color = Color(0, 0, 0, 0.18)
+mouse_filter = 2
+
+[node name="Artwork" type="TextureRect" parent="."]
+offset_left = -32.0
+offset_top = -32.0
+offset_right = 32.0
+offset_bottom = 32.0
+mouse_filter = 2
+texture_filter = 1
+expand_mode = 0
+stretch_mode = 0
+
+[node name="FeedbackOverlay" type="ColorRect" parent="."]
+visible = false
+offset_left = -32.0
+offset_top = -32.0
+offset_right = 32.0
+offset_bottom = 32.0
+color = Color(0.2, 0.95, 0.35, 0.5)
+mouse_filter = 2
+
+[node name="DebugMark" type="Node2D" parent="."]
