@@ -32,6 +32,10 @@ const PROTOTYPE_TOKEN_TOTAL: int = 1
 const MIRROR_TOKEN_TYPE_ID: StringName = &"basic_single_cell_mirror"
 const INVALID_CELL: Vector2i = Vector2i(-999999, -999999)
 
+## 原型光路视觉颜色：当前普通脉冲光路的黄色显示色。
+## 仅用于 LightSegmentView 的占位块 color 与正式纹理 self_modulate 调制，不参与任何 RGB 玩法逻辑。
+const LIGHT_PATH_COLOR: Color = Color(1.0, 0.95, 0.2, 0.75)
+
 ## 当前原型的最小运行状态。
 ## SETUP 表示尚未开始本次运行；PULSE_ACTIVE 表示普通脉冲仍在统一显示窗口内；
 ## MOVE_WINDOW 表示脉冲结束但未通关，未来可在此提交有限移动；COMPLETED 表示通关结果已成立。
@@ -80,6 +84,13 @@ const _SingleCellMirrorScene: PackedScene = preload("res://gameplay/mechanisms/m
 # InventorySlotView 是本批新增 class_name 脚本；用 preload 引用以避开 MCP run_project 不重建全局类型缓存的问题，
 # 使 prototype_token_slot 拥有等效静态类型引用，可直接调用 refresh_slot()。
 const _InventorySlotViewScript: GDScript = preload("res://gameplay/ui/inventory_slot_view.gd")
+# LightSegmentView / LightSegmentVisualProfile 是 B2 批新增 class_name 脚本；同样用 preload 引用以避开 MCP run_project 全局类型缓存问题。
+const _LightSegmentViewScript: GDScript = preload("res://gameplay/visuals/light_segment_view.gd")
+const _LightSegmentViewScene: PackedScene = preload("res://gameplay/visuals/light_segment_view.tscn")
+const _LightSegmentVisualProfile: GDScript = preload("res://gameplay/visuals/light_segment_visual_profile.gd")
+# 默认光线路段视觉资源（四字段全空 → 运行时由 LightSegmentView 静默回退到黄色占位块）。
+# 以 Resource 类型 preload，调用 set_profile 时再 as 为 profile 脚本类型，避免常量类型解析对全局类型缓存的依赖。
+const _DefaultLightSegmentProfile: Resource = preload("res://assets/visual_profiles/basic_light_segment_visuals.tres")
 var occupancy: _OccupancyRegistry = _OccupancyRegistry.new()
 
 ## 当前显式运行状态，是运行阶段的唯一事实来源。
@@ -740,7 +751,9 @@ func fire_light() -> void:
 
 		# 3-5. 光先进入 next_cell，再显示该格光路并结算该格普通独立水晶。
 		# 镜面方向只在进入镜面格之后影响后续传播方向，不回头改变已经进入的当前格。
-		add_light_visual(next_cell)
+		# direction 在此处仍是进入 next_cell 的入射方向（镜面反射发生在本调用之后），
+		# 因此镜面格只显示入射方向，反射后的出射方向从下一格开始显示。
+		add_light_visual(next_cell, direction)
 		try_activate_crystal_at(next_cell)
 
 		# 6-8. 通过 OccupancyRegistry 按格查 ID，再从 placed_tokens_by_id 找正式节点；orientation 是镜面方向唯一事实来源。
@@ -1024,15 +1037,21 @@ func update_completion_state() -> void:
 
 
 ## 为指定格子添加一段原型光路视觉。
-## [br]cell 是要显示光路的格子坐标。
-## [br]无返回值；副作用是创建 ColorRect 并加入 LightPathLayer。
-## [br]边界条件：只负责当前原型的静态黄色方块显示；约 1 秒后的清理由脉冲结束流程统一执行。
-func add_light_visual(cell: Vector2i) -> void:
-	var rect := ColorRect.new()
-	rect.color = Color(1.0, 0.95, 0.2, 0.75)
-	rect.size = Vector2(CELL_SIZE, CELL_SIZE)
-	rect.position = cell_to_world(cell) - rect.size * 0.5
-	light_path_layer.add_child(rect)
+## [br]cell 是要显示光路的格子坐标；direction 是光进入该格时的传播方向，仅用于选择四方向纹理，不修改传播逻辑。
+## [br]无返回值；副作用是实例化 LightSegmentView，配置 profile、方向与光线颜色，定位到格中心并加入 LightPathLayer。
+## [br]边界条件：四方向纹理为空时由 LightSegmentView 静默回退到黄色占位块，不输出 warning；
+## [br]镜面格只显示进入该格的入射方向，反射后的出射方向从下一格开始显示；同一格允许多个 LightSegmentView 共存，不做去重或对象池。
+func add_light_visual(cell: Vector2i, direction: Vector2i) -> void:
+	# 按 B2 冻结算子顺序：实例化 → 设置 profile → 设置方向 → 设置颜色 → 定位 → 加入 LightPathLayer。
+	# set_profile / set_direction / set_light_color 在 add_child 前调用，此时 LightSegmentView 的 @onready 子节点尚未就绪，
+	# 其 refresh_visual() 会安全返回；字段值已写入，add_child 触发 _ready() 时由 refresh_visual() 统一应用。
+	var view: _LightSegmentViewScript = _LightSegmentViewScene.instantiate()
+	view.set_profile(_DefaultLightSegmentProfile as _LightSegmentVisualProfile)
+	view.set_direction(direction)
+	view.set_light_color(LIGHT_PATH_COLOR)
+	# 根节点局部原点表示光路格中心；position 直接使用 cell_to_world(cell)，由 LightSegmentView 内部 offset 居中。
+	view.position = cell_to_world(cell)
+	light_path_layer.add_child(view)
 
 
 ## 将格子坐标转换为当前原型使用的世界坐标中心点。
