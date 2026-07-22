@@ -1,12 +1,17 @@
 class_name SingleCellMirror
 extends PlaceableToken
 
-## 基础单格斜面镜机关。
+## 基础单格斜面镜机关（永久视觉接口 v1.0 §14）。
 ## 职责：保存单格镜面的唯一方向事实 orientation，提供“/”与“\”两种双面斜面镜视觉，并按八方向 Vector2i 入射方向返回反射方向。
+## 视觉接入：orientation 是镜面朝向的唯一事实来源；通过 _content_state_id_for_orientation() 把 orientation 映射为
+## ObjectVisualView 的内容状态 ID（SLASH → “slash”，BACKSLASH → “backslash”），由 VisualView 按 single_cell_mirror_visuals.tres 选取对应世界纹理；
+## 拖拽预览复用同一内容状态，因此拖动已有镜面时保留当前方向图片，drag_texture 缺失时由 profile 自动回退到同状态 world_texture。
 ## 位置：作为 gameplay/mechanisms/mirrors 下的第一个正式光学机关，由核心闭环原型通过 OccupancyRegistry 查询到本节点后调用反射接口。
-## 依赖：PlaceableToken 的单格放置/拖拽视觉基础、Vector2i 八方向整数向量，以及本场景内的 MirrorLine 节点。
+## 依赖：PlaceableToken 的通用放置 / 拖拽显示模式与反馈、ObjectVisualView 的内容状态接口、Vector2i 八方向整数向量，
+## 以及本场景内作为调试后备的 MirrorLine 节点（正式纹理由 VisualView 承载，方向线默认隐藏）。
 ## 不负责：OccupancyRegistry 写入、库存、RunState 权限判断、鼠标输入、光线传播循环、水晶点亮、通关判断、分光、颜色、持续光线或多格机关体系。
-## 关键规则：orientation 是镜面朝向的唯一事实来源；布局编辑与内部配置锁定是不同概念，朝向修改只允许 SETUP，由关卡控制器在调用 toggle_orientation() 前判断。
+## 关键规则：orientation 是镜面朝向的唯一事实来源；图片不得反过来决定反射逻辑，反射计算只读取 orientation；
+## 布局编辑与内部配置锁定是不同概念，朝向修改只允许 SETUP，由关卡控制器在调用 toggle_orientation() 前判断。
 
 enum MirrorOrientation {
 	SLASH,
@@ -17,38 +22,41 @@ enum MirrorOrientation {
 ## [br]默认 SLASH 表示从机关栏新拿出的镜面显示“/”；移动、回收取消或 R 重置不应把已有镜面强制恢复默认方向。
 var orientation: MirrorOrientation = MirrorOrientation.SLASH
 
+# 内容状态 ID 契约：必须与 single_cell_mirror_visuals.tres 中 states 的 state_id 保持一致。
+# slash（/，左下到右上）对应 large_mirror.png；backslash（\，左上到右下）对应 large_mirror_other.png。
+const STATE_SLASH: StringName = &"slash"
+const STATE_BACKSLASH: StringName = &"backslash"
+
+# 调试方向线节点：正式纹理配置正常时默认隐藏，仅作占位后备，不参与玩法状态，不得成为正式美术表现。
 @onready var _mirror_line: Line2D = $MirrorLine
 
-# 镜面方向线占位点位，覆盖 64 世界格内可读范围（±28），不碰格边；最终以张梓涵 64×64 正式美术素材替换为准。
+# 镜面方向线占位点位，覆盖 64 世界格内可读范围（±28），不碰格边；仅用于调试后备，最终以张梓涵 64×64 正式美术素材为准。
 var _slash_points: PackedVector2Array = PackedVector2Array([Vector2(-28.0, 28.0), Vector2(28.0, -28.0)])
 var _backslash_points: PackedVector2Array = PackedVector2Array([Vector2(-28.0, -28.0), Vector2(28.0, 28.0)])
-const _PLACED_LINE_COLOR: Color = Color(0.03, 0.09, 0.14, 1.0)
-const _VALID_PREVIEW_LINE_COLOR: Color = Color(0.02, 0.18, 0.06, 1.0)
-const _INVALID_PREVIEW_LINE_COLOR: Color = Color(0.95, 0.95, 0.95, 1.0)
-
-var _is_preview_mode: bool = false
-var _preview_is_valid: bool = true
+const _DEBUG_LINE_COLOR: Color = Color(0.03, 0.09, 0.14, 1.0)
 
 
 ## 初始化镜面方向视觉。
 ## [br]本函数无参数、无返回值。
-## [br]副作用：只按当前 orientation 刷新 MirrorLine 点位和颜色，不修改占用、库存、RunState 或光路。
-## [br]边界条件：从机关栏新实例化时默认显示 SLASH；已放置镜面拖拽预览的方向由关卡控制器在创建预览后复制。
+## [br]副作用：按当前 orientation 把内容状态写入 ObjectVisualView 并刷新调试方向线点位，不修改占用、库存、RunState 或光路。
+## [br]边界条件：从机关栏新实例化时默认显示 SLASH；已放置镜面拖拽预览的方向由关卡控制器在创建预览后通过 set_orientation() 复制；
+## [br]若 set_orientation() 在节点 ready 前被调用，_refresh_orientation_visual() 会安全跳过，orientation 字段仍已写入，_ready() 时再按最终方向刷新视觉。
 func _ready() -> void:
-	_update_orientation_visual()
+	_refresh_orientation_visual()
 
 
 ## 设置镜面的内部朝向配置。
 ## [br]new_orientation 是目标 MirrorOrientation，SLASH 表示“/”，BACKSLASH 表示“\”。
-## [br]无返回值；副作用是写入 orientation 并刷新镜面方向视觉。
+## [br]无返回值；副作用是写入 orientation 并通过 _refresh_orientation_visual() 同步视觉内容状态。
 ## [br]失败条件：传入枚举范围外的值时输出错误并保持原方向。
-## [br]边界条件：本函数不自行判断 SETUP / PULSE_ACTIVE / MOVE_WINDOW / COMPLETED；朝向修改权限由关卡控制器的 can_edit_configuration() 控制，因此 PULSE_ACTIVE 和 MOVE_WINDOW 仍可移动布局但不能改内部配置。
+## [br]边界条件：本函数不自行判断 SETUP / PULSE_ACTIVE / MOVE_WINDOW / COMPLETED；朝向修改权限由关卡控制器的 can_edit_configuration() 控制，因此 PULSE_ACTIVE 和 MOVE_WINDOW 仍可移动布局但不能改内部配置；
+## [br]所有 orientation 变化后立即同步视觉状态，保证图片与反射计算始终读取同一方向事实。
 func set_orientation(new_orientation: MirrorOrientation) -> void:
 	if new_orientation != MirrorOrientation.SLASH and new_orientation != MirrorOrientation.BACKSLASH:
 		push_error("SingleCellMirror: 非法镜面朝向：%s" % [new_orientation])
 		return
 	orientation = new_orientation
-	_update_orientation_visual()
+	_refresh_orientation_visual()
 
 
 ## 在“/”与“\”之间切换镜面朝向。
@@ -108,36 +116,26 @@ static func is_valid_incoming_direction_value(direction: Vector2i) -> bool:
 	)
 
 
-## 切换普通放置态或拖拽预览态视觉，并保持镜面朝向线可辨认。
-## [br]is_preview 表示是否处于拖拽预览，is_valid 表示预览格是否合法。
-## [br]无返回值；副作用是调用 PlaceableToken 的通用预览颜色逻辑，并刷新 MirrorLine 颜色和方向点位。
-## [br]边界条件：拖动已有镜面时，关卡控制器会先复制 orientation，因此预览线方向必须保留当前朝向；合法和非法预览只改变视觉反馈，不改变 orientation 或占用。
-func set_drag_preview(is_preview: bool, is_valid: bool) -> void:
-	_is_preview_mode = is_preview
-	_preview_is_valid = is_valid
-	super.set_drag_preview(is_preview, is_valid)
-	_update_orientation_visual()
+## 把当前 orientation 映射为 ObjectVisualView 的内容状态 ID。
+## [br]本函数无参数。
+## [br]返回 STATE_SLASH（“slash”）或 STATE_BACKSLASH（“backslash”）；本函数无副作用，不修改 orientation 或视觉。
+## [br]边界条件：映射是单向的——图片不得反过来决定反射逻辑；调用方在 orientation 变化后用本结果驱动 VisualView.set_content_state()。
+func _content_state_id_for_orientation() -> StringName:
+	return STATE_SLASH if orientation == MirrorOrientation.SLASH else STATE_BACKSLASH
 
 
-## 按当前 orientation 和预览状态刷新镜面方向线。
+## 按当前 orientation 刷新视觉：写入 ObjectVisualView 内容状态，并更新调试方向线点位。
 ## [br]本函数无参数、无返回值。
-## [br]副作用：只修改 MirrorLine.points 与 MirrorLine.default_color。
-## [br]边界条件：若节点尚未 ready 则安全返回；本视觉更新不反推逻辑方向，反射始终只读取 orientation。
-func _update_orientation_visual() -> void:
+## [br]副作用：调用 _visual_view.set_content_state() 切换 slash / backslash 纹理，并更新 MirrorLine.points（调试后备，节点默认隐藏）。
+## [br]边界条件：若节点尚未 ready 则安全返回，避免在 @onready 变量初始化前解引用；本视觉更新不反推逻辑方向，反射始终只读取 orientation；
+## [br]切换显示模式（WORLD / DRAG_PREVIEW）不会改变内容状态，因此拖拽预览保留当前方向图片。
+func _refresh_orientation_visual() -> void:
 	if not is_node_ready():
 		return
+	_visual_view.set_content_state(_content_state_id_for_orientation())
+	# 调试方向线：仅作占位后备，正式纹理由 VisualView 承载；点位随方向更新以便需要时开启调试。
 	if orientation == MirrorOrientation.SLASH:
 		_mirror_line.points = _slash_points
 	else:
 		_mirror_line.points = _backslash_points
-	_mirror_line.default_color = _get_mirror_line_color()
-
-
-## 取得当前镜面线条颜色。
-## [br]本函数无参数。
-## [br]返回用于 MirrorLine.default_color 的 Color；本函数无副作用。
-## [br]边界条件：普通放置态、合法预览和非法预览使用不同颜色，保证镜面方向视觉与放置反馈同时可辨认。
-func _get_mirror_line_color() -> Color:
-	if not _is_preview_mode:
-		return _PLACED_LINE_COLOR
-	return _VALID_PREVIEW_LINE_COLOR if _preview_is_valid else _INVALID_PREVIEW_LINE_COLOR
+	_mirror_line.default_color = _DEBUG_LINE_COLOR
