@@ -4,6 +4,8 @@
 [ext_resource type="Script" uid="uid://do7wigwkihxy0" path="res://levels/prototypes/core_loop_prototype.gd" id="2_proto"]
 [ext_resource type="PackedScene" uid="uid://dbjvvisualview0" path="res://gameplay/visuals/object_visual_view.tscn" id="3_view"]
 [ext_resource type="Resource" path="res://assets/visual_profiles/basic_crystal_visuals.tres" id="4_profile"]
+[ext_resource type="Script" path="res://gameplay/ui/inventory_slot_view.gd" id="5_slot_view"]
+[ext_resource type="Resource" path="res://assets/visual_profiles/single_cell_mirror_visuals.tres" id="6_mirror_profile"]
 
 [node name="CoreLoopPrototype" type="Node2D" unique_id=1552304930]
 script = ExtResource("2_proto")
@@ -89,6 +91,8 @@ theme_override_constants/separation = 12
 [node name="PrototypeTokenSlot" type="PanelContainer" parent="CanvasLayer/InventoryBar/MarginContainer/HBoxContainer"]
 custom_minimum_size = Vector2(150, 68)
 layout_mode = 2
+script = ExtResource("5_slot_view")
+visual_profile = ExtResource("6_mirror_profile")
 
 [node name="SlotMargin" type="MarginContainer" parent="CanvasLayer/InventoryBar/MarginContainer/HBoxContainer/PrototypeTokenSlot"]
 layout_mode = 2
@@ -101,10 +105,27 @@ theme_override_constants/margin_bottom = 6
 layout_mode = 2
 theme_override_constants/separation = 8
 
-[node name="TokenIcon" type="ColorRect" parent="CanvasLayer/InventoryBar/MarginContainer/HBoxContainer/PrototypeTokenSlot/SlotMargin/SlotContent"]
+[node name="IconStack" type="Control" parent="CanvasLayer/InventoryBar/MarginContainer/HBoxContainer/PrototypeTokenSlot/SlotMargin/SlotContent"]
 custom_minimum_size = Vector2(44, 44)
 layout_mode = 2
+
+[node name="TokenIcon" type="ColorRect" parent="CanvasLayer/InventoryBar/MarginContainer/HBoxContainer/PrototypeTokenSlot/SlotMargin/SlotContent/IconStack"]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
 color = Color(0.25, 0.85, 0.95, 1)
+
+[node name="InventoryIcon" type="TextureRect" parent="CanvasLayer/InventoryBar/MarginContainer/HBoxContainer/PrototypeTokenSlot/SlotMargin/SlotContent/IconStack"]
+visible = false
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+mouse_filter = 2
+texture_filter = 1
+expand_mode = 1
+stretch_mode = 5
 
 [node name="SlotTexts" type="VBoxContainer" parent="CanvasLayer/InventoryBar/MarginContainer/HBoxContainer/PrototypeTokenSlot/SlotMargin/SlotContent"]
 layout_mode = 2

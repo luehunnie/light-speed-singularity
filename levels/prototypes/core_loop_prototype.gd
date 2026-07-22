@@ -67,9 +67,7 @@ enum DragSource {
 @onready var canvas_layer: CanvasLayer = $CanvasLayer
 @onready var complete_label: Label = $CanvasLayer/CompleteLabel
 @onready var inventory_bar: Control = $CanvasLayer/InventoryBar
-@onready var prototype_token_slot: Control = $CanvasLayer/InventoryBar/MarginContainer/HBoxContainer/PrototypeTokenSlot
-@onready var prototype_slot_icon: ColorRect = $CanvasLayer/InventoryBar/MarginContainer/HBoxContainer/PrototypeTokenSlot/SlotMargin/SlotContent/TokenIcon
-@onready var remaining_label: Label = $CanvasLayer/InventoryBar/MarginContainer/HBoxContainer/PrototypeTokenSlot/SlotMargin/SlotContent/SlotTexts/RemainingLabel
+@onready var prototype_token_slot: _InventorySlotViewScript = $CanvasLayer/InventoryBar/MarginContainer/HBoxContainer/PrototypeTokenSlot
 @onready var runtime_move_label: Label = $CanvasLayer/RuntimeMoveLabel
 @onready var crystals: Array[BasicCrystal] = [$RuntimeObjects/Crystal]
 
@@ -79,6 +77,9 @@ enum DragSource {
 const _OccupancyRegistry: GDScript = preload("res://gameplay/placement/occupancy_registry.gd")
 const _SingleCellMirrorScript: GDScript = preload("res://gameplay/mechanisms/mirrors/single_cell_mirror.gd")
 const _SingleCellMirrorScene: PackedScene = preload("res://gameplay/mechanisms/mirrors/single_cell_mirror.tscn")
+# InventorySlotView 是本批新增 class_name 脚本；用 preload 引用以避开 MCP run_project 不重建全局类型缓存的问题，
+# 使 prototype_token_slot 拥有等效静态类型引用，可直接调用 refresh_slot()。
+const _InventorySlotViewScript: GDScript = preload("res://gameplay/ui/inventory_slot_view.gd")
 var occupancy: _OccupancyRegistry = _OccupancyRegistry.new()
 
 ## 当前显式运行状态，是运行阶段的唯一事实来源。
@@ -1535,15 +1536,20 @@ func _is_cell_occupied_by_other(cell: Vector2i, ignored_mechanism_id: StringName
 
 ## 刷新底部原型机关栏 UI。
 ## [br]本函数无参数、无返回值。
-## [br]副作用：更新 RemainingLabel 文本和栏位图标颜色，显示当前库存事实以及当前布局编辑权限。
-## [br]边界条件：UI 只显示库存事实，不能自行修改库存；数量为 0 或 COMPLETED 冻结交互时栏位显示禁用灰色，SETUP/PULSE_ACTIVE/MOVE_WINDOW 且库存大于 0 时显示可用颜色。RemainingLabel 始终显示真实剩余数量；R 返回 SETUP 后若库存大于 0，会恢复可用显示。
+## [br]副作用：计算当前库存剩余与是否允许从道具栏拿取，把这两项事实传给 InventorySlotView.refresh_slot()，
+## [br]由槽位组件统一负责剩余文本、占位符颜色与正式图标 self_modulate 的显示，控制器不再直接修改 TokenIcon.color 或 RemainingLabel.text。
+## [br]边界条件：UI 只显示库存事实，不能自行修改库存；is_available 在库存大于 0 且当前运行状态允许拿取时为 true，
+## [br]COMPLETED 或库存为 0 时为 false，槽位组件据此显示禁用灰色；R 返回 SETUP 后若库存大于 0，会恢复可用显示。
 func _update_inventory_ui() -> void:
-	remaining_label.text = "剩余：%d" % prototype_token_remaining
-	# 栏位高亮在所有非 COMPLETED 状态且库存大于 0 时显示；COMPLETED 或库存为 0 显示禁用灰色。
-	if prototype_token_remaining > 0 and _can_take_from_inventory_for_state(current_run_state):
-		prototype_slot_icon.color = Color(0.25, 0.85, 0.95, 1.0)
-	else:
-		prototype_slot_icon.color = Color(0.25, 0.25, 0.28, 0.7)
+	# 拿取可用性：库存大于 0 且当前运行状态允许从机关栏拿取（非 COMPLETED）。
+	var is_available: bool = (
+		prototype_token_remaining > 0
+		and _can_take_from_inventory_for_state(current_run_state)
+	)
+	prototype_token_slot.refresh_slot(
+		prototype_token_remaining,
+		is_available
+	)
 
 
 ## 断言原型机关库存、玩家机关节点映射与占用表保持一致。
