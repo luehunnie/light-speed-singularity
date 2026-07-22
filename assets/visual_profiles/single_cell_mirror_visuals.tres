@@ -1,0 +1,21 @@
+[gd_resource type="Resource" script_class="ObjectVisualProfile" load_steps=7 format=3]
+
+[ext_resource type="Script" uid="uid://djtcgpsdp3a5x" path="res://gameplay/visuals/object_visual_profile.gd" id="1_profile"]
+[ext_resource type="Script" uid="uid://b562k3phylvi3" path="res://gameplay/visuals/visual_state_texture.gd" id="2_state"]
+[ext_resource type="Texture2D" uid="uid://dyuuaqeffbhhq" path="res://assets/art/mechanisms/mirrors/large_mirror.png" id="3_slash_tex"]
+[ext_resource type="Texture2D" uid="uid://rkyucbyj67ux" path="res://assets/art/mechanisms/mirrors/large_mirror_other.png" id="4_backslash_tex"]
+
+[sub_resource type="Resource" id="VisualStateTexture_slash"]
+script = ExtResource("2_state")
+state_id = "slash"
+world_texture = ExtResource("3_slash_tex")
+
+[sub_resource type="Resource" id="VisualStateTexture_backslash"]
+script = ExtResource("2_state")
+state_id = "backslash"
+world_texture = ExtResource("4_backslash_tex")
+
+[resource]
+script = ExtResource("1_profile")
+default_state_id = "slash"
+states = [SubResource("VisualStateTexture_slash"), SubResource("VisualStateTexture_backslash")]

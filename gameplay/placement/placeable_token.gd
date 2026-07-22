@@ -1,36 +1,40 @@
 class_name PlaceableToken
 extends Node2D
 
-## 核心闭环原型单格可放置机关视觉脚本。
-## 职责：保存原型机关的唯一 ID 与逻辑格子，按关卡控制器传入的位置刷新显示，提供普通放置态与拖拽预览态。
-## 位置：由 levels/prototypes/core_loop_prototype.gd 在布置阶段实例化和驱动，用于验证库存、拖拽、占用登记、移动和回收流程。
-## 依赖：Vector2i 格子坐标、StringName 机关 ID，以及本场景内 Shadow、TokenBody、InnerMark 三个 ColorRect 子节点。
-## 世界机关尺寸：本节点世界主体占位视觉由场景 placeable_token.tscn 定义，已对齐 GridMetrics.SINGLE_CELL_WORLD_SIZE（64×64 世界像素），
-## 未来张梓涵的 64×64 正式美术素材可 1:1 替换该占位视觉；本脚本不自行换算坐标，世界位置统一由关卡控制器的 cell_to_world() 传入。
+## 核心闭环原型单格可放置机关通用视觉脚本（永久视觉接口 v1.0 §13）。
+## 职责：保存原型机关的唯一 ID 与逻辑格子，按关卡控制器传入的位置刷新显示，
+## 通过 ObjectVisualView 统一承载正式放置态与拖拽预览态的纹理及合法 / 非法反馈，
+## 不再让旧 ColorRect 占位承担正式机关图片或合法性反馈。
+## 位置：由 levels/prototypes/core_loop_prototype.gd 在布置阶段实例化和驱动，用于验证库存、拖拽、占用登记、移动和回收流程；
+## SingleCellMirror 等具体派生机关通过覆盖内容状态映射（slash / backslash 等）复用本类的通用显示模式与反馈。
+## 依赖：Vector2i 格子坐标、StringName 机关 ID，以及本场景内挂载的 ObjectVisualView 子节点 VisualView。
+## 视觉契约：本类只负责通用显示模式（WORLD / DRAG_PREVIEW）与反馈（NONE / VALID / INVALID），
+## 具体内容状态由派生机关决定，本类不硬编码 slash / backslash 等状态 ID；
+## 正式图片、拖拽图片与合法 / 非法覆盖层均由 ObjectVisualView 负责，本类不直接访问 TextureRect.texture，
+## 也不通过修改正式图片的 color 或 self_modulate 表达合法 / 非法。
+## 世界机关尺寸：世界视觉矩形由 ObjectVisualView 固定为 64×64（offsets -32～32），与 GridMetrics.SINGLE_CELL_WORLD_SIZE 一致；
+## 本脚本不自行换算坐标，世界位置统一由关卡控制器的 cell_to_world() 传入。
 ## UI 分离：CanvasLayer 机关栏 TokenIcon 等 UI 图标尺寸与世界机关尺寸相互独立，不随 64 世界格强制缩放。
 ## 不负责：地图合法性判断、OccupancyRegistry 写入、库存数量、RunState、光传播、阻挡、反射、颜色转换或通关判断。
 
 var mechanism_id: StringName = &""
 var cell: Vector2i = Vector2i.ZERO
 
-@onready var _shadow: ColorRect = $Shadow
-@onready var _body: ColorRect = $TokenBody
-@onready var _inner_mark: ColorRect = $InnerMark
+## 通用视觉显示组件，承载正式 / 拖拽纹理与合法 / 非法 / 禁用反馈；由具体派生机关场景配置 visual_profile。
+@onready var _visual_view: ObjectVisualView = $VisualView
 
-const _PLACED_BODY_COLOR: Color = Color(0.25, 0.85, 0.95, 1.0)
-const _PLACED_MARK_COLOR: Color = Color(0.95, 1.0, 1.0, 1.0)
-const _VALID_PREVIEW_BODY_COLOR: Color = Color(0.2, 0.95, 0.35, 0.62)
-const _INVALID_PREVIEW_BODY_COLOR: Color = Color(1.0, 0.18, 0.18, 0.62)
-const _VALID_PREVIEW_MARK_COLOR: Color = Color(0.02, 0.25, 0.08, 0.95)
-const _INVALID_PREVIEW_MARK_COLOR: Color = Color(0.35, 0.02, 0.02, 0.95)
+# 层级常量：拖拽预览置于已放置机关之上，保证鼠标拖动时预览可见；与反馈颜色无关，只控制绘制顺序。
 const _PLACED_Z_INDEX: int = 20
 const _PREVIEW_Z_INDEX: int = 80
+# 拖拽预览轻微放大，保留原型的拿取手感；不参与合法性判定，不影响坐标换算。
+const _DRAG_PREVIEW_SCALE: Vector2 = Vector2(1.08, 1.08)
 
 
 ## 配置原型机关实例的基础数据。
 ## [br]id 是关卡控制器分配的唯一机关 ID，initial_cell 是当前逻辑格子。
-## [br]无返回值；副作用是写入 mechanism_id 和 cell，并刷新为普通放置视觉。
-## [br]边界条件：允许预览节点使用临时 ID；本函数不验证 ID 唯一性、不判断格子合法性、不写占用表。
+## [br]无返回值；副作用是写入 mechanism_id 和 cell，并把视觉切换为正式放置态（WORLD + NONE）。
+## [br]边界条件：允许预览节点使用临时 ID；本函数不验证 ID 唯一性、不判断格子合法性、不写占用表；
+## [br]调用时机在 add_child 之后，VisualView 已完成 _ready，可安全驱动。
 func configure(id: StringName, initial_cell: Vector2i) -> void:
 	mechanism_id = id
 	cell = initial_cell
@@ -47,7 +51,7 @@ func set_cell(new_cell: Vector2i) -> void:
 
 ## 更新机关节点的世界位置。
 ## [br]world_position 是关卡控制器通过统一 cell_to_world() 或鼠标吸附规则计算出的世界坐标。
-## [br]无返回值；副作用是设置 Node2D.position。
+## [br]无返回值；副作用是设置 Node2D.position，VisualView 位于本节点局部原点因此随之移动。
 ## [br]边界条件：本节点不自行实现坐标换算，避免与关卡控制器产生第二套 cell/world 规则。
 func set_world_position(world_position: Vector2) -> void:
 	position = world_position
@@ -55,39 +59,41 @@ func set_world_position(world_position: Vector2) -> void:
 
 ## 切换拖拽预览或普通放置视觉。
 ## [br]is_preview 表示是否作为鼠标拖拽预览显示，is_valid 表示当前预览格是否合法。
-## [br]无返回值；副作用是改变颜色、透明度、z_index 与缩放，提供合法/非法明显反馈。
-## [br]边界条件：普通放置态忽略 is_valid；本函数只改视觉，不改库存、不改 RunState、不改 OccupancyRegistry。
+## [br]无返回值；副作用是通过 ObjectVisualView 切换显示模式与反馈，并调整 z_index 与缩放；
+## [br]合法预览 → DRAG_PREVIEW + VALID，非法预览 → DRAG_PREVIEW + INVALID，正式放置 → WORLD + NONE。
+## [br]边界条件：普通放置态忽略 is_valid；切换显示模式不改变具体机关内容状态（slash / backslash 等由派生机关维护）；
+## [br]合法 / 非法反馈只通过 ObjectVisualView 的 FeedbackOverlay 表达，不直接修改正式图片 color 或 self_modulate；
+## [br]本函数只改视觉，不改库存、不改 RunState、不改 OccupancyRegistry。
 func set_drag_preview(is_preview: bool, is_valid: bool) -> void:
 	if is_preview:
 		z_index = _PREVIEW_Z_INDEX
-		scale = Vector2(1.08, 1.08)
-		_shadow.color = Color(0.0, 0.0, 0.0, 0.28)
-		if is_valid:
-			_body.color = _VALID_PREVIEW_BODY_COLOR
-			_inner_mark.color = _VALID_PREVIEW_MARK_COLOR
-		else:
-			_body.color = _INVALID_PREVIEW_BODY_COLOR
-			_inner_mark.color = _INVALID_PREVIEW_MARK_COLOR
+		scale = _DRAG_PREVIEW_SCALE
+		_visual_view.set_display_mode(ObjectVisualView.DisplayMode.DRAG_PREVIEW)
+		# 合法 / 非法只改变覆盖层，不改变内容状态或纹理选取方向。
+		_visual_view.set_feedback(
+			ObjectVisualView.FeedbackState.VALID if is_valid else ObjectVisualView.FeedbackState.INVALID
+		)
 		return
 
+	# 正式放置态：恢复层级与缩放，回到 WORLD 模式并清除任何放置反馈。
 	z_index = _PLACED_Z_INDEX
 	scale = Vector2.ONE
-	_shadow.color = Color(0.0, 0.0, 0.0, 0.18)
-	_body.color = _PLACED_BODY_COLOR
-	_inner_mark.color = _PLACED_MARK_COLOR
+	_visual_view.set_display_mode(ObjectVisualView.DisplayMode.WORLD)
+	_visual_view.set_feedback(ObjectVisualView.FeedbackState.NONE)
 
 
 ## 设置拖拽预览节点自身是否可见。
 ## [br]preview_is_visible 为 false 时只隐藏世界空间中的拖拽预览；为 true 时恢复该预览显示。
-## [br]无返回值；副作用仅设置 visible，不改变 cell、mechanism_id、合法/非法颜色、库存或 OccupancyRegistry。
+## [br]无返回值；副作用是通过 ObjectVisualView.set_visual_visible() 控制视觉组件可见性，不改变 cell、mechanism_id、内容状态、库存或 OccupancyRegistry。
 ## [br]边界条件：本接口专用于 RuntimeObjects 下的世界拖拽预览；隐藏预览不等于取消拖拽，也不复用正式已放置机关的 set_placed_visible()。
 func set_drag_preview_visible(preview_is_visible: bool) -> void:
-	visible = preview_is_visible
+	_visual_view.set_visual_visible(preview_is_visible)
 
 
 ## 设置正式已放置机关是否可见。
 ## [br]placed_is_visible 为 true 时显示正式机关，为 false 时隐藏正式机关。
-## [br]无返回值；副作用是设置 visible。
-## [br]边界条件：隐藏通常用于拖动已放置机关期间；隐藏不代表注销占用，旧逻辑占用仍由关卡控制器保留到松手提交。
+## [br]无返回值；副作用是通过 ObjectVisualView.set_visual_visible() 控制视觉组件可见性。
+## [br]边界条件：隐藏通常用于拖动已放置机关期间；隐藏不代表注销占用，旧逻辑占用仍由关卡控制器保留到松手提交；
+## [br]回收和销毁通过 queue_free() 清理节点，不会留下可见拖拽预览。
 func set_placed_visible(placed_is_visible: bool) -> void:
-	visible = placed_is_visible
+	_visual_view.set_visual_visible(placed_is_visible)
