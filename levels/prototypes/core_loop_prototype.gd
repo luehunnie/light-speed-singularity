@@ -80,6 +80,10 @@ enum DragSource {
 # 用 preload 引用脚本而非依赖全局 class_name 缓存，保证运行期可直接解析。
 const _OccupancyRegistry: GDScript = preload("res://gameplay/placement/occupancy_registry.gd")
 const _SingleCellMirrorScript: GDScript = preload("res://gameplay/mechanisms/mirrors/single_cell_mirror.gd")
+# 批次 4B-B1 抽离的两项启动自检模块；用 preload 引用以避开 MCP run_project 不重建全局类型缓存的问题。
+# 本批只迁移检查逻辑，暂不接入 SelfCheckRunner，核心脚本仍以薄包装形式在 Debug 下调用 run()。
+const _OccupancyRegistryCheck: GDScript = preload("res://gameplay/diagnostics/self_check/checks/occupancy_registry_check.gd")
+const _MirrorReflectionCheck: GDScript = preload("res://gameplay/diagnostics/self_check/checks/mirror_reflection_check.gd")
 const _SingleCellMirrorScene: PackedScene = preload("res://gameplay/mechanisms/mirrors/single_cell_mirror.tscn")
 # InventorySlotView 是本批新增 class_name 脚本；用 preload 引用以避开 MCP run_project 不重建全局类型缓存的问题，
 # 使 prototype_token_slot 拥有等效静态类型引用，可直接调用 refresh_slot()。
@@ -257,31 +261,15 @@ func _run_player_mechanism_id_snapshot_self_check() -> void:
 
 ## 执行 OccupancyRegistry 启动期轻量自检。
 ## [br]本函数无参数、无返回值，仅由 _ready() 在调试构建中调用。
-## [br]副作用：只创建并操作临时 OccupancyRegistry 实例，验证登记、查询、冲突拒绝、解除、清空和一致性；不清空真实关卡 occupancy，不修改真实已放置机关、placed_tokens_by_id、库存或场景节点。
-## [br]边界条件：自检格子刻意远离当前第 3 行光路；任一断言失败表示 OccupancyRegistry 公共接口或双向索引已损坏，未来加入预置机关后本自检也不得清除真实关卡占用。
+## [br]检查逻辑已迁至独立模块 OccupancyRegistryCheck（gameplay/diagnostics/self_check/checks/occupancy_registry_check.gd），
+## 本函数仅保留 Debug 硬断言兼容边界：调用 OccupancyRegistryCheck.run()，校验返回的 SelfCheckResult 数据结构，
+## 并在结构无效或 result.passed == false 时通过 assert 立即失败。不参与业务状态修改，不接入 SelfCheckRunner。
+## [br]边界条件：保留原“自检失败即硬断言”的语义；本批不改变 Debug 启动行为。不得让检查失败后静默继续运行。
 func _run_occupancy_registry_self_check() -> void:
-	var self_check_registry: _OccupancyRegistry = _OccupancyRegistry.new()
-	var debug_id: StringName = &"debug_probe"
-	var debug_cell: Vector2i = Vector2i(10, 10)
-	# 首次登记应成功，且双向索引同步写入。
-	assert(self_check_registry.register_single_cell(debug_id, debug_cell), "占用表自检：首次登记应成功")
-	assert(self_check_registry.get_mechanism_at(debug_cell) == debug_id, "占用表自检：按格查询应返回已登记 ID")
-	assert(self_check_registry.has_mechanism_at(debug_cell), "占用表自检：has_mechanism_at 应为 true")
-	assert(self_check_registry.get_cells_of(debug_id) == [debug_cell], "占用表自检：按 ID 查询应返回其占用格")
-	# 同一格被另一机关重复占用 → 必须拒绝，不覆盖既有占用。
-	assert(not self_check_registry.register_single_cell(&"other_probe", debug_cell), "占用表自检：重复占用同一格应被拒绝")
-	# 同一机关未清理就登记到新位置 → 必须拒绝，原占用保持不变。
-	assert(not self_check_registry.register_single_cell(debug_id, Vector2i(11, 11)), "占用表自检：同一 ID 重复登记应被拒绝")
-	assert(self_check_registry.get_mechanism_at(debug_cell) == debug_id, "占用表自检：拒绝后原占用应保持不变")
-	# 解除后双向索引同步清理，重复解除不报错。
-	assert(self_check_registry.unregister(debug_id), "占用表自检：解除已登记机关应成功")
-	assert(not self_check_registry.has_mechanism_at(debug_cell), "占用表自检：解除后该格应无占用")
-	assert(not self_check_registry.unregister(debug_id), "占用表自检：重复解除不存在的机关应安全返回 false")
-	assert(self_check_registry.is_consistent(), "占用表自检：两个反向索引应一致")
-	# 自检完成，清空临时占用表；真实关卡 occupancy 从未参与本流程。
-	self_check_registry.clear()
-	assert(self_check_registry.mechanism_at.is_empty(), "占用表自检：清空后 mechanism_at 应为空")
-	assert(self_check_registry.is_consistent(), "占用表自检：清空后仍应一致")
+	var result: SelfCheckResult = _OccupancyRegistryCheck.run()
+	var structure_problems: PackedStringArray = result.validate()
+	assert(structure_problems.is_empty(), "占用表自检：返回结果数据结构无效：%s" % [structure_problems])
+	assert(result.passed, "占用表自检失败：summary=%s | details=%s" % [result.summary, result.details])
 
 
 ## 执行当前原型 64 像素逻辑格坐标换算自检。
@@ -306,48 +294,15 @@ func _run_grid_coordinate_self_check() -> void:
 
 ## 执行基础单格镜面八方向反射纯函数自检。
 ## [br]本函数无参数、无返回值，仅由 _ready() 在调试构建中调用。
-## [br]副作用：只用 SingleCellMirror 的静态纯函数验证 SLASH 和 BACKSLASH 各 8 组合法映射，以及 Vector2i.ZERO 和超过单位长度向量的非法返回规则；不创建镜面节点、不修改真实镜面、OccupancyRegistry、库存、水晶、RunState 或光路。
-## [br]边界条件：orientation 是运行中镜面方向的唯一事实来源；自检只把目标朝向作为参数传入纯函数，避免为了测试反射而实例化或改变场景中的真实机关。
+## [br]检查逻辑已迁至独立模块 MirrorReflectionCheck（gameplay/diagnostics/self_check/checks/mirror_reflection_check.gd），
+## 本函数仅保留 Debug 硬断言兼容边界：调用 MirrorReflectionCheck.run()，校验返回的 SelfCheckResult 数据结构，
+## 并在结构无效或 result.passed == false 时通过 assert 立即失败。不参与业务状态修改，不接入 SelfCheckRunner。
+## [br]边界条件：保留原“自检失败即硬断言”的语义；本批不改变 Debug 启动行为。不得让检查失败后静默继续运行。
 func _run_single_cell_mirror_reflection_self_check() -> void:
-	var slash_cases: Dictionary[Vector2i, Vector2i] = {
-		Vector2i.RIGHT: Vector2i.UP,
-		Vector2i.UP: Vector2i.RIGHT,
-		Vector2i.LEFT: Vector2i.DOWN,
-		Vector2i.DOWN: Vector2i.LEFT,
-		Vector2i(1, -1): Vector2i(1, -1),
-		Vector2i(-1, 1): Vector2i(-1, 1),
-		Vector2i(-1, -1): Vector2i(1, 1),
-		Vector2i(1, 1): Vector2i(-1, -1),
-	}
-	var backslash_cases: Dictionary[Vector2i, Vector2i] = {
-		Vector2i.RIGHT: Vector2i.DOWN,
-		Vector2i.DOWN: Vector2i.RIGHT,
-		Vector2i.LEFT: Vector2i.UP,
-		Vector2i.UP: Vector2i.LEFT,
-		Vector2i(1, 1): Vector2i(1, 1),
-		Vector2i(-1, -1): Vector2i(-1, -1),
-		Vector2i(1, -1): Vector2i(-1, 1),
-		Vector2i(-1, 1): Vector2i(1, -1),
-	}
-
-	for incoming_direction: Vector2i in slash_cases:
-		var reflected_direction: Vector2i = _SingleCellMirrorScript.reflect_direction_for_orientation(
-			_SingleCellMirrorScript.MirrorOrientation.SLASH,
-			incoming_direction
-		)
-		assert(reflected_direction == slash_cases[incoming_direction], "单格镜面反射自检：SLASH %s 应反射为 %s，实际为 %s" % [incoming_direction, slash_cases[incoming_direction], reflected_direction])
-
-	for incoming_direction: Vector2i in backslash_cases:
-		var reflected_direction: Vector2i = _SingleCellMirrorScript.reflect_direction_for_orientation(
-			_SingleCellMirrorScript.MirrorOrientation.BACKSLASH,
-			incoming_direction
-		)
-		assert(reflected_direction == backslash_cases[incoming_direction], "单格镜面反射自检：BACKSLASH %s 应反射为 %s，实际为 %s" % [incoming_direction, backslash_cases[incoming_direction], reflected_direction])
-
-	assert(not _SingleCellMirrorScript.is_valid_incoming_direction_value(Vector2i.ZERO), "单格镜面反射自检：Vector2i.ZERO 必须非法")
-	assert(_SingleCellMirrorScript.reflect_direction_for_orientation(_SingleCellMirrorScript.MirrorOrientation.SLASH, Vector2i.ZERO) == Vector2i.ZERO, "单格镜面反射自检：零方向反射应安全返回 ZERO")
-	assert(not _SingleCellMirrorScript.is_valid_incoming_direction_value(Vector2i(2, 0)), "单格镜面反射自检：超过单位长度的方向必须非法")
-	assert(_SingleCellMirrorScript.reflect_direction_for_orientation(_SingleCellMirrorScript.MirrorOrientation.BACKSLASH, Vector2i(2, 0)) == Vector2i.ZERO, "单格镜面反射自检：超过单位长度方向反射应安全返回 ZERO")
+	var result: SelfCheckResult = _MirrorReflectionCheck.run()
+	var structure_problems: PackedStringArray = result.validate()
+	assert(structure_problems.is_empty(), "单格镜面反射自检：返回结果数据结构无效：%s" % [structure_problems])
+	assert(result.passed, "单格镜面反射自检失败：summary=%s | details=%s" % [result.summary, result.details])
 
 
 ## 执行当前原型运行状态权限自检。
