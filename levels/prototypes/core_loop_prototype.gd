@@ -84,6 +84,10 @@ const _SingleCellMirrorScript: GDScript = preload("res://gameplay/mechanisms/mir
 # 批次 4B-B2 起，两项检查通过单项 SelfCheckRunner 执行；核心脚本不再直接调用 run()，但仍保留 Debug 硬断言边界。
 const _OccupancyRegistryCheck: GDScript = preload("res://gameplay/diagnostics/self_check/checks/occupancy_registry_check.gd")
 const _MirrorReflectionCheck: GDScript = preload("res://gameplay/diagnostics/self_check/checks/mirror_reflection_check.gd")
+# 批次 4B-C2 抽离的玩家机关 ID 快照自检模块；用 preload 引用以避开 MCP run_project 不重建全局类型缓存的问题。
+const _PlayerMechanismIdSnapshotCheck: GDScript = preload("res://gameplay/diagnostics/self_check/checks/player_mechanism_id_snapshot_check.gd")
+# 批次 4B-C2 抽离的玩家机关 R 重置共享纯规则；正式 R 重置与自检共用同一玩法层规则来源。
+const _PlayerMechanismResetRules: GDScript = preload("res://gameplay/placement/player_mechanism_reset_rules.gd")
 const _SingleCellMirrorScene: PackedScene = preload("res://gameplay/mechanisms/mirrors/single_cell_mirror.tscn")
 # InventorySlotView 是本批新增 class_name 脚本；用 preload 引用以避开 MCP run_project 不重建全局类型缓存的问题，
 # 使 prototype_token_slot 拥有等效静态类型引用，可直接调用 refresh_slot()。
@@ -149,114 +153,29 @@ func _ready() -> void:
 		_assert_inventory_consistency()
 
 
-## 复制玩家机关 ID 快照（纯函数，无副作用）。
-## [br]source 是要复制键集合的玩家机关映射，通常为 placed_tokens_by_id，也可由自检传入临时 Dictionary。
-## [br]返回 Array[StringName]，包含源 Dictionary 当前键的去重快照；返回后源 Dictionary 的增删不会影响快照。
-## [br]本静态函数不读取或修改真实 OccupancyRegistry、库存、节点树、拖拽状态、RunState、光路或水晶。
-## [br]边界条件：调用方会在清理玩家机关时遍历该快照，而不是边遍历 placed_tokens_by_id 边 erase，避免 Dictionary 迭代器被修改导致漏项或未定义行为；若未来传入非 StringName 键，会按 StringName 语义转换并去重。
-static func _copy_player_mechanism_ids(source: Dictionary) -> Array[StringName]:
-	var mechanism_ids: Array[StringName] = []
-	for key: Variant in source.keys():
-		var mechanism_id: StringName = StringName(key)
-		if not mechanism_ids.has(mechanism_id):
-			mechanism_ids.append(mechanism_id)
-	return mechanism_ids
-
-
-## 计算 R 重置清理玩家机关后的库存剩余数量（纯函数，无副作用）。
-## [br]total 是该机关类型的总库存数量，unresolved_player_token_count 是因 OccupancyRegistry 残留引用而未能确认清理、仍保留在场上的玩家机关数量。
-## [br]返回 clampi(total - unresolved_player_token_count, 0, total)：全部清理时恢复 total，仍有未清理机关时扣除对应数量，异常超量或负数输入也夹在合法库存区间内。
-## [br]本静态函数不读取或修改真实库存、玩家机关映射、OccupancyRegistry、节点树、拖拽状态、RunState、光路或水晶。
-static func _compute_inventory_remaining_after_reset(total: int, unresolved_player_token_count: int) -> int:
-	return clampi(total - unresolved_player_token_count, 0, total)
-
-
-## 查询指定 OccupancyRegistry 是否仍有任一索引引用指定机关 ID（只读，无副作用）。
-## [br]registry 是要检查的占用表实例，mechanism_id 是要查找的玩家机关 ID。
-## [br]返回 true 表示 ID→格子索引或格子→ID 索引中仍存在该 ID；返回 false 表示两个方向都没有该 ID 引用。
-## [br]边界条件：本函数不调用 clear()，不修复、不删除、不改写 registry 内部 Dictionary；它刻意同时检查 occupied_cells_by_id 与 mechanism_at，便于在 unregister 失败时区分“占用已提前缺失”和“仍存在残留引用”。
-static func _registry_has_any_reference_to_mechanism(registry: _OccupancyRegistry, mechanism_id: StringName) -> bool:
-	if registry.has_mechanism(mechanism_id):
-		return true
-
-	for cell: Vector2i in registry.mechanism_at:
-		if registry.mechanism_at[cell] == mechanism_id:
-			return true
-
-	return false
-
-
 ## 查询当前真实 OccupancyRegistry 是否仍有任一索引引用指定机关 ID（只读，无副作用）。
 ## [br]mechanism_id 是要查找的玩家机关 ID。
 ## [br]返回 true 表示当前真实 occupancy 的 ID→格子或格子→ID 任一方向仍引用该 ID；返回 false 表示未发现引用。
 ## [br]边界条件：本函数只委托纯查询函数读取真实 occupancy，不调用 occupancy.clear()，不删除索引，不修改玩家节点或库存；R 重置用它决定 unregister 失败时是否必须失败关闭。
+## [br]批次 4B-C2 起真实规则位于 PlayerMechanismResetRules；本函数仅作为薄包装把当前 occupancy 传入共享纯规则，不保留规则实现。
 func _occupancy_has_any_reference_to_mechanism(mechanism_id: StringName) -> bool:
-	return _registry_has_any_reference_to_mechanism(occupancy, mechanism_id)
+	return _PlayerMechanismResetRules.registry_has_any_reference_to_mechanism(occupancy, mechanism_id)
 
 
 ## 执行玩家机关 ID 快照、R 库存恢复计算与临时占用残留查询自检。
-## [br]本函数无参数、无返回值，仅由 _ready() 在调试构建中调用。
-## [br]副作用：只创建和修改临时 Dictionary 与临时 OccupancyRegistry，并用 assert 验证空表、单个 ID、多个 ID、源表删除后快照独立、String 或 StringName 形式的等价机关 ID 在转换为 StringName 快照后只产生一个逻辑 ID、R 库存恢复计算边界，以及临时 registry 残留引用查询；不调用真实 reset_runtime()，不删除真实玩家机关，不修改真实库存、OccupancyRegistry、拖拽状态或 current_run_state。
-## [br]边界条件：该自检只覆盖 R 完整重置所需的无副作用快照、计算和查询规则；真实玩家机关删除流程由 Godot 运行验证与人工测试共同覆盖，避免启动自检破坏真实场景状态。
+## [br]本函数无参数、无返回值，仅由 _ready() 在调试构建中作为第六项调用。
+## [br]检查逻辑已迁至独立模块 PlayerMechanismIdSnapshotCheck（gameplay/diagnostics/self_check/checks/player_mechanism_id_snapshot_check.gd），
+## 真实规则位于 PlayerMechanismResetRules（gameplay/placement/player_mechanism_reset_rules.gd）。
+## [br]批次 4B-C2 起本函数通过单项 SelfCheckRunner 执行该检查：构造 SelfCheckCallable 并交由 _run_startup_self_check_via_runner 注册、运行与校验，不再直接调用 PlayerMechanismIdSnapshotCheck.run()，也不再在核心脚本内保留测试案例。
+## [br]本函数只通过 Runner 保持 Debug 失败语义：注册失败、Runner 结构错误或 SelfCheckResult.passed == false 时由 _run_startup_self_check_via_runner 立即 assert，保留原 Debug 硬断言边界，不降级为 warning。
+## [br]边界条件：保持原启动顺序，本函数仍位于 _ready 中第六项；不参与业务状态修改，不写文件，不写日志。
 func _run_player_mechanism_id_snapshot_self_check() -> void:
-	var empty_source: Dictionary = {}
-	assert(_copy_player_mechanism_ids(empty_source).is_empty(), "玩家机关 ID 快照自检：空 Dictionary 应返回空数组")
-
-	var one_source: Dictionary = {&"mirror_one": null}
-	var one_snapshot: Array[StringName] = _copy_player_mechanism_ids(one_source)
-	assert(one_snapshot.size() == 1, "玩家机关 ID 快照自检：单个 ID 应完整复制")
-	assert(one_snapshot.has(&"mirror_one"), "玩家机关 ID 快照自检：单个 ID 内容应保留")
-
-	var multi_source: Dictionary = {&"mirror_a": null, &"mirror_b": null, &"mirror_c": null}
-	var multi_snapshot: Array[StringName] = _copy_player_mechanism_ids(multi_source)
-	assert(multi_snapshot.size() == 3, "玩家机关 ID 快照自检：多个 ID 数量不应遗漏")
-	assert(multi_snapshot.has(&"mirror_a"), "玩家机关 ID 快照自检：应包含 mirror_a")
-	assert(multi_snapshot.has(&"mirror_b"), "玩家机关 ID 快照自检：应包含 mirror_b")
-	assert(multi_snapshot.has(&"mirror_c"), "玩家机关 ID 快照自检：应包含 mirror_c")
-
-	multi_source.clear()
-	assert(multi_snapshot.size() == 3, "玩家机关 ID 快照自检：删除源 Dictionary 不应影响快照")
-	assert(multi_snapshot.has(&"mirror_a") and multi_snapshot.has(&"mirror_b") and multi_snapshot.has(&"mirror_c"), "玩家机关 ID 快照自检：快照内容应独立于源 Dictionary")
-
-	var seen_ids: Dictionary[StringName, bool] = {}
-	for snapshot_id: StringName in multi_snapshot:
-		assert(not seen_ids.has(snapshot_id), "玩家机关 ID 快照自检：快照中不应出现重复 ID：%s" % [snapshot_id])
-		seen_ids[snapshot_id] = true
-
-	var equivalent_source: Dictionary = {}
-	equivalent_source["mirror_equivalent"] = null
-	equivalent_source[&"mirror_equivalent"] = null
-	var equivalent_snapshot: Array[StringName] = _copy_player_mechanism_ids(equivalent_source)
-	assert(equivalent_snapshot.size() == 1, "玩家机关 ID 快照自检：String/StringName 等价 ID 应只产生一个逻辑 ID")
-	assert(equivalent_snapshot.has(&"mirror_equivalent"), "玩家机关 ID 快照自检：等价 ID 快照应包含 mirror_equivalent")
-	var seen_equivalent_ids: Dictionary[StringName, bool] = {}
-	for equivalent_id: StringName in equivalent_snapshot:
-		assert(not seen_equivalent_ids.has(equivalent_id), "玩家机关 ID 快照自检：等价 ID 快照中不应出现重复 ID：%s" % [equivalent_id])
-		seen_equivalent_ids[equivalent_id] = true
-	equivalent_source.clear()
-	assert(equivalent_snapshot.size() == 1, "玩家机关 ID 快照自检：删除等价源 Dictionary 不应影响快照")
-	assert(equivalent_snapshot.has(&"mirror_equivalent"), "玩家机关 ID 快照自检：等价快照内容应独立于源 Dictionary")
-
-	assert(_compute_inventory_remaining_after_reset(0, 0) == 0, "R库存计算自检：total=0 unresolved=0 应返回 0")
-	assert(_compute_inventory_remaining_after_reset(1, 0) == 1, "R库存计算自检：total=1 unresolved=0 应返回 1")
-	assert(_compute_inventory_remaining_after_reset(1, 1) == 0, "R库存计算自检：total=1 unresolved=1 应返回 0")
-	assert(_compute_inventory_remaining_after_reset(2, 1) == 1, "R库存计算自检：total=2 unresolved=1 应返回 1")
-	assert(_compute_inventory_remaining_after_reset(2, 2) == 0, "R库存计算自检：total=2 unresolved=2 应返回 0")
-	assert(_compute_inventory_remaining_after_reset(1, 5) == 0, "R库存计算自检：未清理数量超过总数时应夹到 0")
-	assert(_compute_inventory_remaining_after_reset(2, -1) == 2, "R库存计算自检：负数未清理数量应安全夹到完整库存")
-
-	var residual_registry: _OccupancyRegistry = _OccupancyRegistry.new()
-	var residual_id: StringName = &"residual_probe"
-	var residual_cell: Vector2i = Vector2i(12, 12)
-	assert(not _registry_has_any_reference_to_mechanism(residual_registry, residual_id), "残留占用查询自检：空 registry 不应引用任意 ID")
-	assert(residual_registry.register_single_cell(residual_id, residual_cell), "残留占用查询自检：临时 registry 正常登记应成功")
-	assert(_registry_has_any_reference_to_mechanism(residual_registry, residual_id), "残留占用查询自检：正常登记后应能查询到 ID 引用")
-	assert(residual_registry.unregister(residual_id), "残留占用查询自检：临时 registry 注销应成功")
-	assert(not _registry_has_any_reference_to_mechanism(residual_registry, residual_id), "残留占用查询自检：注销后不应再查询到 ID 引用")
-	residual_registry.mechanism_at[residual_cell] = residual_id
-	assert(_registry_has_any_reference_to_mechanism(residual_registry, residual_id), "残留占用查询自检：只有 cell→ID 单向残留时也应查询到 ID 引用")
-	residual_registry.mechanism_at.clear()
-	assert(residual_registry.is_consistent(), "残留占用查询自检：清理临时单向残留后 registry 应恢复一致")
+	var definition: SelfCheckCallable = SelfCheckCallable.new(
+			&"player_mechanism_id_snapshot",
+			"玩家机关 ID 快照、R 库存计算与残留引用自检",
+			_PlayerMechanismIdSnapshotCheck.run
+	)
+	_run_startup_self_check_via_runner(definition, &"startup_player_mechanism_id_snapshot")
 
 
 ## 启动期 Debug 兼容执行入口：通过单项 SelfCheckRunner 执行一条自检定义。
@@ -868,7 +787,7 @@ func reset_runtime() -> void:
 ## [br]异常处理：unregister 返回 false 且 registry 已无该 ID 任一方向引用时，说明占用可能已提前缺失，调试构建输出 warning 后继续删除节点和回库；unregister 返回 false 且 registry 仍有该 ID 任一方向残留引用时，失败关闭：输出错误、保留节点、保留 placed_tokens_by_id 记录、不退回库存，并继续处理其他玩家机关。节点失效但占用已清理时输出错误、移除映射并恢复对应库存；节点失效且占用仍残留时不试图 queue_free，也不回库，保留异常事实供一致性断言暴露。
 ## [br]边界条件：必须先使用 ID 快照，因为遍历 Dictionary 时直接 erase 会改变迭代中的集合，可能导致漏删或未定义行为；不得调用 occupancy.clear()，不得强制修改 OccupancyRegistry 内部索引修复异常，因为未来 OccupancyRegistry 可能包含关卡预置机关或静态机关占用，完整 R 只允许清理 placed_tokens_by_id 登记的玩家放置机关。
 func _return_all_player_placed_tokens_to_inventory() -> bool:
-	var mechanism_ids: Array[StringName] = _copy_player_mechanism_ids(placed_tokens_by_id)
+	var mechanism_ids: Array[StringName] = _PlayerMechanismResetRules.copy_player_mechanism_ids(placed_tokens_by_id)
 	var all_tokens_returned: bool = true
 
 	for mechanism_id: StringName in mechanism_ids:
@@ -903,7 +822,7 @@ func _return_all_player_placed_tokens_to_inventory() -> bool:
 
 		placed_tokens_by_id.erase(mechanism_id)
 
-	prototype_token_remaining = _compute_inventory_remaining_after_reset(
+	prototype_token_remaining = _PlayerMechanismResetRules.compute_inventory_remaining_after_reset(
 		PROTOTYPE_TOKEN_TOTAL,
 		placed_tokens_by_id.size()
 	)
