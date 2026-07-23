@@ -10,7 +10,7 @@ extends RefCounted
 ## 在当前系统中的位置：
 ## gameplay/diagnostics 下日志缓冲与单文件输出层（批次 2A 实现最小内存缓冲，
 ## 批次 2B 增加单文件追加输出与稳定文本格式，批次 2C 增加单文件 2 MiB 大小限制、
-## 最多 8 个文件的轮转与陈旧归档清理）。
+## 最多 8 个文件的轮转与陈旧归档清理，批次 2E-B 增加受管理日志数量、总容量与按修改时间的循环收敛清理）。
 ## 本批访问 user://diagnostics/logs 目录进行追加写入与轮转，但不接入核心循环。
 ##
 ## 主要依赖：
@@ -31,8 +31,9 @@ extends RefCounted
 ## - 依据 Diagnostics 红线，本类只观察/记录/只读校验，不参与玩法决策。
 ## - 文件输出只写入 user://diagnostics/logs，不得写入仓库资源目录、user://diagnostics 根目录
 ##   或 user://diagnostics/snapshots；单文件最大 2 MiB，
-##   最多 8 个文件（当前文件加 .1 到 .7 共 7 个归档），总量不超过 16 MiB，
-##   超限时按从旧到新轮转，删除最旧归档失败只 push_warning 不阻塞主流程。
+##   最多 8 个文件（当前文件加 .1 到 .7 共 7 个归档），目录总量最大 16 MiB；
+##   写入前按 2 MiB 触发 .1～.7 编号轮转，写入后按数量与总容量执行收敛清理，
+##   超限时按修改时间从旧到新删除最旧可删除归档，删除失败只 push_warning 不阻塞主流程。
 ## - 对外返回的全部 DiagnosticLogEntry 均为新建副本，外部修改不得影响内部缓冲。
 ## - 非法入参不 push_error、不抛异常，统一以中文错误 PackedStringArray 返回。
 
@@ -59,8 +60,13 @@ const MAX_LOG_FILE_SIZE_BYTES: int = 2 * 1024 * 1024
 
 ## 日志文件最大保留数量，含当前文件与归档。
 ## 当前文件 runtime.log 加 .1 到 .7 共 7 个归档，总数最多 8 个；
-## 每个正常生成的文件不超过 2 MiB，目录总量因此不超过 16 MiB。
+## 每个正常生成的文件不超过 2 MiB；目录总量另由 MAX_LOG_DIRECTORY_SIZE_BYTES 强制收敛。
 const MAX_LOG_FILE_COUNT: int = 8
+
+## 受管理日志目录最大总字节数：16 MiB。
+## 收敛清理以此为准：成功写入后受管理文件真实字节数总和超过该值时，按修改时间从旧到新
+## 删除最旧可删除归档，每次删除后重新计算，直到总容量回落到该值以内或无可删除归档为止。
+const MAX_LOG_DIRECTORY_SIZE_BYTES: int = 16 * 1024 * 1024
 
 
 ## 内存日志条目上限，运行期不变更。
@@ -159,15 +165,18 @@ func clear() -> void:
 ##   单条超 2 MiB 立即返回错误，此前不创建目录、不打开/删除/轮转任何文件；
 ##   单条大小合法后才确保目录存在；当前文件加本条记录超过 2 MiB 时先按从旧到新轮转
 ##   （删除最旧 .7、.6 到 .1 链式重命名、当前文件重命名为 .1），再写入新的当前文件；
-##   否则直接追加；每次正常写入后清理 .8 及以后陈旧归档。轮转与清理只作用于由
+##   否则直接追加；每次正常写入后按数量与总容量上限执行收敛清理：受管理文件数量超过 8
+##   或总容量超过 16 MiB 时，按修改时间从旧到新删除最旧可删除归档，每次删除后重新枚举与重新计算，
+##   直到同时满足或无可删除归档为止；当前主文件不作为清理目标。轮转与收敛清理只作用于由
 ##   directory_path 与 file_name 推导出的日志文件，不删除目录内其他文件。
 ## [br]失败条件：entry 为 null；entry.validate() 返回非空错误；directory_path 或 file_name
 ##   去除首尾空白后为空；directory_path 越出 user://diagnostics/logs 边界；file_name 包含 /、\ 或 ..；
 ##   单条记录超 2 MiB；目录创建失败；必要轮转（目录打开或重命名）失败；文件打开、写入或 flush 失败。
 ## [br]边界条件：不修改传入 entry；不写入内存缓冲 _entries；不调用 push_error，不抛异常；
 ##   单条超限不触碰文件系统，目录不存在时也不会被创建；写入与 flush 后检测 FileAccess.get_error()，
-##   失败以中文错误返回，不报告为成功；删除最旧归档或清理陈旧归档失败只 push_warning，
-##   不阻塞本次写入、不混入返回错误；不递归记录到 RuntimeLogger；磁盘错误不混入 append_entry 的内存写入语义。
+##   失败以中文错误返回，不报告为成功；删除最旧归档或收敛清理失败只 push_warning，
+##   不阻塞本次写入、不混入返回错误；收敛清理无可删除归档但仍超限时只 push_warning 并停止，
+##   不删除当前文件、不递归记录到 RuntimeLogger；磁盘错误不混入 append_entry 的内存写入语义。
 func append_entry_to_file(
 		entry: DiagnosticLogEntry,
 		directory_path: String = DEFAULT_LOG_DIRECTORY,
@@ -219,9 +228,9 @@ func append_entry_to_file(
 	var write_problems: PackedStringArray = _append_line_to_file(file_path, line)
 	if write_problems.size() > 0:
 		return write_problems
-	# 每次正常写入后清理 .8 及以后陈旧归档：与是否轮转无关；
+	# 每次正常写入后按数量与总容量上限执行收敛清理：与是否轮转无关；
 	# 失败只 push_warning，不阻塞本次写入、不混入返回错误、不递归记录到 RuntimeLogger。
-	_cleanup_stale_rotated_files(dir_normalized, name_clean)
+	_converge_managed_logs(dir_normalized, name_clean)
 	return PackedStringArray()
 
 
@@ -494,60 +503,162 @@ func _rotate_log_files(directory_path: String, file_name: String) -> PackedStrin
 	return PackedStringArray()
 
 
-## 解析目录项名称，判断是否为当前 file_name 的归档并返回其编号。
-## [br]item 为目录枚举得到的文件名。
-## [br]base_name 为当前文件名去除最终扩展名后的前缀。
-## [br]extension 为当前文件名的最终扩展名，无扩展名时为空串。
-## [br]返回 int：匹配“<base_name>.<编号>”或“<base_name>.<编号>.<extension>”时返回编号；否则返回 -1。
+## 判断一段文本是否完全由十进制数字组成。
+## [br]text 为待判定的字符串。
+## [br]返回 bool：非空且每个字符均为 0 到 9 时为 true，否则为 false。
 ## [br]本函数无副作用：不修改入参，不访问文件系统。
-## [br]边界条件：当前文件自身与无关前缀、无关扩展名文件均返回 -1；编号非整数返回 -1。
-func _parse_rotated_index(item: String, base_name: String, extension: String) -> int:
-	# 必须以“<base_name>.”开头，排除前缀不同的无关文件。
-	if not item.begins_with(base_name + "."):
-		return -1
-	var remainder: String = item.substr(base_name.length() + 1)
-	var index_text: String
-	if extension.is_empty():
-		# 无扩展名：remainder 即编号文本。
-		index_text = remainder
-	else:
-		# 有扩展名：remainder 应为“<编号>.<extension>”，截取编号部分。
-		var suffix: String = "." + extension
-		if not remainder.ends_with(suffix):
-			return -1
-		index_text = remainder.substr(0, remainder.length() - suffix.length())
-	# 编号必须为合法整数，否则视为无关文件。
-	if not index_text.is_valid_int():
-		return -1
-	return index_text.to_int()
+## [br]边界条件：空串返回 false；不使用 is_valid_int 以排除前导正负号、空白等非纯数字情形，
+##   严格满足“数字归档中间部分必须完全由十进制数字组成”的受管理集合边界。
+func _is_decimal_digits(text: String) -> bool:
+	# 空串不构成编号：直接拒绝，避免把“runtime.”这类末尾空编号误判为归档。
+	if text.is_empty():
+		return false
+	# 逐字符判定 0..9：单字符按码点比较，数字 0..9 在 ASCII 中连续，比较结果等价于“是否为数字”。
+	for ch: String in text:
+		if ch < "0" or ch > "9":
+			return false
+	return true
 
 
-## 清理超过保留范围的陈旧归档文件（编号大于等于 MAX_LOG_FILE_COUNT 的 .8、.9 等）。
-## [br]directory_path 为日志目录，调用方保证已去空白、已存在。
-## [br]file_name 为当前日志文件名，用于推导归档命名前缀与扩展名。
-## [br]返回 void：结果仅体现在删除陈旧归档；全部失败处理只 push_warning。
-## [br]副作用：枚举目录，删除匹配当前 file_name 命名规则且编号 >= MAX_LOG_FILE_COUNT 的归档；
-##   不删除当前文件、.1 到 .7 归档或任何无关文件。
-## [br]失败条件：无法打开目录（只 push_warning）；单个陈旧归档删除失败（只 push_warning）。
-## [br]边界条件：不递归记录到 RuntimeLogger，避免日志器记录自身导致循环；
-##   只匹配由 file_name 推导出的归档命名，不扫描或删除无关前缀、无关扩展名文件。
-func _cleanup_stale_rotated_files(directory_path: String, file_name: String) -> void:
-	var dir_access: DirAccess = DirAccess.open(directory_path)
-	if dir_access == null:
-		push_warning("RuntimeLogger：无法打开日志目录 %s 进行陈旧归档清理。" % directory_path)
-		return
+## 精确判断目录项是否属于当前 file_name 的受管理日志集合。
+## [br]item 为目录枚举得到的文件名。
+## [br]file_name 为当前日志文件名，调用方保证仅为文件名（无目录分隔符或 ..）。
+## [br]返回 bool：item 等于当前文件名，或为同一前缀推导出的纯数字归档时为 true，否则为 false。
+## [br]本函数无副作用：不修改入参，不访问文件系统，仅做文本匹配。
+## [br]边界条件：当前文件自身（runtime.log）视为受管理；纯数字归档形如 runtime.1.log、runtime.2.log……
+##   无扩展名时形如 runtime.1、runtime.2……；runtime.backup.log、runtime.old.log、
+##   runtime.1.backup.log、runtime-A.log 等不同前缀、后缀或扩展名文件一律返回 false；
+##   数字归档中间部分必须完全由十进制数字组成，前导正负号或空白均不视为受管理。
+func _is_managed_log_file(item: String, file_name: String) -> bool:
+	# 当前主文件自身属于受管理集合：数量与容量统计都需计入，但后续不作为可删除目标。
+	if item == file_name:
+		return true
+	# 以 file_name 去除最终扩展名后的前缀加“.”作为归档前缀，排除前缀不同的无关文件。
 	var extension: String = file_name.get_extension()
 	var base_name: String = file_name.get_basename()
+	if not item.begins_with(base_name + "."):
+		return false
+	# remainder 为去掉“<base_name>.”之后的部分，需进一步剥离可选扩展名得到编号文本。
+	var remainder: String = item.substr(base_name.length() + 1)
+	var digits: String
+	if extension.is_empty():
+		# 无扩展名：remainder 即编号文本，例如 runtime.1 中的“1”。
+		digits = remainder
+	else:
+		# 有扩展名：remainder 应为“<编号>.<extension>”，截取编号部分，要求扩展名严格匹配。
+		var suffix: String = "." + extension
+		if not remainder.ends_with(suffix):
+			return false
+		digits = remainder.substr(0, remainder.length() - suffix.length())
+	# 编号必须完全由十进制数字组成：排除 backup、1.backup、+1 等非纯数字中间部分。
+	return _is_decimal_digits(digits)
+
+
+## 收集目录中属于当前 file_name 受管理集合的文件名（仅文件名，不含目录前缀）。
+## [br]dir_access 为已打开的日志目录，调用方保证非 null。
+## [br]file_name 为当前日志文件名，用于推导受管理集合。
+## [br]返回 Array[String]：受管理文件名列表，含当前主文件与其纯数字归档；不含子目录与无关文件。
+## [br]副作用：枚举目录（list_dir_begin/list_dir_end），不删除或修改任何文件。
+## [br]边界条件：仅匹配当前 file_name 自身或其纯数字归档；runtime.backup.log、runtime.old.log、
+##   runtime.1.backup.log、runtime-A.log 等一律不纳入；枚举失败时返回已收集部分，不抛异常。
+func _collect_managed_log_files(dir_access: DirAccess, file_name: String) -> Array[String]:
+	var managed_names: Array[String] = []
 	dir_access.list_dir_begin()
 	var item: String = dir_access.get_next()
 	while item != "":
 		# 跳过子目录，只处理文件；list_dir_begin 默认不含 . 与 ..。
 		if not dir_access.current_is_dir():
-			var stale_index: int = _parse_rotated_index(item, base_name, extension)
-			# 编号 >= MAX_LOG_FILE_COUNT 的归档超出保留范围，删除；失败只 push_warning。
-			if stale_index >= MAX_LOG_FILE_COUNT:
-				var remove_error: int = dir_access.remove(item)
-				if remove_error != OK:
-					push_warning("RuntimeLogger：清理陈旧归档 %s 失败，错误码 %d，已跳过。" % [item, remove_error])
+			if _is_managed_log_file(item, file_name):
+				managed_names.append(item)
 		item = dir_access.get_next()
 	dir_access.list_dir_end()
+	return managed_names
+
+
+## 计算受管理文件的真实字节总容量。
+## [br]directory_path 为日志目录，用于拼接完整路径以读取文件大小。
+## [br]managed_names 为受管理文件名列表（仅文件名）。
+## [br]返回 int：所有受管理文件真实字节数之和；不存在或不可读的文件计 0。
+## [br]副作用：以只读方式打开各受管理文件读取长度，不修改文件内容。
+## [br]边界条件：使用真实文件字节数，不得用估算或缓存；文件不可读计 0，不抛异常、不 push_error。
+func _compute_managed_total_bytes(directory_path: String, managed_names: Array[String]) -> int:
+	var total: int = 0
+	# 逐个累加真实字节数：_get_file_size_bytes 对不存在或不可读文件返回 0，不影响其余统计。
+	for name: String in managed_names:
+		total += _get_file_size_bytes(directory_path + "/" + name)
+	return total
+
+
+## 在受管理文件中选择最旧的可删除归档。
+## [br]directory_path 为日志目录，用于拼接完整路径以读取修改时间。
+## [br]file_name 为当前主文件名，自身不作为可删除目标。
+## [br]managed_names 为本轮收集的受管理文件名列表。
+## [br]excluded_names 为本轮应排除的文件名（如已删除失败者），不参与选择。
+## [br]返回 String：最旧可删除归档的文件名；无可删除归档时返回空串。
+## [br]副作用：以 FileAccess.get_modified_time 读取各候选修改时间，不修改文件。
+## [br]边界条件：当前主文件不参与；修改时间相同时按文件名字典序稳定排序作为次级排序，
+##   保证同一目录多次运行结果一致；修改时间读取失败返回 0，视为最旧；excluded_names 中的文件跳过。
+func _select_oldest_deletable_archive(
+		directory_path: String,
+		file_name: String,
+		managed_names: Array[String],
+		excluded_names: Array[String]) -> String:
+	var best_name: String = ""
+	var best_mtime: int = 0
+	var has_best: bool = false
+	for name: String in managed_names:
+		# 当前主文件不可删除；已排除文件（删除失败者）跳过，避免反复尝试同一失败文件。
+		if name == file_name:
+			continue
+		if excluded_names.has(name):
+			continue
+		var mtime: int = FileAccess.get_modified_time(directory_path + "/" + name)
+		# 选择最旧：修改时间更小者优先；修改时间相同按文件名字典序稳定排序作为次级排序。
+		if not has_best or mtime < best_mtime or (mtime == best_mtime and name < best_name):
+			best_name = name
+			best_mtime = mtime
+			has_best = true
+	return best_name
+
+
+## 执行受管理日志的循环收敛清理，直到数量与总容量同时满足上限。
+## [br]directory_path 为日志目录，调用方保证已去空白、已存在、已通过边界校验。
+## [br]file_name 为当前日志文件名，用于推导受管理集合，并作为不可删除的主文件。
+## [br]返回 void：结果仅体现在删除最旧归档；全部失败处理只 push_warning。
+## [br]副作用：枚举目录，按修改时间从旧到新删除最旧可删除归档，每次删除后重新枚举与重新计算，
+##   直到受管理文件数量 <= MAX_LOG_FILE_COUNT 且总容量 <= MAX_LOG_DIRECTORY_SIZE_BYTES，
+##   或无可删除归档为止。
+## [br]失败条件：无法打开目录（只 push_warning）；单个归档删除失败（只 push_warning，排除该文件后继续）。
+## [br]边界条件：当前主文件不作为清理目标；不删除无关前缀、无关扩展名或非纯数字归档文件；
+##   修改时间相同时按文件名字典序稳定排序；每次删除后重新收集与重新计算；
+##   无可删除归档但仍超限时只 push_warning 并停止，不删除当前文件、不递归记录日志器自身、
+##   不让已成功的写入变为失败；删除失败文件计入 excluded 不再反复尝试，保证循环终止。
+func _converge_managed_logs(directory_path: String, file_name: String) -> void:
+	var dir_access: DirAccess = DirAccess.open(directory_path)
+	if dir_access == null:
+		# 目录打开失败：只 push_warning，不影响已成功写入，不删除任何未知文件。
+		push_warning("RuntimeLogger：无法打开日志目录 %s 进行受管理日志收敛清理。" % directory_path)
+		return
+	# 已删除失败的可删除归档集合：避免同一文件反复尝试形成死循环。
+	var failed_names: Array[String] = []
+	# 收敛循环：每次删除后重新枚举与重新计算，直到两个限制同时满足或无可删除归档。
+	while true:
+		var managed_names: Array[String] = _collect_managed_log_files(dir_access, file_name)
+		var total_bytes: int = _compute_managed_total_bytes(directory_path, managed_names)
+		# 数量与总容量均已满足：停止清理。
+		if managed_names.size() <= MAX_LOG_FILE_COUNT and total_bytes <= MAX_LOG_DIRECTORY_SIZE_BYTES:
+			break
+		# 选择最旧可删除归档：排除当前主文件与本轮已失败文件。
+		var oldest_name: String = _select_oldest_deletable_archive(directory_path, file_name, managed_names, failed_names)
+		# 无可删除归档但仍超限：只 push_warning 并停止，不删除当前文件，不让已成功写入变为失败。
+		if oldest_name.is_empty():
+			push_warning("RuntimeLogger：受管理日志数量 %d 或总容量 %d 字节仍超限，但无可删除归档，已停止收敛清理。" % [managed_names.size(), total_bytes])
+			break
+		var remove_error: int = dir_access.remove(oldest_name)
+		if remove_error != OK:
+			# 删除失败：只 push_warning，排除该文件后继续，不递归记录、不阻塞本次写入。
+			push_warning("RuntimeLogger：收敛清理删除归档 %s 失败，错误码 %d，已排除并继续。" % [oldest_name, remove_error])
+			failed_names.append(oldest_name)
+		# 删除成功：下一轮重新枚举与重新计算；删除失败：该文件已计入 failed_names，下一轮跳过。
+	# 释放目录句柄。
+	dir_access = null
