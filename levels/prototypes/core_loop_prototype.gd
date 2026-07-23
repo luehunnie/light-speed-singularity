@@ -81,7 +81,7 @@ enum DragSource {
 const _OccupancyRegistry: GDScript = preload("res://gameplay/placement/occupancy_registry.gd")
 const _SingleCellMirrorScript: GDScript = preload("res://gameplay/mechanisms/mirrors/single_cell_mirror.gd")
 # 批次 4B-B1 抽离的两项启动自检模块；用 preload 引用以避开 MCP run_project 不重建全局类型缓存的问题。
-# 本批只迁移检查逻辑，暂不接入 SelfCheckRunner，核心脚本仍以薄包装形式在 Debug 下调用 run()。
+# 批次 4B-B2 起，两项检查通过单项 SelfCheckRunner 执行；核心脚本不再直接调用 run()，但仍保留 Debug 硬断言边界。
 const _OccupancyRegistryCheck: GDScript = preload("res://gameplay/diagnostics/self_check/checks/occupancy_registry_check.gd")
 const _MirrorReflectionCheck: GDScript = preload("res://gameplay/diagnostics/self_check/checks/mirror_reflection_check.gd")
 const _SingleCellMirrorScene: PackedScene = preload("res://gameplay/mechanisms/mirrors/single_cell_mirror.tscn")
@@ -259,17 +259,62 @@ func _run_player_mechanism_id_snapshot_self_check() -> void:
 	assert(residual_registry.is_consistent(), "残留占用查询自检：清理临时单向残留后 registry 应恢复一致")
 
 
+## 启动期 Debug 兼容执行入口：通过单项 SelfCheckRunner 执行一条自检定义。
+## [br]职责：在迁移期把单项自检接入 SelfCheckRunner，保留原“注册失败/结构错误/未通过即硬断言”的 Debug 行为。
+## [br]输入：definition 为已构造的 SelfCheckCallable，不得为 null；execution_id 为本次运行的稳定 StringName。
+## [br]返回：无返回值。
+## [br]副作用：仅创建局部 SelfCheckRunner 并调用 register_check 与 run_all；不写文件、不写日志、不修改玩法状态、不访问场景树。
+## [br]失败方式：definition 为 null、注册失败、RunResult 为 null、validate() 非空、errors 非空或 is_success() 为 false 时立即 assert；断言信息汇总 execution_id、errors、validate 错误与每项 check_id/summary/details。
+## [br]保持启动顺序的边界：本函数只执行传入的单项定义，不合并多项，不改变 _ready 调用顺序。
+## [br]这是迁移期的 Debug 兼容执行入口，不参与业务状态修改。
+func _run_startup_self_check_via_runner(
+		definition: SelfCheckCallable,
+		execution_id: StringName
+) -> void:
+	# 拒绝 null 定义，避免后续访问空对象。
+	assert(definition != null, "启动自检：definition 为 null，必须传入 SelfCheckCallable。")
+	# 创建只注册单项定义的局部 Runner，保证每次 run_all 仅执行一项检查。
+	var runner: SelfCheckRunner = SelfCheckRunner.new()
+	var register_problems: PackedStringArray = runner.register_check(definition)
+	assert(register_problems.is_empty(),
+			"启动自检：注册失败 execution_id=%s | errors=%s" % [execution_id, register_problems])
+	# 执行本次运行并校验汇总结果非 null。
+	var result: SelfCheckRunResult = runner.run_all(execution_id)
+	assert(result != null, "启动自检：run_all 返回 null execution_id=%s。" % [execution_id])
+	# 结构校验：validate() 一次返回全部字段问题。
+	var structure_problems: PackedStringArray = result.validate()
+	# 汇总断言信息：execution_id、errors、validate 错误、每项 check_id/summary/details；
+	# 用 PackedStringArray 拼装，不使用 Dictionary、无类型 Array 或 Variant。
+	var assert_lines: PackedStringArray = PackedStringArray()
+	assert_lines.append("execution_id=%s" % [execution_id])
+	assert_lines.append("errors=%s" % [result.errors])
+	assert_lines.append("validate=%s" % [structure_problems])
+	for index: int in range(result.results.size()):
+		var item: SelfCheckResult = result.results[index]
+		if item == null:
+			assert_lines.append("results[%d]=null" % [index])
+		else:
+			assert_lines.append("results[%d] check_id=%s summary=%s details=%s" % [index, item.check_id, item.summary, item.details])
+	var assert_message: String = "\n".join(assert_lines)
+	# 结构错误、Runner 错误、未通过三项各自立即硬断言，不降级为 warning 或普通日志。
+	assert(structure_problems.is_empty(), "启动自检：结果结构无效：\n%s" % [assert_message])
+	assert(result.errors.is_empty(), "启动自检：Runner 结构错误：\n%s" % [assert_message])
+	assert(result.is_success(), "启动自检：未通过：\n%s" % [assert_message])
+
+
 ## 执行 OccupancyRegistry 启动期轻量自检。
 ## [br]本函数无参数、无返回值，仅由 _ready() 在调试构建中调用。
-## [br]检查逻辑已迁至独立模块 OccupancyRegistryCheck（gameplay/diagnostics/self_check/checks/occupancy_registry_check.gd），
-## 本函数仅保留 Debug 硬断言兼容边界：调用 OccupancyRegistryCheck.run()，校验返回的 SelfCheckResult 数据结构，
-## 并在结构无效或 result.passed == false 时通过 assert 立即失败。不参与业务状态修改，不接入 SelfCheckRunner。
-## [br]边界条件：保留原“自检失败即硬断言”的语义；本批不改变 Debug 启动行为。不得让检查失败后静默继续运行。
+## [br]检查逻辑已迁至独立模块 OccupancyRegistryCheck（gameplay/diagnostics/self_check/checks/occupancy_registry_check.gd）。
+## [br]批次 4B-B2 起本函数通过单项 SelfCheckRunner 执行该检查：构造 SelfCheckCallable 并交由 _run_startup_self_check_via_runner 注册、运行与校验，不再直接调用 OccupancyRegistryCheck.run()。
+## [br]失败语义：注册失败、Runner 结构错误或 SelfCheckResult.passed == false 时由 _run_startup_self_check_via_runner 立即 assert，保留原 Debug 硬断言边界，不降级为 warning。
+## [br]边界条件：保持原启动顺序，本函数仍位于 _ready 中第一项；不参与业务状态修改，不写文件，不写日志。
 func _run_occupancy_registry_self_check() -> void:
-	var result: SelfCheckResult = _OccupancyRegistryCheck.run()
-	var structure_problems: PackedStringArray = result.validate()
-	assert(structure_problems.is_empty(), "占用表自检：返回结果数据结构无效：%s" % [structure_problems])
-	assert(result.passed, "占用表自检失败：summary=%s | details=%s" % [result.summary, result.details])
+	var definition: SelfCheckCallable = SelfCheckCallable.new(
+			&"occupancy_registry",
+			"OccupancyRegistry 启动期轻量自检",
+			_OccupancyRegistryCheck.run
+	)
+	_run_startup_self_check_via_runner(definition, &"startup_occupancy_registry")
 
 
 ## 执行当前原型 64 像素逻辑格坐标换算自检。
@@ -294,15 +339,17 @@ func _run_grid_coordinate_self_check() -> void:
 
 ## 执行基础单格镜面八方向反射纯函数自检。
 ## [br]本函数无参数、无返回值，仅由 _ready() 在调试构建中调用。
-## [br]检查逻辑已迁至独立模块 MirrorReflectionCheck（gameplay/diagnostics/self_check/checks/mirror_reflection_check.gd），
-## 本函数仅保留 Debug 硬断言兼容边界：调用 MirrorReflectionCheck.run()，校验返回的 SelfCheckResult 数据结构，
-## 并在结构无效或 result.passed == false 时通过 assert 立即失败。不参与业务状态修改，不接入 SelfCheckRunner。
-## [br]边界条件：保留原“自检失败即硬断言”的语义；本批不改变 Debug 启动行为。不得让检查失败后静默继续运行。
+## [br]检查逻辑已迁至独立模块 MirrorReflectionCheck（gameplay/diagnostics/self_check/checks/mirror_reflection_check.gd）。
+## [br]批次 4B-B2 起本函数通过单项 SelfCheckRunner 执行该检查：构造 SelfCheckCallable 并交由 _run_startup_self_check_via_runner 注册、运行与校验，不再直接调用 MirrorReflectionCheck.run()。
+## [br]失败语义：注册失败、Runner 结构错误或 SelfCheckResult.passed == false 时由 _run_startup_self_check_via_runner 立即 assert，保留原 Debug 硬断言边界，不降级为 warning。
+## [br]边界条件：保持原启动顺序，本函数仍位于 _ready 中网格坐标自检之后，不得前移至网格检查之前；不参与业务状态修改，不写文件，不写日志。
 func _run_single_cell_mirror_reflection_self_check() -> void:
-	var result: SelfCheckResult = _MirrorReflectionCheck.run()
-	var structure_problems: PackedStringArray = result.validate()
-	assert(structure_problems.is_empty(), "单格镜面反射自检：返回结果数据结构无效：%s" % [structure_problems])
-	assert(result.passed, "单格镜面反射自检失败：summary=%s | details=%s" % [result.summary, result.details])
+	var definition: SelfCheckCallable = SelfCheckCallable.new(
+			&"single_cell_mirror_reflection",
+			"基础单格镜面八方向反射纯函数自检",
+			_MirrorReflectionCheck.run
+	)
+	_run_startup_self_check_via_runner(definition, &"startup_single_cell_mirror_reflection")
 
 
 ## 执行当前原型运行状态权限自检。
