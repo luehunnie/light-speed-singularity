@@ -148,18 +148,23 @@ func clear() -> void:
 ## 将一条诊断日志以稳定文本格式追加写入单个日志文件。
 ## [br]entry 为待写入的 DiagnosticLogEntry，允许为 null。
 ## [br]directory_path 为日志目录，默认 DEFAULT_LOG_DIRECTORY（user://diagnostics）。
+##   必须位于 user://diagnostics 或其合法子目录内；res://、原生绝对路径、user:// 其他目录、
+##   通过 .. 逃逸的路径一律拒绝，由 _normalize_log_directory 规范化后判定。
 ## [br]file_name 为日志文件名，默认 DEFAULT_LOG_FILE_NAME（runtime.log），必须只是文件名。
 ## [br]返回 PackedStringArray：成功时为空；失败时包含全部中文错误，不写入文件。
-## [br]副作用：校验通过时确保目录存在；按 UTF-8 字节计算记录大小，单条超 2 MiB 直接拒绝；
-##   当前文件加本条记录超过 2 MiB 时先按从旧到新轮转（删除最旧 .7、.6 到 .1 链式重命名、
-##   当前文件重命名为 .1、清理 .8 及以后陈旧归档），再写入新的当前文件；否则直接追加。
-##   轮转与清理只作用于由 directory_path 与 file_name 推导出的日志文件，不删除目录内其他文件。
+## [br]副作用：校验 entry 与目标路径文本后格式化日志行并按 UTF-8 字节计算大小；
+##   单条超 2 MiB 立即返回错误，此前不创建目录、不打开/删除/轮转任何文件；
+##   单条大小合法后才确保目录存在；当前文件加本条记录超过 2 MiB 时先按从旧到新轮转
+##   （删除最旧 .7、.6 到 .1 链式重命名、当前文件重命名为 .1），再写入新的当前文件；
+##   否则直接追加；每次正常写入后清理 .8 及以后陈旧归档。轮转与清理只作用于由
+##   directory_path 与 file_name 推导出的日志文件，不删除目录内其他文件。
 ## [br]失败条件：entry 为 null；entry.validate() 返回非空错误；directory_path 或 file_name
-##   去除首尾空白后为空；file_name 包含 /、\ 或 ..；目录创建失败；单条记录超 2 MiB；
-##   必要轮转（目录打开或重命名）失败；文件打开或最终写入失败。
+##   去除首尾空白后为空；directory_path 越出 user://diagnostics 边界；file_name 包含 /、\ 或 ..；
+##   单条记录超 2 MiB；目录创建失败；必要轮转（目录打开或重命名）失败；文件打开、写入或 flush 失败。
 ## [br]边界条件：不修改传入 entry；不写入内存缓冲 _entries；不调用 push_error，不抛异常；
-##   删除最旧归档或清理陈旧归档失败只 push_warning，不阻塞本次写入、不混入返回错误；
-##   不递归记录到 RuntimeLogger；磁盘错误不混入 append_entry 的内存写入语义。
+##   单条超限不触碰文件系统，目录不存在时也不会被创建；写入与 flush 后检测 FileAccess.get_error()，
+##   失败以中文错误返回，不报告为成功；删除最旧归档或清理陈旧归档失败只 push_warning，
+##   不阻塞本次写入、不混入返回错误；不递归记录到 RuntimeLogger；磁盘错误不混入 append_entry 的内存写入语义。
 func append_entry_to_file(
 		entry: DiagnosticLogEntry,
 		directory_path: String = DEFAULT_LOG_DIRECTORY,
@@ -172,43 +177,48 @@ func append_entry_to_file(
 	var entry_problems: PackedStringArray = entry.validate()
 	if entry_problems.size() > 0:
 		return entry_problems
-	# 校验目录与文件名：不合法时不创建目录、不打开文件。
+	# 校验目录非空与文件名文本：不合法时不创建目录、不打开文件。
 	var target_problems: PackedStringArray = _validate_file_target(directory_path, file_name)
 	if target_problems.size() > 0:
 		return target_problems
-	# 目录去空白后作为实际写入路径前缀，文件名同样去空白。
+	# 目录、文件名去空白后作为实际写入依据。
 	var dir_clean: String = directory_path.strip_edges()
 	var name_clean: String = file_name.strip_edges()
-	# 确保目录存在：失败时返回中文错误，不打开文件。
-	var dir_problems: PackedStringArray = _ensure_directory_exists(dir_clean)
-	if dir_problems.size() > 0:
-		return dir_problems
-	# 拼接最终文件路径：目录与文件名之间用 / 连接，user:// 路径统一使用正斜杠。
-	var file_path: String = dir_clean + "/" + name_clean
+	# 校验并规范化目录边界：拒绝 res://、原生绝对路径、user:// 其他目录、.. 逃逸；
+	# 规范化后只允许等于 user://diagnostics 或以其为前缀的子目录，后续一律使用规范化路径。
+	var dir_resolve: Dictionary = _normalize_log_directory(dir_clean)
+	if not bool(dir_resolve["valid"]):
+		return PackedStringArray([String(dir_resolve["error"])])
+	var dir_normalized: String = dir_resolve["path"]
 	# 格式化稳定文本记录：五列 Tab 分隔，字段已转义。
 	var line: String = _format_entry_line(entry)
 	# 按 UTF-8 字节计算记录加换行后的大小：不得用 String.length() 代替，中文等多字节字符字节数与字符数不等。
 	var line_size: int = _get_utf8_line_size_bytes(line)
-	# 单条记录自身超过 2 MiB：拒绝写入，不创建、修改或轮转任何文件。
+	# 单条记录自身超过 2 MiB：立即返回错误，早于一切文件系统操作；
+	# 此前不得创建目录、打开文件、删除文件或轮转；目录不存在时也不会被创建。
 	if line_size > MAX_LOG_FILE_SIZE_BYTES:
 		return PackedStringArray(["RuntimeLogger：单条日志记录 %d 字节超过单文件上限 %d 字节，拒绝写入。" % [line_size, MAX_LOG_FILE_SIZE_BYTES]])
+	# 单条大小合法后才允许确保目录存在：失败时返回中文错误，不打开文件。
+	var dir_problems: PackedStringArray = _ensure_directory_exists(dir_normalized)
+	if dir_problems.size() > 0:
+		return dir_problems
+	# 拼接最终文件路径：规范化目录与文件名之间用 / 连接，user:// 路径统一使用正斜杠。
+	var file_path: String = dir_normalized + "/" + name_clean
 	# 获取当前文件字节大小：不存在或无法读取视为 0，由后续判断决定是否轮转。
 	var current_size: int = _get_file_size_bytes(file_path)
 	# 当前文件加本条记录超过 2 MiB：先执行必要轮转，再写入新的当前文件。
-	var rotated: bool = false
 	if current_size + line_size > MAX_LOG_FILE_SIZE_BYTES:
-		var rotate_problems: PackedStringArray = _rotate_log_files(dir_clean, name_clean)
+		var rotate_problems: PackedStringArray = _rotate_log_files(dir_normalized, name_clean)
 		if rotate_problems.size() > 0:
 			# 必要轮转无法完成：禁止继续向已满当前文件追加，返回中文错误。
 			return rotate_problems
-		rotated = true
 	# 写入一条 UTF-8 文本记录并换行；轮转后当前文件不存在，由本函数以 WRITE 新建。
 	var write_problems: PackedStringArray = _append_line_to_file(file_path, line)
 	if write_problems.size() > 0:
 		return write_problems
-	# 轮转成功并写入后清理 .8 及以后陈旧归档：失败只 push_warning，不阻塞、不混入返回错误。
-	if rotated:
-		_cleanup_stale_rotated_files(dir_clean, name_clean)
+	# 每次正常写入后清理 .8 及以后陈旧归档：与是否轮转无关；
+	# 失败只 push_warning，不阻塞本次写入、不混入返回错误、不递归记录到 RuntimeLogger。
+	_cleanup_stale_rotated_files(dir_normalized, name_clean)
 	return PackedStringArray()
 
 
@@ -275,13 +285,14 @@ func _escape_field(value: String) -> String:
 	return escaped
 
 
-## 校验日志写入目标的目录与文件名合法性。
+## 校验日志写入目标的目录非空与文件名合法性。
 ## [br]directory_path 为日志目录，允许含首尾空白。
 ## [br]file_name 为日志文件名，允许含首尾空白。
 ## [br]返回 PackedStringArray：全部合法时为空；存在问题时包含全部中文错误。
 ## [br]本函数无副作用：不修改入参，不创建目录，不打开文件。
 ## [br]边界条件：directory_path 或 file_name 去除首尾空白后为空视为非法；
-##   file_name 必须只是文件名，不得包含 /、\ 或 ..，防止越出目录或路径穿越。
+##   file_name 必须只是文件名，不得包含 /、\ 或 ..，防止越出目录或路径穿越；
+##   directory_path 的 user://diagnostics 边界校验由 _normalize_log_directory 负责。
 func _validate_file_target(directory_path: String, file_name: String) -> PackedStringArray:
 	var problems: PackedStringArray = []
 	var dir_clean: String = directory_path.strip_edges()
@@ -296,6 +307,44 @@ func _validate_file_target(directory_path: String, file_name: String) -> PackedS
 	elif name_clean.contains("/") or name_clean.contains("\\") or name_clean.contains(".."):
 		problems.append("RuntimeLogger：file_name 必须只是文件名，不得包含 /、\\ 或 ..。")
 	return problems
+
+
+## 校验并规范化日志目录，确保其位于 user://diagnostics 或其合法子目录内。
+## [br]dir_clean 为已去除首尾空白的日志目录，调用方保证非空。
+## [br]返回 Dictionary：合法时 {"valid": true, "path": 规范化路径, "error": ""}；
+##   非法时 {"valid": false, "path": "", "error": 中文错误}。
+## [br]本函数无副作用：不修改入参，不访问文件系统，仅做文本规范化与边界判定。
+## [br]失败条件：不以 user:// 开头（涵盖 res://、原生绝对路径、相对路径）；
+##   通过 .. 逃逸到 user:// 根之上；规范化后既不等于 user://diagnostics 也不以其为前缀。
+## [br]边界条件：统一反斜杠为正斜杠后按段处理 . 与 ..；.. 不得逃逸到 user:// 根之上；
+##   只允许等于 user://diagnostics 或以 user://diagnostics/ 开头的子目录；不改变默认目录。
+func _normalize_log_directory(dir_clean: String) -> Dictionary:
+	# 非 user:// 一律拒绝：涵盖 res://、原生绝对路径（如 C:\、/home）与相对路径。
+	if not dir_clean.begins_with("user://"):
+		return {"valid": false, "path": "", "error": "RuntimeLogger：directory_path 必须位于 user:// 下，不得使用 res://、原生绝对路径或相对路径。"}
+	# 取 user:// 之后部分，统一反斜杠为正斜杠后按 / 切分；allow_empty=false 跳过空段，容忍多余斜杠。
+	var remainder: String = dir_clean.substr("user://".length()).replace("\\", "/")
+	var raw_segments: PackedStringArray = remainder.split("/", false)
+	var normalized_segments: PackedStringArray = []
+	for segment: String in raw_segments:
+		if segment == ".":
+			# 当前目录段：忽略，不改变规范化结果。
+			continue
+		elif segment == "..":
+			# 上一级段：栈空仍遇 .. 即视为逃逸到 user:// 根之上，拒绝。
+			if normalized_segments.is_empty():
+				return {"valid": false, "path": "", "error": "RuntimeLogger：directory_path 不得通过 .. 逃逸到 user://diagnostics 之外。"}
+			normalized_segments.remove_at(normalized_segments.size() - 1)
+		else:
+			normalized_segments.append(segment)
+	# 重建规范化路径：段为空时即 user:// 根，必将在后续边界判定中被拒绝。
+	var normalized: String = "user://"
+	if normalized_segments.size() > 0:
+		normalized += "/".join(normalized_segments)
+	# 边界判定：只允许等于 user://diagnostics 或以 user://diagnostics/ 开头。
+	if normalized != DEFAULT_LOG_DIRECTORY and not normalized.begins_with(DEFAULT_LOG_DIRECTORY + "/"):
+		return {"valid": false, "path": "", "error": "RuntimeLogger：directory_path 必须位于 user://diagnostics 或其子目录内，不得指向 user:// 其他目录。"}
+	return {"valid": true, "path": normalized, "error": ""}
 
 
 ## 确保日志目录存在，不存在则递归创建。
@@ -315,11 +364,12 @@ func _ensure_directory_exists(directory_path: String) -> PackedStringArray:
 ## 以追加或新建方式向当前日志文件写入一条 UTF-8 文本记录并换行。
 ## [br]file_path 为最终日志文件路径，调用方保证已通过目录与文件名校验。
 ## [br]line 为已格式化、已转义的五列文本记录，调用方保证非空。
-## [br]返回 PackedStringArray：成功时为空；文件打开失败时包含中文错误。
-## [br]副作用：已存在文件以 READ_WRITE 打开并定位到末尾追加；不存在文件以 WRITE 创建并写入。
-## [br]失败条件：文件打开失败。
-## [br]边界条件：不修改内存缓冲；不调用 push_error，不抛异常；不截断既有内容；
-##   store_string 默认以 UTF-8 编码，与 _get_utf8_line_size_bytes 的字节口径一致。
+## [br]返回 PackedStringArray：成功时为空；文件打开、写入或 flush 失败时包含中文错误。
+## [br]副作用：已存在文件以 READ_WRITE 打开并定位到末尾追加；不存在文件以 WRITE 创建并写入；
+##   写入后 flush 并检测 FileAccess.get_error()，失败时关闭文件并以中文错误返回。
+## [br]失败条件：文件打开失败；store_string 或 flush 后 get_error() 返回非 OK。
+## [br]边界条件：不修改内存缓冲；不修改传入 line；不调用 push_error，不抛异常；不截断既有内容；
+##   写入或 flush 失败不得报告为成功；store_string 默认以 UTF-8 编码，与 _get_utf8_line_size_bytes 的字节口径一致。
 func _append_line_to_file(file_path: String, line: String) -> PackedStringArray:
 	# 已存在文件用 READ_WRITE 打开（不截断）再 seek_end；新文件用 WRITE 创建。
 	# 不使用单一 READ_WRITE 处理新文件，避免“不存在时是否创建”的语义歧义造成写入失败。
@@ -334,8 +384,15 @@ func _append_line_to_file(file_path: String, line: String) -> PackedStringArray:
 		return PackedStringArray(["RuntimeLogger：无法打开日志文件 %s，错误码 %d。" % [file_path, open_error]])
 	# 已存在文件定位到末尾以追加，而非覆盖既有内容。
 	file.seek_end(0)
-	# 写入一条 UTF-8 文本记录并换行。
+	# 写入一条 UTF-8 文本记录并换行，随后 flush 落盘。
 	file.store_string(line + "\n")
+	file.flush()
+	# 检测真实写入错误：store_string 与 flush 均可能失败，get_error 返回非 OK 即视为写入失败。
+	var write_error: int = file.get_error()
+	if write_error != OK:
+		# 写入或 flush 失败：关闭文件，以中文错误返回，不得报告为成功。
+		file.close()
+		return PackedStringArray(["RuntimeLogger：写入日志文件 %s 失败，错误码 %d。" % [file_path, write_error]])
 	file.close()
 	return PackedStringArray()
 
@@ -387,11 +444,11 @@ func _build_rotated_file_name(file_name: String, index: int) -> String:
 
 
 ## 对当前日志文件执行从旧到新的轮转。
-## [br]directory_path 为日志目录，调用方保证已去空白、已存在。
+## [br]directory_path 为日志目录，调用方保证已去空白、已存在、已通过边界校验。
 ## [br]file_name 为当前日志文件名，调用方保证仅为文件名。
 ## [br]返回 PackedStringArray：必要步骤成功时为空；目录打开或必要重命名失败时包含中文错误。
 ## [br]副作用：删除最旧 .7（失败只 push_warning）；将 .6 重命名为 .7，依次到 .1 重命名为 .2；
-##   将当前文件重命名为 .1；释放目录句柄后调用 _cleanup_stale_rotated_files 清理 .8 及以后陈旧归档。
+##   将当前文件重命名为 .1；释放目录句柄。陈旧归档（.8 及以后）清理由调用方在正常写入后统一执行。
 ## [br]失败条件：无法打开日志目录；必要重命名（含当前文件重命名为 .1）失败。
 ## [br]边界条件：删除最旧 .7 失败不加入返回错误、不阻塞，只 push_warning；
 ##   源文件不存在时跳过对应重命名，不视为错误；轮转后由调用方写入新的当前文件；
@@ -425,10 +482,8 @@ func _rotate_log_files(directory_path: String, file_name: String) -> PackedStrin
 		var rename_error: int = dir_access.rename(file_name, first_name)
 		if rename_error != OK:
 			return PackedStringArray(["RuntimeLogger：轮转重命名当前文件 %s 为 %s 失败，错误码 %d。" % [file_name, first_name, rename_error]])
-	# 释放目录句柄后再清理陈旧归档，避免同一目录上同时持有两个 DirAccess。
+	# 释放目录句柄：陈旧归档清理由调用方在写入后统一执行，避免每次轮转重复清理。
 	dir_access = null
-	# 4. 清理 .8 及以后陈旧归档：非关键，失败只 push_warning，不加入返回错误、不阻塞。
-	_cleanup_stale_rotated_files(directory_path, file_name)
 	return PackedStringArray()
 
 
