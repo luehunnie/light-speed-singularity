@@ -10,9 +10,10 @@ extends RefCounted
 ## 以 RuntimeSnapshotWriteResult 返回最终文件路径与中文错误。
 ##
 ## 在当前系统中的位置：
-## gameplay/diagnostics 下运行期快照序列化与落盘层（序列化属批次 3B，单次安全落盘属批次 3C-A）。
-## 本批实现序列化边界与单次安全落盘；快照数量与容量清理、轮转、RuntimeLogger 接线、SelfCheckRunner、
-## DiagnosticsController 与核心循环接线均属后续批次。
+## gameplay/diagnostics 下运行期快照序列化与落盘层（序列化属批次 3B，单次安全落盘属批次 3C-A，
+## 数量与容量收敛清理属批次 3C-B）。
+## 本批在 3C-A 单次安全落盘基础上，于成功保存后按修改时间从旧到新收敛受管理快照的数量与总容量；
+## RuntimeLogger 接线、SelfCheckRunner、DiagnosticsController 与核心循环接线仍属后续批次。
 ##
 ## 主要依赖：
 ## 依赖 RuntimeSnapshotData（批次 3A 数据契约）、CrystalSnapshotState（批次 3A）、
@@ -22,7 +23,7 @@ extends RefCounted
 ## 写入 user://diagnostics/snapshots 目录树。
 ##
 ## 明确不负责：
-## 采集快照数据（由调用方构造 RuntimeSnapshotData）、写入文件、轮转、记录日志、
+## 采集快照数据（由调用方构造 RuntimeSnapshotData）、记录 RuntimeLogger 日志、轮转运行日志、
 ## 判断关卡完成、修复业务状态、聚合日志。这些属于后续批次或调用方的职责。
 ##
 ## 关键边界：
@@ -31,6 +32,8 @@ extends RefCounted
 ## - serialize() 不访问文件系统、不调用 Time、不调用 push_error、不抛异常、不写 RuntimeLogger、不读取场景树。
 ## - save() 仅写入 user://diagnostics/snapshots 目录树，不写 RuntimeLogger、不调用 Time、不 push_error、
 ##   不抛异常、不修改 snapshot 与玩法状态；落盘失败只以中文错误返回，不递归记录自身错误。
+## - save() 成功落盘后调用 _converge_snapshot_retention 收敛历史快照数量与容量；清理只 push_warning，
+##   不把已成功的 save() 改成失败，不删除刚保存的当前文件，不删除无关文件，不接入 RuntimeLogger。
 ## - StringName 转普通 String、Vector2i 转 {"x":int,"y":int}、Rect2i 拆为 position/size、
 ##   PackedStringArray 转普通字符串数组，确保输出树中不含 Godot 专有或 RefCounted 对象。
 ## - JSON 文本由 JSON.stringify 生成，不手工拼接，转义由序列化器负责。
@@ -56,6 +59,14 @@ const DEFAULT_SNAPSHOT_DIRECTORY: String = "user://diagnostics/snapshots"
 ## 单个快照文件最大字节数（1 MiB）。
 ## 以序列化后 JSON 文本的 UTF-8 字节数为准，超过即拒绝写入且不触碰文件系统。
 const MAX_SNAPSHOT_FILE_SIZE_BYTES: int = 1 * 1024 * 1024
+
+## 受管理快照最多保留的文件数量。
+## 同一目录下受管理快照超过此数量时，按修改时间从旧到新删除最旧文件，直到满足限制。
+const MAX_SNAPSHOT_FILE_COUNT: int = 10
+
+## 受管理快照目录总容量上限（10 MiB）。
+## 以受管理快照真实文件字节数累计为准，超过时按修改时间从旧到新删除最旧文件，直到满足限制。
+const MAX_SNAPSHOT_DIRECTORY_SIZE_BYTES: int = 10 * 1024 * 1024
 
 ## 快照文件名前缀，固定为 "snapshot_"。
 const SNAPSHOT_FILE_PREFIX: String = "snapshot_"
@@ -221,9 +232,12 @@ static func _packed_strings_to_json(p_values: PackedStringArray) -> Array[Varian
 ## [br]返回 RuntimeSnapshotWriteResult：成功时 file_path 为最终写入路径、errors 为空；
 ## [br]失败时 file_path 为空、errors 包含全部中文错误。
 ## [br]副作用：成功时在目标目录下创建新的 JSON 快照文件（不覆盖既有文件），
-## [br]并在目录不存在时递归创建目录；不修改 snapshot 及其子对象，不写 RuntimeLogger，不修改玩法状态。
+## [br]并在目录不存在时递归创建目录；成功落盘后按修改时间从旧到新收敛受管理快照的数量与总容量，
+## [br]清理失败只 push_warning，不改变本次已成功的返回结果；不修改 snapshot 及其子对象，不写 RuntimeLogger，不修改玩法状态。
 ## [br]失败条件：snapshot 为 null 或序列化失败；directory_path 非法或越界；
 ## [br]JSON 字节数超过 1 MiB；user:// 无法打开；目录创建失败；文件打开、写入或 flush 失败。
+## [br]清理时机：仅当 JSON 写入、flush、FileAccess 错误检查与文件关闭均成功后才执行收敛清理；
+## [br]序列化失败、路径校验失败、单条超过 1 MiB、目录创建失败、文件打开或写入失败时均不清理。
 ## [br]路径边界：只允许 user://diagnostics/snapshots 及其合法子目录；
 ## [br]拒绝 res://、原生绝对路径、相对路径、空路径、反斜杠逃逸、.. 逃逸与同级仿冒目录。
 ## [br]大小边界：以 json_text 的 UTF-8 字节数为准，超过 1 MiB 立即拒绝且在此之前不创建目录、不打开文件、不查询已有快照。
@@ -279,6 +293,8 @@ static func save(
             "RuntimeSnapshot：写入快照文件 %s 失败，错误码 %d。" % [full_path, write_error]
         ]))
     # 12-13. 成功返回最终文件路径；失败已在前置分支以中文错误返回。
+    # 14. 仅在快照已成功落盘后执行数量与容量收敛清理；清理结果不影响本次 save() 的成功状态。
+    _converge_snapshot_retention(safe_directory, full_path)
     return RuntimeSnapshotWriteResult.new(full_path, PackedStringArray())
 
 
@@ -370,3 +386,174 @@ static func _generate_snapshot_file_name(
         suffix += 1
     # 不可达：suffix 溢出才会落到此处，保留返回以满足返回类型检查。
     return base_name
+
+
+## 判断字符串是否完全由十进制数字组成。
+## [br]p_text 为待判定的字符串。
+## [br]返回 bool：非空且每个字符均为 0-9 时为 true，否则为 false。
+## [br]本函数无副作用：不访问文件系统。
+## [br]边界条件：空字符串返回 false；不接受符号、空白或非数字字符，因此可排除 "-1"、"+1" 等。
+static func _is_decimal_digits(p_text: String) -> bool:
+    if p_text.is_empty():
+        return false
+    for ch: String in p_text:
+        # 单字符与 "0"/"9" 按 ASCII 序比较，等价于判断是否为十进制数字。
+        if ch < "0" or ch > "9":
+            return false
+    return true
+
+
+## 判断一个文件名是否为本模块管理的快照文件。
+## [br]p_file_name 为目录枚举得到的纯文件名（不含目录路径）。
+## [br]返回 bool：仅当形如 snapshot_<timestamp>.json 或 snapshot_<timestamp>_<collision_index>.json，
+## [br]且 timestamp、collision_index 均完全由十进制数字组成、扩展名严格为 .json、前缀严格为 snapshot_ 时为 true。
+## [br]本函数无副作用：纯字符串判定，不访问文件系统。
+## [br]文件匹配边界：collision_index 只允许出现在 timestamp 后一个下划线段；
+## [br]拒绝 snapshot_test.json、snapshot_1_old.json、snapshot_1_2_backup.json、snapshot_1.txt、
+## [br]snapshot_1.JSON、snapshot-1.json、snapshot_1_2_3.json、snapshot_1.json.backup、runtime_1.json、notes.json 等。
+static func _is_managed_snapshot_file(p_file_name: String) -> bool:
+    # 扩展名必须严格为 .json（大小写敏感），排除 .JSON、.txt、.json.backup 等。
+    if not p_file_name.ends_with(SNAPSHOT_FILE_EXTENSION):
+        return false
+    var body: String = p_file_name.substr(0, p_file_name.length() - SNAPSHOT_FILE_EXTENSION.length())
+    # 前缀必须严格为 snapshot_，排除 snapshot-1.json、runtime_1.json、notes.json 等。
+    if not body.begins_with(SNAPSHOT_FILE_PREFIX):
+        return false
+    var remainder: String = body.substr(SNAPSHOT_FILE_PREFIX.length())
+    # allow_empty=true 以便识别多余下划线导致的空段（如 snapshot_1_.json、snapshot_1__2.json）。
+    var parts: PackedStringArray = remainder.split("_", true)
+    if parts.size() == 1:
+        # snapshot_<timestamp>.json
+        return _is_decimal_digits(parts[0])
+    if parts.size() == 2:
+        # snapshot_<timestamp>_<collision_index>.json
+        return _is_decimal_digits(parts[0]) and _is_decimal_digits(parts[1])
+    # 0 段（snapshot_.json）或 3 段及以上（snapshot_1_2_3.json）均不视为受管理快照。
+    return false
+
+
+## 收集指定目录下的全部受管理快照文件完整路径。
+## [br]p_directory 为已规范化的目标目录路径（user:// 协议）。
+## [br]p_out_paths 用于回填结果的数组，调用前会被清空；成功时包含全部受管理快照的完整路径。
+## [br]返回 bool：目录成功打开并枚举完成时为 true；DirAccess.open 失败时为 false（p_out_paths 为空）。
+## [br]副作用：通过 DirAccess 枚举目录条目，不创建、不写入、不删除文件。
+## [br]文件匹配边界：只回填通过 _is_managed_snapshot_file 判定的文件；目录、隐藏文件、无关文件均跳过。
+## [br]失败条件：DirAccess.open(p_directory) 返回 null。
+static func _collect_managed_snapshot_files(p_directory: String, p_out_paths: Array[String]) -> bool:
+    p_out_paths.clear()
+    var dir: DirAccess = DirAccess.open(p_directory)
+    if dir == null:
+        return false
+    # 默认排除 . / .. 导航条目与隐藏文件，只枚举普通条目。
+    dir.list_dir_begin()
+    var entry_name: String = dir.get_next()
+    while entry_name != "":
+        # current_is_dir 必须紧随 get_next 调用，反映当前条目是否为目录。
+        if not dir.current_is_dir():
+            if _is_managed_snapshot_file(entry_name):
+                p_out_paths.append(p_directory + "/" + entry_name)
+        entry_name = dir.get_next()
+    dir.list_dir_end()
+    return true
+
+
+## 累计受管理快照的真实文件字节数。
+## [br]p_paths 为受管理快照的完整路径列表。
+## [br]返回 int：所有可正常打开读取的文件长度之和；无法打开的文件按 0 字节计入（不抛错）。
+## [br]副作用：以只读方式逐个打开文件读取 get_length 后立即关闭，不修改文件内容。
+## [br]失败条件：单个文件打开失败时跳过该文件，不影响整体统计。
+## [br]容量限制：本函数只统计不判定，是否超限由调用方依据 MAX_SNAPSHOT_DIRECTORY_SIZE_BYTES 判断。
+static func _compute_managed_snapshot_total_bytes(p_paths: Array[String]) -> int:
+    var total: int = 0
+    for path: String in p_paths:
+        var file: FileAccess = FileAccess.open(path, FileAccess.READ)
+        if file != null:
+            total += file.get_length()
+            file.close()
+    return total
+
+
+## 在候选快照中选择修改时间最旧的一个，修改时间相同时按文件名字典序取最小者。
+## [br]p_candidates 为候选快照完整路径列表（已排除当前文件与失败文件），不应为空。
+## [br]返回 String：最旧候选的完整路径；候选为空或无法读取修改时间时返回空字符串。
+## [br]本函数无副作用：只读取修改时间，不删除文件。
+## [br]文件匹配边界：以 FileAccess.get_modified_time 返回的真实文件修改时间为准，
+## [br]不使用文件名中的 timestamp 判断新旧，也不依赖 collision_index。
+## [br]循环终止条件：单次遍历候选列表，O(n) 完成。
+static func _select_oldest_snapshot(p_candidates: Array[String]) -> String:
+    if p_candidates.is_empty():
+        return ""
+    var best_path: String = p_candidates[0]
+    var best_mtime: int = FileAccess.get_modified_time(best_path)
+    var best_name: String = best_path.get_file()
+    for index: int in range(1, p_candidates.size()):
+        var path: String = p_candidates[index]
+        var mtime: int = FileAccess.get_modified_time(path)
+        var name: String = path.get_file()
+        # 修改时间更旧者优先；相同时按文件名字典序稳定选择最小者作为删除目标。
+        if mtime < best_mtime:
+            best_path = path
+            best_mtime = mtime
+            best_name = name
+        elif mtime == best_mtime and name < best_name:
+            best_path = path
+            best_name = name
+    return best_path
+
+
+## 在一次成功保存后对受管理快照执行数量与容量收敛清理。
+## [br]p_directory 为已规范化的目标目录路径（与本次保存路径一致）。
+## [br]p_current_file_path 为刚刚成功保存的快照完整路径，整个清理过程中不得删除。
+## [br]返回 void：清理结果不影响 save() 的成功状态；任何失败只 push_warning，不抛异常、不改业务状态。
+## [br]副作用：当受管理快照数量超过 MAX_SNAPSHOT_FILE_COUNT 或总容量超过 MAX_SNAPSHOT_DIRECTORY_SIZE_BYTES 时，
+## [br]按修改时间从旧到新删除最旧的历史快照，每次删除后重新枚举并重新统计，直到同时满足两条限制。
+## [br]失败条件：目录枚举失败、删除失败或无可删除候选时分别 push_warning 后安全停止。
+## [br]文件匹配边界：只识别并删除 _is_managed_snapshot_file 判定的快照；无关文件、相似前缀文件、
+## [br]非数字 timestamp/collision_index 文件一律不删；当前文件永不作为删除目标。
+## [br]容量限制：数量上限 MAX_SNAPSHOT_FILE_COUNT（10），总容量上限 MAX_SNAPSHOT_DIRECTORY_SIZE_BYTES（10 MiB）。
+## [br]循环终止条件：无固定迭代上限；每轮重新枚举受管理快照、重新计算数量与总容量，两个限制同时满足即返回；
+## [br]无可删除候选即返回；单文件删除失败加入 failed_paths 后续排除。终止由三条进度事实保证：
+## [br]成功删除会减少受管理文件、删除失败会扩大 failed_paths、没有新删除目标时停止；
+## [br]因此历史受管理文件超过 256 个也不会提前结束。异常并发修改目录不属于本模块事务保证。
+static func _converge_snapshot_retention(p_directory: String, p_current_file_path: String) -> void:
+    var failed_paths: Array[String] = []
+    while true:
+        var collected: Array[String] = []
+        var enumerate_ok: bool = _collect_managed_snapshot_files(p_directory, collected)
+        if not enumerate_ok:
+            # 目录枚举失败：只警告，不把 save() 改成失败，不删除任何未知文件。
+            push_warning("RuntimeSnapshot：枚举快照目录 %s 失败，跳过本次收敛清理。" % p_directory)
+            return
+        var count: int = collected.size()
+        var total_bytes: int = _compute_managed_snapshot_total_bytes(collected)
+        # 数量与容量均满足时无需清理；当前文件计入统计。
+        if count <= MAX_SNAPSHOT_FILE_COUNT and total_bytes <= MAX_SNAPSHOT_DIRECTORY_SIZE_BYTES:
+            return
+        # 超限：构造删除候选，排除当前文件与本次已失败文件。
+        var candidates: Array[String] = []
+        for path: String in collected:
+            if path == p_current_file_path:
+                continue
+            if failed_paths.has(path):
+                continue
+            candidates.append(path)
+        if candidates.is_empty():
+            # 仅剩当前文件或全部候选均已失败仍无法满足限制：不删除当前文件，安全停止。
+            push_warning("RuntimeSnapshot：受管理快照仍超限但无除当前文件外的可删除候选，停止收敛清理，不删除刚保存的快照。")
+            return
+        var oldest: String = _select_oldest_snapshot(candidates)
+        if oldest == "":
+            push_warning("RuntimeSnapshot：无法确定最旧受管理快照，停止收敛清理。")
+            return
+        var dir: DirAccess = DirAccess.open(p_directory)
+        if dir == null:
+            push_warning("RuntimeSnapshot：打开目录 %s 用于删除失败，停止收敛清理。" % p_directory)
+            return
+        var remove_error: int = dir.remove(oldest.get_file())
+        if remove_error != OK:
+            # 删除失败只警告，把该文件加入失败集合后续排除，避免重试同一文件；
+            # failed_paths 单调扩大使候选最终耗尽，保证循环终止。
+            push_warning("RuntimeSnapshot：删除快照 %s 失败，错误码 %d，已跳过该文件。" % [oldest, remove_error])
+            failed_paths.append(oldest)
+            continue
+        # 删除成功：受管理文件减少，回到循环顶部重新枚举并重新统计数量与总容量。
