@@ -9,9 +9,9 @@ extends RefCounted
 ##
 ## 在当前系统中的位置：
 ## gameplay/diagnostics 下日志缓冲与单文件输出层（批次 2A 实现最小内存缓冲，
-## 批次 2B 增加单文件追加输出与稳定文本格式）。
-## 本批访问 user://diagnostics 目录进行追加写入，但不实现文件轮转、大小限制、
-## 文件数量清理，也不接入核心循环。
+## 批次 2B 增加单文件追加输出与稳定文本格式，批次 2C 增加单文件 2 MiB 大小限制、
+## 最多 8 个文件的轮转与陈旧归档清理）。
+## 本批访问 user://diagnostics 目录进行追加写入与轮转，但不接入核心循环。
 ##
 ## 主要依赖：
 ## DiagnosticLogEntry 的构造与 validate()、DiagnosticSeverity.to_label() 等级标签，
@@ -19,8 +19,7 @@ extends RefCounted
 ## 与文件系统 API（FileAccess、DirAccess）。不依赖场景树、节点、Time、JSON 或玩法对象。
 ##
 ## 明确不负责：
-## 日志轮转、2 MiB 大小判断、最多 8 个文件清理、等级过滤、控制台输出、UI 显示、
-## 快照、自检协调、核心循环接线。这些属于后续批次。
+## 等级过滤、控制台输出、UI 显示、快照、自检协调、核心循环接线。这些属于后续批次。
 ## 文件输出与内存缓冲相互隔离：append_entry_to_file 只写磁盘，不修改 _entries；
 ## append_entry 只写内存，不写磁盘。
 ##
@@ -30,7 +29,9 @@ extends RefCounted
 ##
 ## 关键边界：
 ## - 依据 Diagnostics 红线，本类只观察/记录/只读校验，不参与玩法决策。
-## - 文件输出只写入 user://diagnostics，不得写入仓库资源目录；本批不做大小判断与轮转。
+## - 文件输出只写入 user://diagnostics，不得写入仓库资源目录；单文件最大 2 MiB，
+##   最多 8 个文件（当前文件加 .1 到 .7 共 7 个归档），总量不超过 16 MiB，
+##   超限时按从旧到新轮转，删除最旧归档失败只 push_warning 不阻塞主流程。
 ## - 对外返回的全部 DiagnosticLogEntry 均为新建副本，外部修改不得影响内部缓冲。
 ## - 非法入参不 push_error、不抛异常，统一以中文错误 PackedStringArray 返回。
 
@@ -47,6 +48,17 @@ const DEFAULT_LOG_DIRECTORY: String = "user://diagnostics"
 ## 默认日志文件名，仅为文件名，不含任何目录分隔符或 ..。
 ## append_entry_to_file 校验 file_name 时会拒绝包含 /、\ 或 .. 的取值。
 const DEFAULT_LOG_FILE_NAME: String = "runtime.log"
+
+
+## 单个日志文件最大字节数：2 MiB。
+## 写入前按 UTF-8 字节计算记录大小；当前文件加本条记录超过该值时先轮转再写入。
+## 单条记录自身超过该值时直接拒绝写入，不创建、修改或轮转任何文件。
+const MAX_LOG_FILE_SIZE_BYTES: int = 2 * 1024 * 1024
+
+## 日志文件最大保留数量，含当前文件与归档。
+## 当前文件 runtime.log 加 .1 到 .7 共 7 个归档，总数最多 8 个；
+## 每个正常生成的文件不超过 2 MiB，目录总量因此不超过 16 MiB。
+const MAX_LOG_FILE_COUNT: int = 8
 
 
 ## 内存日志条目上限，运行期不变更。
@@ -138,11 +150,16 @@ func clear() -> void:
 ## [br]directory_path 为日志目录，默认 DEFAULT_LOG_DIRECTORY（user://diagnostics）。
 ## [br]file_name 为日志文件名，默认 DEFAULT_LOG_FILE_NAME（runtime.log），必须只是文件名。
 ## [br]返回 PackedStringArray：成功时为空；失败时包含全部中文错误，不写入文件。
-## [br]副作用：校验通过时确保目录存在，以追加模式向日志文件写入一条 UTF-8 文本记录并换行。
+## [br]副作用：校验通过时确保目录存在；按 UTF-8 字节计算记录大小，单条超 2 MiB 直接拒绝；
+##   当前文件加本条记录超过 2 MiB 时先按从旧到新轮转（删除最旧 .7、.6 到 .1 链式重命名、
+##   当前文件重命名为 .1、清理 .8 及以后陈旧归档），再写入新的当前文件；否则直接追加。
+##   轮转与清理只作用于由 directory_path 与 file_name 推导出的日志文件，不删除目录内其他文件。
 ## [br]失败条件：entry 为 null；entry.validate() 返回非空错误；directory_path 或 file_name
-##   去除首尾空白后为空；file_name 包含 /、\ 或 ..；目录创建失败；文件打开失败。
+##   去除首尾空白后为空；file_name 包含 /、\ 或 ..；目录创建失败；单条记录超 2 MiB；
+##   必要轮转（目录打开或重命名）失败；文件打开或最终写入失败。
 ## [br]边界条件：不修改传入 entry；不写入内存缓冲 _entries；不调用 push_error，不抛异常；
-##   不做 2 MiB 大小判断、不轮转、不清理旧文件；磁盘错误不混入 append_entry 的内存写入语义。
+##   删除最旧归档或清理陈旧归档失败只 push_warning，不阻塞本次写入、不混入返回错误；
+##   不递归记录到 RuntimeLogger；磁盘错误不混入 append_entry 的内存写入语义。
 func append_entry_to_file(
 		entry: DiagnosticLogEntry,
 		directory_path: String = DEFAULT_LOG_DIRECTORY,
@@ -170,22 +187,28 @@ func append_entry_to_file(
 	var file_path: String = dir_clean + "/" + name_clean
 	# 格式化稳定文本记录：五列 Tab 分隔，字段已转义。
 	var line: String = _format_entry_line(entry)
-	# 追加模式：已存在文件用 READ_WRITE 打开（不截断）再 seek_end；新文件用 WRITE 创建。
-	# 不使用单一 READ_WRITE，避免对该标志“不存在时是否创建”的语义歧义造成写入失败。
-	var file: FileAccess = null
-	if FileAccess.file_exists(file_path):
-		file = FileAccess.open(file_path, FileAccess.READ_WRITE)
-	else:
-		file = FileAccess.open(file_path, FileAccess.WRITE)
-	# 打开失败：返回中文错误与错误码，不调用 push_error，不抛异常。
-	if file == null:
-		var open_error: int = FileAccess.get_open_error()
-		return PackedStringArray(["RuntimeLogger：无法打开日志文件 %s，错误码 %d。" % [file_path, open_error]])
-	# 已存在文件定位到末尾以追加，而非覆盖既有内容。
-	file.seek_end(0)
-	# 写入一条 UTF-8 文本记录并换行；store_string 默认以 UTF-8 编码。
-	file.store_string(line + "\n")
-	file.close()
+	# 按 UTF-8 字节计算记录加换行后的大小：不得用 String.length() 代替，中文等多字节字符字节数与字符数不等。
+	var line_size: int = _get_utf8_line_size_bytes(line)
+	# 单条记录自身超过 2 MiB：拒绝写入，不创建、修改或轮转任何文件。
+	if line_size > MAX_LOG_FILE_SIZE_BYTES:
+		return PackedStringArray(["RuntimeLogger：单条日志记录 %d 字节超过单文件上限 %d 字节，拒绝写入。" % [line_size, MAX_LOG_FILE_SIZE_BYTES]])
+	# 获取当前文件字节大小：不存在或无法读取视为 0，由后续判断决定是否轮转。
+	var current_size: int = _get_file_size_bytes(file_path)
+	# 当前文件加本条记录超过 2 MiB：先执行必要轮转，再写入新的当前文件。
+	var rotated: bool = false
+	if current_size + line_size > MAX_LOG_FILE_SIZE_BYTES:
+		var rotate_problems: PackedStringArray = _rotate_log_files(dir_clean, name_clean)
+		if rotate_problems.size() > 0:
+			# 必要轮转无法完成：禁止继续向已满当前文件追加，返回中文错误。
+			return rotate_problems
+		rotated = true
+	# 写入一条 UTF-8 文本记录并换行；轮转后当前文件不存在，由本函数以 WRITE 新建。
+	var write_problems: PackedStringArray = _append_line_to_file(file_path, line)
+	if write_problems.size() > 0:
+		return write_problems
+	# 轮转成功并写入后清理 .8 及以后陈旧归档：失败只 push_warning，不阻塞、不混入返回错误。
+	if rotated:
+		_cleanup_stale_rotated_files(dir_clean, name_clean)
 	return PackedStringArray()
 
 
@@ -287,3 +310,182 @@ func _ensure_directory_exists(directory_path: String) -> PackedStringArray:
 	if make_error != OK and make_error != ERR_ALREADY_EXISTS:
 		return PackedStringArray(["RuntimeLogger：无法创建日志目录 %s，错误码 %d。" % [directory_path, make_error]])
 	return PackedStringArray()
+
+
+## 以追加或新建方式向当前日志文件写入一条 UTF-8 文本记录并换行。
+## [br]file_path 为最终日志文件路径，调用方保证已通过目录与文件名校验。
+## [br]line 为已格式化、已转义的五列文本记录，调用方保证非空。
+## [br]返回 PackedStringArray：成功时为空；文件打开失败时包含中文错误。
+## [br]副作用：已存在文件以 READ_WRITE 打开并定位到末尾追加；不存在文件以 WRITE 创建并写入。
+## [br]失败条件：文件打开失败。
+## [br]边界条件：不修改内存缓冲；不调用 push_error，不抛异常；不截断既有内容；
+##   store_string 默认以 UTF-8 编码，与 _get_utf8_line_size_bytes 的字节口径一致。
+func _append_line_to_file(file_path: String, line: String) -> PackedStringArray:
+	# 已存在文件用 READ_WRITE 打开（不截断）再 seek_end；新文件用 WRITE 创建。
+	# 不使用单一 READ_WRITE 处理新文件，避免“不存在时是否创建”的语义歧义造成写入失败。
+	var file: FileAccess = null
+	if FileAccess.file_exists(file_path):
+		file = FileAccess.open(file_path, FileAccess.READ_WRITE)
+	else:
+		file = FileAccess.open(file_path, FileAccess.WRITE)
+	# 打开失败：返回中文错误与错误码，不调用 push_error，不抛异常。
+	if file == null:
+		var open_error: int = FileAccess.get_open_error()
+		return PackedStringArray(["RuntimeLogger：无法打开日志文件 %s，错误码 %d。" % [file_path, open_error]])
+	# 已存在文件定位到末尾以追加，而非覆盖既有内容。
+	file.seek_end(0)
+	# 写入一条 UTF-8 文本记录并换行。
+	file.store_string(line + "\n")
+	file.close()
+	return PackedStringArray()
+
+
+## 计算一条日志记录写入文件后占用的 UTF-8 字节数（含末尾换行）。
+## [br]line 为已格式化的五列文本记录，不含末尾换行。
+## [br]返回 int：line 的 UTF-8 字节数加 1（换行符在 UTF-8 中占 1 字节）。
+## [br]本函数无副作用：不修改入参，不访问文件系统。
+## [br]边界条件：不得用 String.length() 代替 UTF-8 字节长度，中文等多字节字符的字符数与字节数不等；
+##   空串返回 1（仅换行符）。
+func _get_utf8_line_size_bytes(line: String) -> int:
+	# to_utf8_buffer 返回 UTF-8 编码字节，size() 为字节数；换行符在 UTF-8 中占 1 字节。
+	return line.to_utf8_buffer().size() + 1
+
+
+## 获取指定文件的字节大小。
+## [br]file_path 为最终日志文件路径。
+## [br]返回 int：文件存在且可读时返回字节大小；不存在或打开失败时返回 0。
+## [br]本函数无副作用：不修改文件内容，不调用 push_error，不抛异常。
+## [br]边界条件：文件不存在返回 0，调用方据此按空文件处理；打开失败（如被占用）返回 0，
+##   后续写入若同样失败会以中文错误返回，不会静默超限。
+func _get_file_size_bytes(file_path: String) -> int:
+	# 不存在视为 0 字节，调用方据此判断是否需要轮转。
+	if not FileAccess.file_exists(file_path):
+		return 0
+	var file: FileAccess = FileAccess.open(file_path, FileAccess.READ)
+	# 打开失败无法获取大小：返回 0，避免抛异常；后续写入若同样失败会以错误返回。
+	if file == null:
+		return 0
+	var length: int = file.get_length()
+	file.close()
+	return length
+
+
+## 根据当前文件名与归档编号构造归档文件名。
+## [br]file_name 为当前日志文件名，调用方保证仅为文件名（无目录分隔符或 ..）。
+## [br]index 为归档编号，1 表示最新归档，MAX_LOG_FILE_COUNT - 1（7）表示最旧归档。
+## [br]返回 String：在最终扩展名前插入“.<index>”；无扩展名时追加“.<index>”。
+## [br]本函数无副作用：不修改入参，不访问文件系统。
+## [br]边界条件：runtime.log -> runtime.1.log；example.txt -> example.1.txt；
+##   runtime（无扩展名）-> runtime.1；多段扩展名取最后一段为扩展名。
+func _build_rotated_file_name(file_name: String, index: int) -> String:
+	var extension: String = file_name.get_extension()
+	# 无扩展名：直接在文件名后追加“.<index>”。
+	if extension.is_empty():
+		return file_name + "." + str(index)
+	# 有扩展名：在最终扩展名前插入“.<index>”，保持原扩展名不变。
+	return file_name.get_basename() + "." + str(index) + "." + extension
+
+
+## 对当前日志文件执行从旧到新的轮转。
+## [br]directory_path 为日志目录，调用方保证已去空白、已存在。
+## [br]file_name 为当前日志文件名，调用方保证仅为文件名。
+## [br]返回 PackedStringArray：必要步骤成功时为空；目录打开或必要重命名失败时包含中文错误。
+## [br]副作用：删除最旧 .7（失败只 push_warning）；将 .6 重命名为 .7，依次到 .1 重命名为 .2；
+##   将当前文件重命名为 .1；释放目录句柄后调用 _cleanup_stale_rotated_files 清理 .8 及以后陈旧归档。
+## [br]失败条件：无法打开日志目录；必要重命名（含当前文件重命名为 .1）失败。
+## [br]边界条件：删除最旧 .7 失败不加入返回错误、不阻塞，只 push_warning；
+##   源文件不存在时跳过对应重命名，不视为错误；轮转后由调用方写入新的当前文件；
+##   只操作由 directory_path 与 file_name 推导出的文件，不删除无关文件。
+func _rotate_log_files(directory_path: String, file_name: String) -> PackedStringArray:
+	var dir_access: DirAccess = DirAccess.open(directory_path)
+	if dir_access == null:
+		var open_error: int = DirAccess.get_open_error()
+		return PackedStringArray(["RuntimeLogger：无法打开日志目录 %s 进行轮转，错误码 %d。" % [directory_path, open_error]])
+	# 1. 删除最旧 .7：非关键，失败只 push_warning，不加入返回错误、不阻塞本次写入。
+	var oldest_name: String = _build_rotated_file_name(file_name, MAX_LOG_FILE_COUNT - 1)
+	if dir_access.file_exists(oldest_name):
+		var remove_error: int = dir_access.remove(oldest_name)
+		if remove_error != OK:
+			push_warning("RuntimeLogger：删除最旧归档 %s 失败，错误码 %d，已跳过。" % [oldest_name, remove_error])
+	# 2. 从 .6 到 .1 依次重命名为下一编号：必要步骤，失败返回错误并阻止本次写入。
+	#    从高编号向低编号处理，保证每个目标槽位在写入前已被上一级重命名腾空。
+	var index: int = MAX_LOG_FILE_COUNT - 2
+	while index >= 1:
+		var src_name: String = _build_rotated_file_name(file_name, index)
+		var dst_name: String = _build_rotated_file_name(file_name, index + 1)
+		# 源归档不存在表示该编号暂无归档，跳过，不视为错误。
+		if dir_access.file_exists(src_name):
+			var rename_error: int = dir_access.rename(src_name, dst_name)
+			if rename_error != OK:
+				return PackedStringArray(["RuntimeLogger：轮转重命名 %s 为 %s 失败，错误码 %d。" % [src_name, dst_name, rename_error]])
+		index -= 1
+	# 3. 当前文件重命名为 .1：必要步骤，失败返回错误并阻止本次写入。
+	if dir_access.file_exists(file_name):
+		var first_name: String = _build_rotated_file_name(file_name, 1)
+		var rename_error: int = dir_access.rename(file_name, first_name)
+		if rename_error != OK:
+			return PackedStringArray(["RuntimeLogger：轮转重命名当前文件 %s 为 %s 失败，错误码 %d。" % [file_name, first_name, rename_error]])
+	# 释放目录句柄后再清理陈旧归档，避免同一目录上同时持有两个 DirAccess。
+	dir_access = null
+	# 4. 清理 .8 及以后陈旧归档：非关键，失败只 push_warning，不加入返回错误、不阻塞。
+	_cleanup_stale_rotated_files(directory_path, file_name)
+	return PackedStringArray()
+
+
+## 解析目录项名称，判断是否为当前 file_name 的归档并返回其编号。
+## [br]item 为目录枚举得到的文件名。
+## [br]base_name 为当前文件名去除最终扩展名后的前缀。
+## [br]extension 为当前文件名的最终扩展名，无扩展名时为空串。
+## [br]返回 int：匹配“<base_name>.<编号>”或“<base_name>.<编号>.<extension>”时返回编号；否则返回 -1。
+## [br]本函数无副作用：不修改入参，不访问文件系统。
+## [br]边界条件：当前文件自身与无关前缀、无关扩展名文件均返回 -1；编号非整数返回 -1。
+func _parse_rotated_index(item: String, base_name: String, extension: String) -> int:
+	# 必须以“<base_name>.”开头，排除前缀不同的无关文件。
+	if not item.begins_with(base_name + "."):
+		return -1
+	var remainder: String = item.substr(base_name.length() + 1)
+	var index_text: String
+	if extension.is_empty():
+		# 无扩展名：remainder 即编号文本。
+		index_text = remainder
+	else:
+		# 有扩展名：remainder 应为“<编号>.<extension>”，截取编号部分。
+		var suffix: String = "." + extension
+		if not remainder.ends_with(suffix):
+			return -1
+		index_text = remainder.substr(0, remainder.length() - suffix.length())
+	# 编号必须为合法整数，否则视为无关文件。
+	if not index_text.is_valid_int():
+		return -1
+	return index_text.to_int()
+
+
+## 清理超过保留范围的陈旧归档文件（编号大于等于 MAX_LOG_FILE_COUNT 的 .8、.9 等）。
+## [br]directory_path 为日志目录，调用方保证已去空白、已存在。
+## [br]file_name 为当前日志文件名，用于推导归档命名前缀与扩展名。
+## [br]返回 void：结果仅体现在删除陈旧归档；全部失败处理只 push_warning。
+## [br]副作用：枚举目录，删除匹配当前 file_name 命名规则且编号 >= MAX_LOG_FILE_COUNT 的归档；
+##   不删除当前文件、.1 到 .7 归档或任何无关文件。
+## [br]失败条件：无法打开目录（只 push_warning）；单个陈旧归档删除失败（只 push_warning）。
+## [br]边界条件：不递归记录到 RuntimeLogger，避免日志器记录自身导致循环；
+##   只匹配由 file_name 推导出的归档命名，不扫描或删除无关前缀、无关扩展名文件。
+func _cleanup_stale_rotated_files(directory_path: String, file_name: String) -> void:
+	var dir_access: DirAccess = DirAccess.open(directory_path)
+	if dir_access == null:
+		push_warning("RuntimeLogger：无法打开日志目录 %s 进行陈旧归档清理。" % directory_path)
+		return
+	var extension: String = file_name.get_extension()
+	var base_name: String = file_name.get_basename()
+	dir_access.list_dir_begin()
+	var item: String = dir_access.get_next()
+	while item != "":
+		# 跳过子目录，只处理文件；list_dir_begin 默认不含 . 与 ..。
+		if not dir_access.current_is_dir():
+			var stale_index: int = _parse_rotated_index(item, base_name, extension)
+			# 编号 >= MAX_LOG_FILE_COUNT 的归档超出保留范围，删除；失败只 push_warning。
+			if stale_index >= MAX_LOG_FILE_COUNT:
+				var remove_error: int = dir_access.remove(item)
+				if remove_error != OK:
+					push_warning("RuntimeLogger：清理陈旧归档 %s 失败，错误码 %d，已跳过。" % [item, remove_error])
+		item = dir_access.get_next()
+	dir_access.list_dir_end()
