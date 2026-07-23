@@ -11,7 +11,7 @@ extends RefCounted
 ## gameplay/diagnostics 下日志缓冲与单文件输出层（批次 2A 实现最小内存缓冲，
 ## 批次 2B 增加单文件追加输出与稳定文本格式，批次 2C 增加单文件 2 MiB 大小限制、
 ## 最多 8 个文件的轮转与陈旧归档清理）。
-## 本批访问 user://diagnostics 目录进行追加写入与轮转，但不接入核心循环。
+## 本批访问 user://diagnostics/logs 目录进行追加写入与轮转，但不接入核心循环。
 ##
 ## 主要依赖：
 ## DiagnosticLogEntry 的构造与 validate()、DiagnosticSeverity.to_label() 等级标签，
@@ -29,7 +29,8 @@ extends RefCounted
 ##
 ## 关键边界：
 ## - 依据 Diagnostics 红线，本类只观察/记录/只读校验，不参与玩法决策。
-## - 文件输出只写入 user://diagnostics，不得写入仓库资源目录；单文件最大 2 MiB，
+## - 文件输出只写入 user://diagnostics/logs，不得写入仓库资源目录、user://diagnostics 根目录
+##   或 user://diagnostics/snapshots；单文件最大 2 MiB，
 ##   最多 8 个文件（当前文件加 .1 到 .7 共 7 个归档），总量不超过 16 MiB，
 ##   超限时按从旧到新轮转，删除最旧归档失败只 push_warning 不阻塞主流程。
 ## - 对外返回的全部 DiagnosticLogEntry 均为新建副本，外部修改不得影响内部缓冲。
@@ -41,9 +42,10 @@ extends RefCounted
 const DEFAULT_MAX_IN_MEMORY_ENTRIES: int = 256
 
 
-## 默认日志输出目录，位于用户数据目录下的 diagnostics 子目录。
-## 文件输出只允许写入 user:// 下路径，禁止写入仓库资源目录。
-const DEFAULT_LOG_DIRECTORY: String = "user://diagnostics"
+## 默认日志输出目录，位于用户数据目录下的 diagnostics/logs 子目录。
+## 文件输出只允许写入 user://diagnostics/logs 或其合法子目录；
+## 禁止写入仓库资源目录、user://diagnostics 根目录或 user://diagnostics/snapshots。
+const DEFAULT_LOG_DIRECTORY: String = "user://diagnostics/logs"
 
 ## 默认日志文件名，仅为文件名，不含任何目录分隔符或 ..。
 ## append_entry_to_file 校验 file_name 时会拒绝包含 /、\ 或 .. 的取值。
@@ -147,9 +149,10 @@ func clear() -> void:
 
 ## 将一条诊断日志以稳定文本格式追加写入单个日志文件。
 ## [br]entry 为待写入的 DiagnosticLogEntry，允许为 null。
-## [br]directory_path 为日志目录，默认 DEFAULT_LOG_DIRECTORY（user://diagnostics）。
-##   必须位于 user://diagnostics 或其合法子目录内；res://、原生绝对路径、user:// 其他目录、
-##   通过 .. 逃逸的路径一律拒绝，由 _normalize_log_directory 规范化后判定。
+## [br]directory_path 为日志目录，默认 DEFAULT_LOG_DIRECTORY（user://diagnostics/logs）。
+##   必须等于 user://diagnostics/logs 或以其为前缀的合法子目录；res://、原生绝对路径、
+##   user://diagnostics 根目录、user://diagnostics/snapshots、user:// 其他目录、通过 .. 逃逸的路径一律拒绝，
+##   由 _normalize_log_directory 规范化后判定。
 ## [br]file_name 为日志文件名，默认 DEFAULT_LOG_FILE_NAME（runtime.log），必须只是文件名。
 ## [br]返回 PackedStringArray：成功时为空；失败时包含全部中文错误，不写入文件。
 ## [br]副作用：校验 entry 与目标路径文本后格式化日志行并按 UTF-8 字节计算大小；
@@ -159,7 +162,7 @@ func clear() -> void:
 ##   否则直接追加；每次正常写入后清理 .8 及以后陈旧归档。轮转与清理只作用于由
 ##   directory_path 与 file_name 推导出的日志文件，不删除目录内其他文件。
 ## [br]失败条件：entry 为 null；entry.validate() 返回非空错误；directory_path 或 file_name
-##   去除首尾空白后为空；directory_path 越出 user://diagnostics 边界；file_name 包含 /、\ 或 ..；
+##   去除首尾空白后为空；directory_path 越出 user://diagnostics/logs 边界；file_name 包含 /、\ 或 ..；
 ##   单条记录超 2 MiB；目录创建失败；必要轮转（目录打开或重命名）失败；文件打开、写入或 flush 失败。
 ## [br]边界条件：不修改传入 entry；不写入内存缓冲 _entries；不调用 push_error，不抛异常；
 ##   单条超限不触碰文件系统，目录不存在时也不会被创建；写入与 flush 后检测 FileAccess.get_error()，
@@ -184,8 +187,8 @@ func append_entry_to_file(
 	# 目录、文件名去空白后作为实际写入依据。
 	var dir_clean: String = directory_path.strip_edges()
 	var name_clean: String = file_name.strip_edges()
-	# 校验并规范化目录边界：拒绝 res://、原生绝对路径、user:// 其他目录、.. 逃逸；
-	# 规范化后只允许等于 user://diagnostics 或以其为前缀的子目录，后续一律使用规范化路径。
+	# 校验并规范化目录边界：拒绝 res://、原生绝对路径、user://diagnostics 根目录、snapshots 目录、user:// 其他目录、.. 逃逸；
+	# 规范化后只允许等于 user://diagnostics/logs 或以 user://diagnostics/logs/ 开头的子目录，后续一律使用规范化路径。
 	var dir_resolve: Dictionary = _normalize_log_directory(dir_clean)
 	if not bool(dir_resolve["valid"]):
 		return PackedStringArray([String(dir_resolve["error"])])
@@ -292,7 +295,7 @@ func _escape_field(value: String) -> String:
 ## [br]本函数无副作用：不修改入参，不创建目录，不打开文件。
 ## [br]边界条件：directory_path 或 file_name 去除首尾空白后为空视为非法；
 ##   file_name 必须只是文件名，不得包含 /、\ 或 ..，防止越出目录或路径穿越；
-##   directory_path 的 user://diagnostics 边界校验由 _normalize_log_directory 负责。
+##   directory_path 的 user://diagnostics/logs 边界校验由 _normalize_log_directory 负责。
 func _validate_file_target(directory_path: String, file_name: String) -> PackedStringArray:
 	var problems: PackedStringArray = []
 	var dir_clean: String = directory_path.strip_edges()
@@ -309,15 +312,18 @@ func _validate_file_target(directory_path: String, file_name: String) -> PackedS
 	return problems
 
 
-## 校验并规范化日志目录，确保其位于 user://diagnostics 或其合法子目录内。
+## 校验并规范化日志目录，确保其等于 user://diagnostics/logs 或位于其合法子目录内。
 ## [br]dir_clean 为已去除首尾空白的日志目录，调用方保证非空。
 ## [br]返回 Dictionary：合法时 {"valid": true, "path": 规范化路径, "error": ""}；
 ##   非法时 {"valid": false, "path": "", "error": 中文错误}。
 ## [br]本函数无副作用：不修改入参，不访问文件系统，仅做文本规范化与边界判定。
-## [br]失败条件：不以 user:// 开头（涵盖 res://、原生绝对路径、相对路径）；
-##   通过 .. 逃逸到 user:// 根之上；规范化后既不等于 user://diagnostics 也不以其为前缀。
-## [br]边界条件：统一反斜杠为正斜杠后按段处理 . 与 ..；.. 不得逃逸到 user:// 根之上；
-##   只允许等于 user://diagnostics 或以 user://diagnostics/ 开头的子目录；不改变默认目录。
+## [br]失败条件：不以 user:// 开头（涵盖 res://、原生绝对路径、相对路径）；通过 .. 逃逸到 user:// 根之上；
+##   规范化后既不等于 user://diagnostics/logs 也不以 user://diagnostics/logs/ 开头
+##   （涵盖 user://diagnostics 根目录、user://diagnostics/snapshots、logs_evil、logs2 等）。
+## [br]边界条件：先 strip_edges 由调用方完成；统一反斜杠为正斜杠后按段处理 . 与 ..；
+##   .. 不得逃逸到 user:// 根之上；前缀判断含明确的 / 边界（DEFAULT_LOG_DIRECTORY + "/"），
+##   不得仅用 starts_with("user://diagnostics/logs")，避免匹配 logs_evil、logs2 等同级伪前缀；
+##   不改变默认目录。
 func _normalize_log_directory(dir_clean: String) -> Dictionary:
 	# 非 user:// 一律拒绝：涵盖 res://、原生绝对路径（如 C:\、/home）与相对路径。
 	if not dir_clean.begins_with("user://"):
@@ -333,7 +339,7 @@ func _normalize_log_directory(dir_clean: String) -> Dictionary:
 		elif segment == "..":
 			# 上一级段：栈空仍遇 .. 即视为逃逸到 user:// 根之上，拒绝。
 			if normalized_segments.is_empty():
-				return {"valid": false, "path": "", "error": "RuntimeLogger：directory_path 不得通过 .. 逃逸到 user://diagnostics 之外。"}
+				return {"valid": false, "path": "", "error": "RuntimeLogger：directory_path 不得通过 .. 逃逸到 user://diagnostics/logs 之外。"}
 			normalized_segments.remove_at(normalized_segments.size() - 1)
 		else:
 			normalized_segments.append(segment)
@@ -341,9 +347,10 @@ func _normalize_log_directory(dir_clean: String) -> Dictionary:
 	var normalized: String = "user://"
 	if normalized_segments.size() > 0:
 		normalized += "/".join(normalized_segments)
-	# 边界判定：只允许等于 user://diagnostics 或以 user://diagnostics/ 开头。
+	# 边界判定：只允许等于 user://diagnostics/logs 或以 user://diagnostics/logs/ 开头；
+	# 前缀判断含明确的 / 边界（DEFAULT_LOG_DIRECTORY + "/"），避免匹配 logs_evil、logs2 等同级伪前缀。
 	if normalized != DEFAULT_LOG_DIRECTORY and not normalized.begins_with(DEFAULT_LOG_DIRECTORY + "/"):
-		return {"valid": false, "path": "", "error": "RuntimeLogger：directory_path 必须位于 user://diagnostics 或其子目录内，不得指向 user:// 其他目录。"}
+		return {"valid": false, "path": "", "error": "RuntimeLogger：directory_path 必须位于 user://diagnostics/logs 或其子目录内，不得指向 user://diagnostics 根目录、snapshots 或 user:// 其他目录。"}
 	return {"valid": true, "path": normalized, "error": ""}
 
 
