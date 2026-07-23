@@ -5,18 +5,21 @@ extends RefCounted
 ##
 ## 职责：
 ## 将一份 RuntimeSnapshotData 只读事实摘要转换为结构稳定的 JSON 文本，
-## 并以 RuntimeSnapshotJsonResult 返回文本与中文错误；不写文件、不记录日志、不接入核心循环。
+## 并以 RuntimeSnapshotJsonResult 返回文本与中文错误（不写文件、不记录日志、不接入核心循环）；
+## 并提供 save() 将序列化结果安全落盘到 user://diagnostics/snapshots 目录树，
+## 以 RuntimeSnapshotWriteResult 返回最终文件路径与中文错误。
 ##
 ## 在当前系统中的位置：
-## gameplay/diagnostics 下运行期快照序列化层（批次 3B 实现）。
-## 本批只实现序列化边界；快照落盘、轮转、RuntimeLogger 接线、SelfCheckRunner、
+## gameplay/diagnostics 下运行期快照序列化与落盘层（序列化属批次 3B，单次安全落盘属批次 3C-A）。
+## 本批实现序列化边界与单次安全落盘；快照数量与容量清理、轮转、RuntimeLogger 接线、SelfCheckRunner、
 ## DiagnosticsController 与核心循环接线均属后续批次。
 ##
 ## 主要依赖：
 ## 依赖 RuntimeSnapshotData（批次 3A 数据契约）、CrystalSnapshotState（批次 3A）、
-## SelfCheckResult（批次 1B）、RuntimeSnapshotJsonResult（本批次结果契约），
-## 以及 Godot 内建 JSON 序列化接口。
-## 不依赖场景树、节点、文件系统、Time、RuntimeLogger 或玩法对象。
+## SelfCheckResult（批次 1B）、RuntimeSnapshotJsonResult（批次 3B 序列化结果契约）、
+## RuntimeSnapshotWriteResult（本批次落盘结果契约），以及 Godot 内建 JSON 序列化与 FileAccess/DirAccess 接口。
+## 不依赖场景树、节点、Time、RuntimeLogger 或玩法对象；save() 仅通过 Godot 内建 FileAccess/DirAccess
+## 写入 user://diagnostics/snapshots 目录树。
 ##
 ## 明确不负责：
 ## 采集快照数据（由调用方构造 RuntimeSnapshotData）、写入文件、轮转、记录日志、
@@ -25,7 +28,9 @@ extends RefCounted
 ## 关键边界：
 ## - 序列化前必须调用 snapshot.validate()，校验失败时返回全部错误且不产出 JSON 文本。
 ## - 不修改 snapshot 及其子对象：只读取字段，不调用任何会变更状态的方法。
-## - 不访问文件系统、不调用 Time、不调用 push_error、不抛异常、不写 RuntimeLogger、不读取场景树。
+## - serialize() 不访问文件系统、不调用 Time、不调用 push_error、不抛异常、不写 RuntimeLogger、不读取场景树。
+## - save() 仅写入 user://diagnostics/snapshots 目录树，不写 RuntimeLogger、不调用 Time、不 push_error、
+##   不抛异常、不修改 snapshot 与玩法状态；落盘失败只以中文错误返回，不递归记录自身错误。
 ## - StringName 转普通 String、Vector2i 转 {"x":int,"y":int}、Rect2i 拆为 position/size、
 ##   PackedStringArray 转普通字符串数组，确保输出树中不含 Godot 专有或 RefCounted 对象。
 ## - JSON 文本由 JSON.stringify 生成，不手工拼接，转义由序列化器负责。
@@ -42,6 +47,21 @@ extends RefCounted
 ## 快照 JSON 结构版本号。
 ## 当前冻结为 1；后续结构变更时递增，以便旧消费者识别版本。
 const SCHEMA_VERSION: int = 1
+
+
+## 快照默认落盘目录（user:// 协议路径）。
+## save() 未显式传入 directory_path 时使用此目录；只允许此目录本身或以其为前缀的合法子目录。
+const DEFAULT_SNAPSHOT_DIRECTORY: String = "user://diagnostics/snapshots"
+
+## 单个快照文件最大字节数（1 MiB）。
+## 以序列化后 JSON 文本的 UTF-8 字节数为准，超过即拒绝写入且不触碰文件系统。
+const MAX_SNAPSHOT_FILE_SIZE_BYTES: int = 1 * 1024 * 1024
+
+## 快照文件名前缀，固定为 "snapshot_"。
+const SNAPSHOT_FILE_PREFIX: String = "snapshot_"
+
+## 快照文件扩展名，固定为 ".json"。
+const SNAPSHOT_FILE_EXTENSION: String = ".json"
 
 
 ## 将一份运行期快照数据序列化为稳定 JSON 文本。
@@ -192,3 +212,161 @@ static func _packed_strings_to_json(p_values: PackedStringArray) -> Array[Varian
     for index: int in range(p_values.size()):
         out.append(p_values[index])
     return out
+
+
+## 将一份运行期快照数据序列化并安全落盘到 user://diagnostics/snapshots 目录树。
+## [br]snapshot 为待保存的只读快照数据，允许为 null（按失败处理，不触碰文件系统）。
+## [br]directory_path 为目标目录，默认为 DEFAULT_SNAPSHOT_DIRECTORY；
+## [br]只允许 DEFAULT_SNAPSHOT_DIRECTORY 本身或以其为前缀的合法子目录。
+## [br]返回 RuntimeSnapshotWriteResult：成功时 file_path 为最终写入路径、errors 为空；
+## [br]失败时 file_path 为空、errors 包含全部中文错误。
+## [br]副作用：成功时在目标目录下创建新的 JSON 快照文件（不覆盖既有文件），
+## [br]并在目录不存在时递归创建目录；不修改 snapshot 及其子对象，不写 RuntimeLogger，不修改玩法状态。
+## [br]失败条件：snapshot 为 null 或序列化失败；directory_path 非法或越界；
+## [br]JSON 字节数超过 1 MiB；user:// 无法打开；目录创建失败；文件打开、写入或 flush 失败。
+## [br]路径边界：只允许 user://diagnostics/snapshots 及其合法子目录；
+## [br]拒绝 res://、原生绝对路径、相对路径、空路径、反斜杠逃逸、.. 逃逸与同级仿冒目录。
+## [br]大小边界：以 json_text 的 UTF-8 字节数为准，超过 1 MiB 立即拒绝且在此之前不创建目录、不打开文件、不查询已有快照。
+static func save(
+        snapshot: RuntimeSnapshotData,
+        directory_path: String = DEFAULT_SNAPSHOT_DIRECTORY
+) -> RuntimeSnapshotWriteResult:
+    # 1-2. 先序列化：失败时直接返回全部错误，不触碰文件系统。
+    var json_result: RuntimeSnapshotJsonResult = serialize(snapshot)
+    if not json_result.is_success():
+        return RuntimeSnapshotWriteResult.new("", json_result.errors)
+    var json_text: String = json_result.json_text
+    # 3. 校验并规范化目录路径：纯字符串操作，不访问文件系统。
+    var path_errors: PackedStringArray = _validate_snapshot_directory(directory_path)
+    if not path_errors.is_empty():
+        return RuntimeSnapshotWriteResult.new("", path_errors)
+    var safe_directory: String = _normalize_directory_path(directory_path)
+    # 4. 以 UTF-8 字节数为真实大小，避免按字符数误判多字节中文内容。
+    var byte_size: int = json_text.to_utf8_buffer().size()
+    # 5-6. 超过 1 MiB 立即拒绝：此时尚未创建目录、打开文件或查询已有快照。
+    if byte_size > MAX_SNAPSHOT_FILE_SIZE_BYTES:
+        return RuntimeSnapshotWriteResult.new("", PackedStringArray([
+            "RuntimeSnapshot：快照大小 %d 字节超过上限 %d 字节（1 MiB），已拒绝写入。" % [byte_size, MAX_SNAPSHOT_FILE_SIZE_BYTES]
+        ]))
+    # 7. 大小合法后才创建目录：以 user:// 为根递归创建目标目录。
+    var dir: DirAccess = DirAccess.open("user://")
+    if dir == null:
+        return RuntimeSnapshotWriteResult.new("", PackedStringArray([
+            "RuntimeSnapshot：无法打开 user:// 目录，快照落盘失败。"
+        ]))
+    var relative_dir: String = safe_directory.substr("user://".length())
+    if not dir.dir_exists(relative_dir):
+        var make_error: int = dir.make_dir_recursive(relative_dir)
+        if make_error != OK:
+            return RuntimeSnapshotWriteResult.new("", PackedStringArray([
+                "RuntimeSnapshot：创建快照目录 %s 失败，错误码 %d。" % [safe_directory, make_error]
+            ]))
+    # 8-9. 根据快照自身时间戳生成文件名，避免覆盖既有快照文件。
+    var file_name: String = _generate_snapshot_file_name(snapshot, safe_directory)
+    var full_path: String = safe_directory + "/" + file_name
+    # 10-11. 写入完整 JSON：不在末尾追加换行，flush 后在关闭前检查 FileAccess 错误。
+    var file: FileAccess = FileAccess.open(full_path, FileAccess.WRITE)
+    if file == null:
+        return RuntimeSnapshotWriteResult.new("", PackedStringArray([
+            "RuntimeSnapshot：无法打开快照文件 %s 写入，错误码 %d。" % [full_path, FileAccess.get_open_error()]
+        ]))
+    file.store_string(json_text)
+    file.flush()
+    var write_error: int = file.get_error()
+    file.close()
+    if write_error != OK:
+        return RuntimeSnapshotWriteResult.new("", PackedStringArray([
+            "RuntimeSnapshot：写入快照文件 %s 失败，错误码 %d。" % [full_path, write_error]
+        ]))
+    # 12-13. 成功返回最终文件路径；失败已在前置分支以中文错误返回。
+    return RuntimeSnapshotWriteResult.new(full_path, PackedStringArray())
+
+
+## 规范化快照目录路径：strip_edges、统一反斜杠为正斜杠、规约 . 与 .. 段。
+## [br]p_path 为调用方传入的原始目录字符串。
+## [br]返回 String：结构合法时返回以 "user://" 开头的规范化路径（无尾斜杠、无空段）；
+## [br]结构非法时返回空字符串——涵盖非 user:// 协议、空路径、.. 逃逸到 user:// 之上等情况。
+## [br]本函数无副作用：纯字符串操作，不访问文件系统、不 push_error、不抛异常。
+## [br]边界条件：不做 snapshots 前缀检查（由 _validate_snapshot_directory 负责），
+## [br]仅保证路径结构合法且不逃逸出 user:// 根。
+static func _normalize_directory_path(p_path: String) -> String:
+    # strip_edges 去除首尾空白，避免空白干扰前缀判断。
+    var trimmed: String = p_path.strip_edges()
+    if trimmed == "":
+        return ""
+    # 统一反斜杠为正斜杠：防止 Windows 风格路径绕过分段检查。
+    var unified: String = trimmed.replace("\\", "/")
+    var prefix: String = "user://"
+    # 非 user:// 协议（res://、原生绝对路径、相对路径等）一律拒绝。
+    if not unified.begins_with(prefix):
+        return ""
+    var relative: String = unified.substr(prefix.length())
+    # split 第二参数 false 表示丢弃空段，自动处理双斜杠与尾斜杠。
+    var raw_segments: PackedStringArray = relative.split("/", false)
+    var segments: PackedStringArray = PackedStringArray()
+    for seg: String in raw_segments:
+        if seg == ".":
+            # 当前目录段：直接忽略，不改变段栈。
+            continue
+        elif seg == "..":
+            # 上级目录段：段栈为空表示逃逸到 user:// 之上，判非法。
+            if segments.is_empty():
+                return ""
+            segments.remove_at(segments.size() - 1)
+        else:
+            segments.append(seg)
+    if segments.is_empty():
+        return prefix
+    return prefix + "/".join(segments)
+
+
+## 校验快照目录路径是否落在允许的边界内。
+## [br]p_path 为调用方传入的原始目录字符串。
+## [br]返回 PackedStringArray：合法时为空；非法或越界时包含中文错误。
+## [br]本函数无副作用：纯字符串操作，不访问文件系统、不 push_error、不抛异常。
+## [br]边界条件：只允许 DEFAULT_SNAPSHOT_DIRECTORY 本身或以其加 "/" 为前缀的合法子目录；
+## [br]以 / 边界做前缀检查，拒绝 snapshots_evil、snapshots2 等同级仿冒目录。
+static func _validate_snapshot_directory(p_path: String) -> PackedStringArray:
+    var normalized: String = _normalize_directory_path(p_path)
+    if normalized == "":
+        return PackedStringArray([
+            "RuntimeSnapshot：directory_path 非法，必须为 user://diagnostics/snapshots 或其合法子目录。"
+        ])
+    if normalized == DEFAULT_SNAPSHOT_DIRECTORY:
+        return PackedStringArray()
+    # 以 "/" 为明确边界检查子目录前缀，避免 snapshots_evil/snapshots2 等仿冒目录命中。
+    if normalized.begins_with(DEFAULT_SNAPSHOT_DIRECTORY + "/"):
+        return PackedStringArray()
+    return PackedStringArray([
+        "RuntimeSnapshot：directory_path 越界，只允许 user://diagnostics/snapshots 或其合法子目录。"
+    ])
+
+
+## 根据快照自身时间戳生成不覆盖既有文件的快照文件名。
+## [br]p_snapshot 为已通过序列化的只读快照数据，文件名取自其 timestamp_unix_msec。
+## [br]p_directory 为已规范化的目标目录路径，用于查询同名文件是否存在。
+## [br]返回 String：首选 "snapshot_<timestamp>.json"；若已存在则依次返回 "snapshot_<timestamp>_1.json"、
+## [br]"snapshot_<timestamp>_2.json"……直到命中不存在的文件名。
+## [br]副作用：通过 FileAccess.file_exists 查询目标目录下已有文件，不创建、不写入、不删除文件。
+## [br]边界条件：后缀只能是非负十进制整数（1、2、3……）；不使用随机数；不使用系统当前时间替代快照自身时间；
+## [br]相同快照重复保存可生成不同文件名，但 JSON 内容保持相同；文件名由模块生成，不接受调用方任意文件名。
+static func _generate_snapshot_file_name(
+        p_snapshot: RuntimeSnapshotData,
+        p_directory: String
+) -> String:
+    var timestamp_text: String = String.num_int64(p_snapshot.timestamp_unix_msec)
+    var base_name: String = SNAPSHOT_FILE_PREFIX + timestamp_text + SNAPSHOT_FILE_EXTENSION
+    # 首选文件名不存在时直接采用，不附加后缀。
+    if not FileAccess.file_exists(p_directory + "/" + base_name):
+        return base_name
+    # 同名文件已存在：依次追加 _1、_2 … 后缀，直到命中不存在的文件名；后缀为非负十进制整数。
+    var suffix: int = 1
+    while suffix > 0:
+        var candidate: String = (
+            SNAPSHOT_FILE_PREFIX + timestamp_text + "_" + String.num_int64(suffix) + SNAPSHOT_FILE_EXTENSION
+        )
+        if not FileAccess.file_exists(p_directory + "/" + candidate):
+            return candidate
+        suffix += 1
+    # 不可达：suffix 溢出才会落到此处，保留返回以满足返回类型检查。
+    return base_name
