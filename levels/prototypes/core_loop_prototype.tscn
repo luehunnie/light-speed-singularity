@@ -2,7 +2,7 @@
 
 [ext_resource type="Script" uid="uid://cfkidx57m3yqa" path="res://gameplay/crystals/basic_crystal.gd" id="1_crystal"]
 [ext_resource type="Script" uid="uid://do7wigwkihxy0" path="res://levels/prototypes/core_loop_prototype.gd" id="2_proto"]
-[ext_resource type="PackedScene" uid="uid://dbjvvisualview0" path="res://gameplay/visuals/object_visual_view.tscn" id="3_view"]
+[ext_resource type="PackedScene" uid="uid://dbjvvisualview0" path="res://gameplay/visuals/object_visuals/object_visual_view.tscn" id="3_view"]
 [ext_resource type="Resource" path="res://assets/visual_profiles/basic_crystal_visuals.tres" id="4_profile"]
 [ext_resource type="Script" path="res://gameplay/ui/inventory_slot_view.gd" id="5_slot_view"]
 [ext_resource type="Resource" path="res://assets/visual_profiles/single_cell_mirror_visuals.tres" id="6_mirror_profile"]

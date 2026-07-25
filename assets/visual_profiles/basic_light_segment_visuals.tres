@@ -1,6 +1,6 @@
 [gd_resource type="Resource" script_class="LightSegmentVisualProfile" load_steps=2 format=3]
 
-[ext_resource type="Script" path="res://gameplay/visuals/light_segment_visual_profile.gd" id="1_profile"]
+[ext_resource type="Script" path="res://gameplay/visuals/light_segments/light_segment_visual_profile.gd" id="1_profile"]
 
 [resource]
 script = ExtResource("1_profile")

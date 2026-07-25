@@ -81,9 +81,9 @@ const _SingleCellMirrorScene: PackedScene = preload("res://gameplay/mechanisms/m
 # 使 prototype_token_slot 拥有等效静态类型引用，可直接调用 refresh_slot()。
 const _InventorySlotViewScript: GDScript = preload("res://gameplay/ui/inventory_slot_view.gd")
 # LightSegmentView / LightSegmentVisualProfile 是 B2 批新增 class_name 脚本；同样用 preload 引用以避开 MCP run_project 全局类型缓存问题。
-const _LightSegmentViewScript: GDScript = preload("res://gameplay/visuals/light_segment_view.gd")
-const _LightSegmentViewScene: PackedScene = preload("res://gameplay/visuals/light_segment_view.tscn")
-const _LightSegmentVisualProfile: GDScript = preload("res://gameplay/visuals/light_segment_visual_profile.gd")
+const _LightSegmentViewScript: GDScript = preload("res://gameplay/visuals/light_segments/light_segment_view.gd")
+const _LightSegmentViewScene: PackedScene = preload("res://gameplay/visuals/light_segments/light_segment_view.tscn")
+const _LightSegmentVisualProfile: GDScript = preload("res://gameplay/visuals/light_segments/light_segment_visual_profile.gd")
 # 批次 4B-D2 抽离的运行交互共享类型契约（RunState / DragSource）；用 preload 路径引用以避开 MCP run_project 不重建全局类型缓存的问题，
 # 嵌套枚举一律通过本常量限定访问，不依赖全局 class_name 缓存。
 const _RuntimeInteractionTypes: GDScript = preload("res://gameplay/interaction/runtime_interaction_types.gd")
