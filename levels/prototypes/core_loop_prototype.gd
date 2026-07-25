@@ -67,6 +67,8 @@ const _OccupancyRegistryCheck: GDScript = preload("res://gameplay/diagnostics/se
 const _MirrorReflectionCheck: GDScript = preload("res://gameplay/diagnostics/self_check/checks/mirror_reflection_check.gd")
 # 批次 4B-C2 抽离的玩家机关 ID 快照自检模块；用 preload 引用以避开 MCP run_project 不重建全局类型缓存的问题。
 const _PlayerMechanismIdSnapshotCheck: GDScript = preload("res://gameplay/diagnostics/self_check/checks/player_mechanism_id_snapshot_check.gd")
+# 批次 4B-D4 抽离的运行期移动规则自检模块；用 preload 引用以避开 MCP run_project 不重建全局类型缓存的问题。
+const _RuntimeMoveCheck: GDScript = preload("res://gameplay/diagnostics/self_check/checks/runtime_move_check.gd")
 # 批次 4B-C2 抽离的玩家机关 R 重置共享纯规则；正式 R 重置与自检共用同一玩法层规则来源。
 const _PlayerMechanismResetRules: GDScript = preload("res://gameplay/placement/player_mechanism_reset_rules.gd")
 const _SingleCellMirrorScene: PackedScene = preload("res://gameplay/mechanisms/mirrors/single_cell_mirror.tscn")
@@ -308,81 +310,19 @@ func _run_post_pulse_state_self_check() -> void:
 
 
 ## 执行运行期移动次数纯函数自检。
-## [br]本函数无参数、无返回值，仅由 _ready() 在调试构建中调用。
-## [br]副作用：只用 assert 验证剩余换算与扣次/拖起判断的纯函数；不创建真实机关，不修改真实 OccupancyRegistry、库存、水晶、RunState、runtime_moves_used，也不发射光线。
-## [br]边界条件：扣次的运行期事实（占用原子更新成功、节点 cell 与世界位置提交成功）由 _commit_placed_drag_or_cancel() 的成功路径保证；非法目标、取消、原格松手与回滚均在该路径之前 return，不会到达扣次点。本自检只验证可无副作用判定的"剩余换算 + 运行期状态 + 跨格 + 提交配额 + 预览合法性"规则。
+## [br]本函数无参数、无返回值，仅由 _ready() 在调试构建中作为第五项调用。
+## [br]检查逻辑已迁至独立模块 RuntimeMoveCheck（gameplay/diagnostics/self_check/checks/runtime_move_check.gd），
+## 真实规则位于 RuntimeMoveRules（gameplay/placement/runtime_move_rules.gd）。
+## [br]批次 4B-D4 起本函数通过单项 SelfCheckRunner 执行该检查：构造 SelfCheckCallable 并交由 _run_startup_self_check_via_runner 注册、运行与校验，不再直接调用 RuntimeMoveCheck.run()，也不再在核心脚本内保留测试案例。
+## [br]本函数只通过 Runner 保持 Debug 失败语义：注册失败、Runner 结构错误或 SelfCheckResult.passed == false 时由 _run_startup_self_check_via_runner 立即 assert，保留原 Debug 硬断言边界，不降级为 warning。
+## [br]边界条件：保持原启动顺序，本函数仍位于 _ready 中第五项；测试案例已迁入 RuntimeMoveCheck，正式规则位于 RuntimeMoveRules，本函数只通过 Runner 保留 Debug 硬断言，不参与实际移动判定，不写文件，不写日志。
 func _run_runtime_move_self_check() -> void:
-	# 剩余换算：max(limit - used, 0)，used 超过 limit 时仍为 0。
-	assert(_RuntimeMoveRules.compute_runtime_moves_remaining(0, 0) == 0, "运行期移动自检：limit=0 used=0 应 remaining=0")
-	assert(_RuntimeMoveRules.compute_runtime_moves_remaining(1, 0) == 1, "运行期移动自检：limit=1 used=0 应 remaining=1")
-	assert(_RuntimeMoveRules.compute_runtime_moves_remaining(1, 1) == 0, "运行期移动自检：limit=1 used=1 应 remaining=0")
-	assert(_RuntimeMoveRules.compute_runtime_moves_remaining(1, 2) == 0, "运行期移动自检：used 超过 limit 时 remaining 仍为 0")
-	assert(_RuntimeMoveRules.compute_runtime_moves_remaining(2, 1) == 1, "运行期移动自检：limit=2 used=1 应 remaining=1")
-
-	var cell_a: Vector2i = Vector2i(10, 10)
-	var cell_b: Vector2i = Vector2i(11, 11)
-
-	# SETUP 移动不扣次。
-	assert(not _RuntimeMoveRules.should_count_runtime_move(_RuntimeInteractionTypes.RunState.SETUP, cell_a, cell_b), "运行期移动自检：SETUP 跨格移动不应扣次")
-	# PULSE_ACTIVE 与 MOVE_WINDOW 跨格成功移动应扣次。
-	assert(_RuntimeMoveRules.should_count_runtime_move(_RuntimeInteractionTypes.RunState.PULSE_ACTIVE, cell_a, cell_b), "运行期移动自检：PULSE_ACTIVE 跨格移动应扣次")
-	assert(_RuntimeMoveRules.should_count_runtime_move(_RuntimeInteractionTypes.RunState.MOVE_WINDOW, cell_a, cell_b), "运行期移动自检：MOVE_WINDOW 跨格移动应扣次")
-	# COMPLETED 不允许移动，自然不扣次。
-	assert(not _RuntimeMoveRules.should_count_runtime_move(_RuntimeInteractionTypes.RunState.COMPLETED, cell_a, cell_b), "运行期移动自检：COMPLETED 不应扣次")
-	# 原格松手不扣次（即使处于运行期）。
-	assert(not _RuntimeMoveRules.should_count_runtime_move(_RuntimeInteractionTypes.RunState.PULSE_ACTIVE, cell_a, cell_a), "运行期移动自检：PULSE_ACTIVE 原格松手不应扣次")
-	assert(not _RuntimeMoveRules.should_count_runtime_move(_RuntimeInteractionTypes.RunState.MOVE_WINDOW, cell_a, cell_a), "运行期移动自检：MOVE_WINDOW 原格松手不应扣次")
-
-	# 拖起权限：所有非 COMPLETED 状态均允许拖起，与剩余次数分离。
-	# remaining=0 禁止提交跨格移动，但不禁止拖起，因为拖起还承担回收和取消。
-	assert(_RuntimeMoveRules.can_begin_placed_drag(_RuntimeInteractionTypes.RunState.SETUP), "运行期移动自检：SETUP 应允许拖起已放置机关")
-	assert(_RuntimeMoveRules.can_begin_placed_drag(_RuntimeInteractionTypes.RunState.PULSE_ACTIVE), "运行期移动自检：PULSE_ACTIVE（remaining=1 或 0）应允许拖起")
-	assert(_RuntimeMoveRules.can_begin_placed_drag(_RuntimeInteractionTypes.RunState.MOVE_WINDOW), "运行期移动自检：MOVE_WINDOW（remaining=1 或 0）应允许拖起")
-	assert(not _RuntimeMoveRules.can_begin_placed_drag(_RuntimeInteractionTypes.RunState.COMPLETED), "运行期移动自检：COMPLETED 不应允许拖起")
-
-	# 库存拿取权限：所有非 COMPLETED 状态均允许从机关栏拿取（用户最终权限）。
-	assert(_RuntimeMoveRules.can_take_from_inventory_for_state(_RuntimeInteractionTypes.RunState.SETUP), "运行期移动自检：SETUP 应允许从机关栏拿取")
-	assert(_RuntimeMoveRules.can_take_from_inventory_for_state(_RuntimeInteractionTypes.RunState.PULSE_ACTIVE), "运行期移动自检：PULSE_ACTIVE 应允许从机关栏拿取")
-	assert(_RuntimeMoveRules.can_take_from_inventory_for_state(_RuntimeInteractionTypes.RunState.MOVE_WINDOW), "运行期移动自检：MOVE_WINDOW 应允许从机关栏拿取")
-	assert(not _RuntimeMoveRules.can_take_from_inventory_for_state(_RuntimeInteractionTypes.RunState.COMPLETED), "运行期移动自检：COMPLETED 禁止从机关栏拿取")
-
-	# 回收权限：所有非 COMPLETED 状态均允许拖回机关栏回收（用户最终权限）。
-	assert(_RuntimeMoveRules.can_recycle_placed_token_for_state(_RuntimeInteractionTypes.RunState.SETUP), "运行期移动自检：SETUP 应允许回收")
-	assert(_RuntimeMoveRules.can_recycle_placed_token_for_state(_RuntimeInteractionTypes.RunState.PULSE_ACTIVE), "运行期移动自检：PULSE_ACTIVE 应允许回收")
-	assert(_RuntimeMoveRules.can_recycle_placed_token_for_state(_RuntimeInteractionTypes.RunState.MOVE_WINDOW), "运行期移动自检：MOVE_WINDOW 应允许回收")
-	assert(not _RuntimeMoveRules.can_recycle_placed_token_for_state(_RuntimeInteractionTypes.RunState.COMPLETED), "运行期移动自检：COMPLETED 禁止回收")
-
-	# 提交权限：提交前第二次校验的纯判断。所有状态原格提交均为 false。
-	assert(_RuntimeMoveRules.can_commit_placed_move(_RuntimeInteractionTypes.RunState.SETUP, 0, cell_a, cell_b), "运行期移动自检：SETUP 跨格应允许提交")
-	assert(not _RuntimeMoveRules.can_commit_placed_move(_RuntimeInteractionTypes.RunState.SETUP, 0, cell_a, cell_a), "运行期移动自检：SETUP 原格不应允许提交")
-	assert(_RuntimeMoveRules.can_commit_placed_move(_RuntimeInteractionTypes.RunState.PULSE_ACTIVE, 1, cell_a, cell_b), "运行期移动自检：PULSE_ACTIVE 跨格且 remaining=1 应允许提交")
-	assert(not _RuntimeMoveRules.can_commit_placed_move(_RuntimeInteractionTypes.RunState.PULSE_ACTIVE, 0, cell_a, cell_b), "运行期移动自检：PULSE_ACTIVE 跨格且 remaining=0 不应允许提交")
-	assert(not _RuntimeMoveRules.can_commit_placed_move(_RuntimeInteractionTypes.RunState.PULSE_ACTIVE, 1, cell_a, cell_a), "运行期移动自检：PULSE_ACTIVE 原格不应允许提交")
-	assert(_RuntimeMoveRules.can_commit_placed_move(_RuntimeInteractionTypes.RunState.MOVE_WINDOW, 1, cell_a, cell_b), "运行期移动自检：MOVE_WINDOW 跨格且 remaining=1 应允许提交")
-	assert(not _RuntimeMoveRules.can_commit_placed_move(_RuntimeInteractionTypes.RunState.MOVE_WINDOW, 0, cell_a, cell_b), "运行期移动自检：MOVE_WINDOW 跨格且 remaining=0 不应允许提交")
-	assert(not _RuntimeMoveRules.can_commit_placed_move(_RuntimeInteractionTypes.RunState.COMPLETED, 1, cell_a, cell_b), "运行期移动自检：COMPLETED 跨格不应允许提交")
-	assert(not _RuntimeMoveRules.can_commit_placed_move(_RuntimeInteractionTypes.RunState.COMPLETED, 1, cell_a, cell_a), "运行期移动自检：COMPLETED 原格不应允许提交")
-
-	# 世界格松手预览合法性：同时反映空间合法性与当前松手提交权限（纯判断，无副作用）。
-	# INVENTORY 来源：只看拿取/首次放置权限与空间合法性，不读 runtime_move_limit。
-	assert(_RuntimeMoveRules.is_world_drop_preview_valid(_RuntimeInteractionTypes.DragSource.INVENTORY, _RuntimeInteractionTypes.RunState.SETUP, 0, INVALID_CELL, cell_b, true), "运行期移动自检：INVENTORY SETUP 空间合法应预览合法")
-	assert(_RuntimeMoveRules.is_world_drop_preview_valid(_RuntimeInteractionTypes.DragSource.INVENTORY, _RuntimeInteractionTypes.RunState.PULSE_ACTIVE, 0, INVALID_CELL, cell_b, true), "运行期移动自检：INVENTORY PULSE_ACTIVE 空间合法应预览合法")
-	assert(_RuntimeMoveRules.is_world_drop_preview_valid(_RuntimeInteractionTypes.DragSource.INVENTORY, _RuntimeInteractionTypes.RunState.MOVE_WINDOW, 0, INVALID_CELL, cell_b, true), "运行期移动自检：INVENTORY MOVE_WINDOW 空间合法应预览合法")
-	assert(not _RuntimeMoveRules.is_world_drop_preview_valid(_RuntimeInteractionTypes.DragSource.INVENTORY, _RuntimeInteractionTypes.RunState.COMPLETED, 1, INVALID_CELL, cell_b, true), "运行期移动自检：INVENTORY COMPLETED 应预览非法")
-	assert(not _RuntimeMoveRules.is_world_drop_preview_valid(_RuntimeInteractionTypes.DragSource.INVENTORY, _RuntimeInteractionTypes.RunState.SETUP, 0, INVALID_CELL, cell_b, false), "运行期移动自检：INVENTORY 空间非法应预览非法")
-	# PLACED 原格：安全取消位置，空间合法即合法（即使 remaining=0）。
-	assert(_RuntimeMoveRules.is_world_drop_preview_valid(_RuntimeInteractionTypes.DragSource.PLACED, _RuntimeInteractionTypes.RunState.SETUP, 0, cell_a, cell_a, true), "运行期移动自检：PLACED SETUP 原格应预览合法")
-	assert(_RuntimeMoveRules.is_world_drop_preview_valid(_RuntimeInteractionTypes.DragSource.PLACED, _RuntimeInteractionTypes.RunState.PULSE_ACTIVE, 0, cell_a, cell_a, true), "运行期移动自检：PLACED PULSE_ACTIVE remaining=0 原格仍应预览合法")
-	assert(_RuntimeMoveRules.is_world_drop_preview_valid(_RuntimeInteractionTypes.DragSource.PLACED, _RuntimeInteractionTypes.RunState.MOVE_WINDOW, 0, cell_a, cell_a, true), "运行期移动自检：PLACED MOVE_WINDOW remaining=0 原格仍应预览合法")
-	assert(not _RuntimeMoveRules.is_world_drop_preview_valid(_RuntimeInteractionTypes.DragSource.PLACED, _RuntimeInteractionTypes.RunState.COMPLETED, 1, cell_a, cell_a, true), "运行期移动自检：PLACED COMPLETED 原格应预览非法")
-	# PLACED 跨格：需同时空间合法且 _can_commit_placed_move 通过。
-	assert(_RuntimeMoveRules.is_world_drop_preview_valid(_RuntimeInteractionTypes.DragSource.PLACED, _RuntimeInteractionTypes.RunState.SETUP, 0, cell_a, cell_b, true), "运行期移动自检：PLACED SETUP remaining=0 跨格空间合法应预览合法")
-	assert(_RuntimeMoveRules.is_world_drop_preview_valid(_RuntimeInteractionTypes.DragSource.PLACED, _RuntimeInteractionTypes.RunState.PULSE_ACTIVE, 1, cell_a, cell_b, true), "运行期移动自检：PLACED PULSE_ACTIVE remaining=1 跨格空间合法应预览合法")
-	assert(not _RuntimeMoveRules.is_world_drop_preview_valid(_RuntimeInteractionTypes.DragSource.PLACED, _RuntimeInteractionTypes.RunState.PULSE_ACTIVE, 0, cell_a, cell_b, true), "运行期移动自检：PLACED PULSE_ACTIVE remaining=0 跨格空间合法应预览非法")
-	assert(_RuntimeMoveRules.is_world_drop_preview_valid(_RuntimeInteractionTypes.DragSource.PLACED, _RuntimeInteractionTypes.RunState.MOVE_WINDOW, 1, cell_a, cell_b, true), "运行期移动自检：PLACED MOVE_WINDOW remaining=1 跨格空间合法应预览合法")
-	assert(not _RuntimeMoveRules.is_world_drop_preview_valid(_RuntimeInteractionTypes.DragSource.PLACED, _RuntimeInteractionTypes.RunState.MOVE_WINDOW, 0, cell_a, cell_b, true), "运行期移动自检：PLACED MOVE_WINDOW remaining=0 跨格空间合法应预览非法")
-	assert(not _RuntimeMoveRules.is_world_drop_preview_valid(_RuntimeInteractionTypes.DragSource.PLACED, _RuntimeInteractionTypes.RunState.COMPLETED, 1, cell_a, cell_b, true), "运行期移动自检：PLACED COMPLETED 跨格应预览非法")
-	assert(not _RuntimeMoveRules.is_world_drop_preview_valid(_RuntimeInteractionTypes.DragSource.PLACED, _RuntimeInteractionTypes.RunState.PULSE_ACTIVE, 1, cell_a, cell_b, false), "运行期移动自检：PLACED 空间非法应预览非法")
+	var definition: SelfCheckCallable = SelfCheckCallable.new(
+			&"runtime_move_rules",
+			"运行期移动规则自检",
+			_RuntimeMoveCheck.run
+	)
+	_run_startup_self_check_via_runner(definition, &"startup_runtime_move_rules")
 
 
 ## 处理关卡输入动作和鼠标拖拽事件。
