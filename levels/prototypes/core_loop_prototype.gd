@@ -76,6 +76,8 @@ const _PlayerMechanismIdSnapshotCheck: GDScript = preload("res://gameplay/diagno
 const _RuntimeMoveCheck: GDScript = preload("res://gameplay/diagnostics/self_check/checks/runtime_move_check.gd")
 # 批次 4B-E3 抽离的网格坐标启动自检模块；持有只读采样快照，用 preload 引用以避开 MCP run_project 不重建全局类型缓存的问题。
 const _GridCoordinateCheck: GDScript = preload("res://gameplay/diagnostics/self_check/checks/grid_coordinate_check.gd")
+# 批次 4B-F3 抽离的运行状态纯规则启动自检模块；用 preload 引用以避开 MCP run_project 不重建全局类型缓存的问题。
+const _RuntimeStateCheck: GDScript = preload("res://gameplay/diagnostics/self_check/checks/runtime_state_check.gd")
 # 批次 4B-C2 抽离的玩家机关 R 重置共享纯规则；正式 R 重置与自检共用同一玩法层规则来源。
 const _PlayerMechanismResetRules: GDScript = preload("res://gameplay/placement/rules/player_mechanism_reset_rules.gd")
 const _SingleCellMirrorScene: PackedScene = preload("res://gameplay/mechanisms/mirrors/single_cell_mirror.tscn")
@@ -281,53 +283,25 @@ func _run_single_cell_mirror_reflection_self_check() -> void:
 	_run_startup_self_check_via_runner(definition, &"startup_single_cell_mirror_reflection")
 
 
-## 执行当前原型运行状态权限自检。
-## [br]本函数无参数、无返回值。
-## [br]副作用：仅在调试构建中用 assert 验证 _get_post_pulse_state(false) 返回 MOVE_WINDOW、true 返回 COMPLETED，
-## 并验证布局编辑权限、发射权限、配置锁定和脉冲活动状态都由 current_run_state 正确推导。
-## [br]状态变化：会临时直接设置 current_run_state 检查权限推导，结束前恢复原始 current_run_state；不修改库存、玩家布局、OccupancyRegistry、is_level_completed 或 pulse_generation。
-## [br]边界条件：当前演示关卡可能首次发射直接完成，无法人工进入 MOVE_WINDOW；自检只检查纯状态规则，不改场景事实。can_edit_layout() 在非 COMPLETED 返回 true（粗粒度冻结门）；拿取/回收在所有非 COMPLETED 状态允许，移动按剩余次数受限，COMPLETED 冻结全部布局编辑。
+## 执行当前原型运行状态纯规则自检。
+## [br]本函数无参数、无返回值，仅由 _ready() 在调试构建中作为第四项调用。
+## [br]检查逻辑已迁至独立模块 RuntimeStateCheck（gameplay/diagnostics/self_check/checks/runtime_state_check.gd），
+## 正式规则位于 RuntimeStateRules（gameplay/interaction/runtime_state_rules.gd）。
+## [br]批次 4B-F3 起本函数通过单项 SelfCheckRunner 执行该检查：构造 SelfCheckCallable 并交由 _run_startup_self_check_via_runner 注册、运行与校验，
+## 不再直接调用 RuntimeStateCheck.run()，也不再在核心脚本内保留测试案例或直接改写 current_run_state 进行自检。
+## [br]本函数只通过 Runner 保持 Debug 失败语义：注册失败、Runner 结构错误或 SelfCheckResult.passed == false 时由 _run_startup_self_check_via_runner 立即 assert，
+## 保留原 Debug 硬断言边界，不降级为 warning。
+## [br]测试案例位于 RuntimeStateCheck（22 项：2 项脉冲结束目标状态 + 四个 RunState × 五条纯权限规则）；
+## [br]正式规则位于 RuntimeStateRules；本函数只通过 Runner 保留 Debug 硬断言，不修改真实运行状态。
+## [br]边界条件：保持原启动顺序，本函数仍位于 _ready 中第四项；新实现相较旧实现改善为即使检查失败也不会修改或泄漏 current_run_state，
+## 不再需要保存/恢复 original_state/original_level_completed/original_pulse_generation，不触发 UI、拖拽或状态事务；不参与业务状态修改，不写文件，不写日志。
 func _run_post_pulse_state_self_check() -> void:
-	var original_state: _RuntimeInteractionTypes.RunState = current_run_state
-	var original_level_completed: bool = is_level_completed
-	var original_pulse_generation: int = pulse_generation
-
-	# 当前正常关卡可能无法自然进入 MOVE_WINDOW；这里只验证纯函数，不改变真实运行结果。
-	assert(_get_post_pulse_state(false) == _RuntimeInteractionTypes.RunState.MOVE_WINDOW, "运行状态自检：未完成脉冲结束后应进入 MOVE_WINDOW")
-	assert(_get_post_pulse_state(true) == _RuntimeInteractionTypes.RunState.COMPLETED, "运行状态自检：已完成脉冲结束后应进入 COMPLETED")
-
-	current_run_state = _RuntimeInteractionTypes.RunState.SETUP
-	assert(can_edit_layout(), "运行状态自检：SETUP 应允许编辑布局")
-	assert(can_fire_light(), "运行状态自检：SETUP 应允许 Space 发射")
-	assert(can_edit_configuration(), "运行状态自检：SETUP 应允许编辑内部配置")
-	assert(not is_configuration_locked(), "运行状态自检：SETUP 不应锁定内部配置")
-	assert(not is_current_pulse_active(), "运行状态自检：SETUP 不应有活动脉冲")
-
-	current_run_state = _RuntimeInteractionTypes.RunState.PULSE_ACTIVE
-	assert(can_edit_layout(), "运行状态自检：PULSE_ACTIVE 应允许编辑布局")
-	assert(not can_fire_light(), "运行状态自检：PULSE_ACTIVE 应拒绝 Space 发射")
-	assert(not can_edit_configuration(), "运行状态自检：PULSE_ACTIVE 不允许编辑内部配置")
-	assert(is_configuration_locked(), "运行状态自检：PULSE_ACTIVE 应锁定内部配置")
-	assert(is_current_pulse_active(), "运行状态自检：PULSE_ACTIVE 应表示脉冲活动")
-
-	current_run_state = _RuntimeInteractionTypes.RunState.MOVE_WINDOW
-	assert(can_edit_layout(), "运行状态自检：MOVE_WINDOW 应允许编辑布局")
-	assert(can_fire_light(), "运行状态自检：MOVE_WINDOW 应允许 Space 发射")
-	assert(not can_edit_configuration(), "运行状态自检：MOVE_WINDOW 不允许编辑内部配置")
-	assert(is_configuration_locked(), "运行状态自检：MOVE_WINDOW 应锁定内部配置")
-	assert(not is_current_pulse_active(), "运行状态自检：MOVE_WINDOW 不应有活动脉冲")
-
-	current_run_state = _RuntimeInteractionTypes.RunState.COMPLETED
-	assert(not can_edit_layout(), "运行状态自检：COMPLETED 应禁止编辑布局")
-	assert(not can_fire_light(), "运行状态自检：COMPLETED 应拒绝 Space 发射")
-	assert(not can_edit_configuration(), "运行状态自检：COMPLETED 不允许编辑内部配置")
-	assert(is_configuration_locked(), "运行状态自检：COMPLETED 应锁定内部配置")
-	assert(not is_current_pulse_active(), "运行状态自检：COMPLETED 不应有活动脉冲")
-
-	current_run_state = original_state
-	assert(current_run_state == original_state, "运行状态自检：结束后必须恢复 current_run_state")
-	assert(is_level_completed == original_level_completed, "运行状态自检：不得修改 is_level_completed")
-	assert(pulse_generation == original_pulse_generation, "运行状态自检：不得修改 pulse_generation")
+	var definition: SelfCheckCallable = SelfCheckCallable.new(
+			&"runtime_state_rules",
+			"运行状态规则自检",
+			_RuntimeStateCheck.run
+	)
+	_run_startup_self_check_via_runner(definition, &"startup_runtime_state_rules")
 
 
 ## 执行运行期移动次数纯函数自检。
@@ -395,17 +369,6 @@ func can_edit_layout() -> bool:
 ## [br]正式规则位于 RuntimeStateRules（批次 4B-F2）；本包装函数只提供当前实例的 current_run_state，不在此函数内执行状态切换。
 func can_edit_configuration() -> bool:
 	return _RuntimeStateRules.can_edit_configuration(current_run_state)
-
-
-## 查询当前人工内部配置是否已锁定。
-## [br]本函数无参数。
-## [br]返回 true 表示当前不在 SETUP，主发射源方向、机关内部模式等内部配置已由运行阶段状态推导为锁定。
-## [br]本函数无副作用；边界条件：配置锁定不等于布局锁定，PULSE_ACTIVE 和 MOVE_WINDOW 仍可编辑布局；COMPLETED 因关卡冻结而禁止一切玩家编辑。
-## [br]临时处理（批次 4B-F2）：当前该函数没有正式玩法调用方，只被旧 post_pulse_state 自检调用，未进入 RuntimeStateRules 公共接口；
-## 函数体改为委托 RuntimeStateRules.can_edit_configuration 取反，与原 current_run_state != SETUP 在四个 RunState 下完全等价；
-## 旧自检迁移至 F3 后删除本函数。本包装不在此函数内执行状态切换。
-func is_configuration_locked() -> bool:
-	return not _RuntimeStateRules.can_edit_configuration(current_run_state)
 
 
 ## 查询当前是否处于普通脉冲活动窗口。
