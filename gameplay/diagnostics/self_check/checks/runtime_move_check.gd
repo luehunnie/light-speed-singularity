@@ -39,7 +39,7 @@ extends RefCounted
 # 以 preload 引用脚本而非依赖全局 class_name 缓存，保证运行期可直接解析；
 # 与核心闭环原型中的引用方式保持一致，避开 MCP run_project 不重建全局类型缓存的问题。
 const _RuntimeMoveRules: GDScript = preload(
-	"res://gameplay/placement/runtime_move_rules.gd"
+	"res://gameplay/placement/rules/runtime_move_rules.gd"
 )
 const _RuntimeInteractionTypes: GDScript = preload(
 	"res://gameplay/interaction/runtime_interaction_types.gd"

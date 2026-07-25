@@ -33,7 +33,7 @@ extends RefCounted
 # 以 preload 引用脚本而非依赖全局 class_name 缓存，保证运行期可直接解析；
 # 与核心闭环原型及 OccupancyRegistryCheck 中的引用方式保持一致。
 const _OccupancyRegistry: GDScript = preload("res://gameplay/placement/occupancy_registry.gd")
-const _PlayerMechanismResetRules: GDScript = preload("res://gameplay/placement/player_mechanism_reset_rules.gd")
+const _PlayerMechanismResetRules: GDScript = preload("res://gameplay/placement/rules/player_mechanism_reset_rules.gd")
 
 
 ## 执行玩家机关 ID 快照、R 库存恢复计算与临时占用残留查询自检。
