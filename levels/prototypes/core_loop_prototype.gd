@@ -92,6 +92,9 @@ const _RuntimeInteractionTypes: GDScript = preload("res://gameplay/interaction/r
 # 批次 4B-D3-B 抽离的运行期移动纯规则共享模块；正式玩法调用与 runtime_move 启动自检共用同一规则来源。
 # 用 preload 路径引用以避开 MCP run_project 不重建全局类型缓存的问题，新 class_name 缓存可能尚未刷新，必须通过本常量调用。
 const _RuntimeMoveRules: GDScript = preload("res://gameplay/placement/rules/runtime_move_rules.gd")
+# 批次 4B-F2 抽离的运行状态纯规则共享模块；正式玩法查询与 post_pulse_state 启动自检共用同一规则来源。
+# 用 preload 路径引用以避开 MCP run_project 不重建全局类型缓存的问题，新 class_name 缓存可能尚未刷新，必须通过本常量调用。
+const _RuntimeStateRules: GDScript = preload("res://gameplay/interaction/runtime_state_rules.gd")
 # 默认光线路段视觉资源（四字段全空 → 运行时由 LightSegmentView 静默回退到黄色占位块）。
 # 以 Resource 类型 preload，调用 set_profile 时再 as 为 profile 脚本类型，避免常量类型解析对全局类型缓存的依赖。
 const _DefaultLightSegmentProfile: Resource = preload("res://assets/visual_profiles/basic_light_segment_visuals.tres")
@@ -371,48 +374,56 @@ func _input(event: InputEvent) -> void:
 ## [br]本函数无参数。
 ## [br]返回 true 表示 SETUP 或 MOVE_WINDOW 可以发射；返回 false 表示 PULSE_ACTIVE 或 COMPLETED 必须拒绝 Space。
 ## [br]本函数无副作用；边界条件：完成标签已显示但脉冲尚未视觉结束时，状态仍是 PULSE_ACTIVE，因此重复 Space 仍被拒绝。
+## [br]正式规则位于 RuntimeStateRules（批次 4B-F2）；本包装函数只提供当前实例的 current_run_state，不在此函数内执行状态切换。
 func can_fire_light() -> bool:
-	return current_run_state == _RuntimeInteractionTypes.RunState.SETUP or current_run_state == _RuntimeInteractionTypes.RunState.MOVE_WINDOW
+	return _RuntimeStateRules.can_fire_light(current_run_state)
 
 
 ## 查询当前是否处于非冻结状态（粗粒度冻结门）。
 ## [br]本函数无参数。
 ## [br]返回 true 表示当前不是 COMPLETED（关卡未冻结）；返回 false 表示 COMPLETED 已冻结整个关卡交互。
 ## [br]本函数无副作用；边界条件：本函数只是粗粒度冻结门（非 COMPLETED 返回 true），不是拿取、移动、回收的唯一守卫。拿取/回收在所有非 COMPLETED 状态允许（_can_take_from_inventory_for_state / _can_recycle_placed_token_for_state），拖起已放置机关由 _can_begin_placed_drag 限制（所有非 COMPLETED 状态允许，与剩余次数分离），跨格提交由 _can_commit_placed_move 按剩余次数限制（SETUP 不限，PULSE_ACTIVE/MOVE_WINDOW 需 remaining>0）。PULSE_ACTIVE 中的布局变化只影响后续再次发射，不回溯当前脉冲。
+## [br]正式规则位于 RuntimeStateRules（批次 4B-F2）；本包装函数只提供当前实例的 current_run_state，不在此函数内执行状态切换。
 func can_edit_layout() -> bool:
-	return current_run_state != _RuntimeInteractionTypes.RunState.COMPLETED
+	return _RuntimeStateRules.can_edit_layout(current_run_state)
 
 
 ## 查询当前是否允许人工编辑内部配置。
 ## [br]本函数无参数。
 ## [br]返回 true 仅表示当前处于 SETUP；其他状态全部返回 false。
 ## [br]本函数无副作用；边界条件：本权限只用于主发射源方向、机关内部模式等内部配置，不代表布局编辑权限，不得用于控制拖拽放置、移动或回收。
+## [br]正式规则位于 RuntimeStateRules（批次 4B-F2）；本包装函数只提供当前实例的 current_run_state，不在此函数内执行状态切换。
 func can_edit_configuration() -> bool:
-	return current_run_state == _RuntimeInteractionTypes.RunState.SETUP
+	return _RuntimeStateRules.can_edit_configuration(current_run_state)
 
 
 ## 查询当前人工内部配置是否已锁定。
 ## [br]本函数无参数。
 ## [br]返回 true 表示当前不在 SETUP，主发射源方向、机关内部模式等内部配置已由运行阶段状态推导为锁定。
 ## [br]本函数无副作用；边界条件：配置锁定不等于布局锁定，PULSE_ACTIVE 和 MOVE_WINDOW 仍可编辑布局；COMPLETED 因关卡冻结而禁止一切玩家编辑。
+## [br]临时处理（批次 4B-F2）：当前该函数没有正式玩法调用方，只被旧 post_pulse_state 自检调用，未进入 RuntimeStateRules 公共接口；
+## 函数体改为委托 RuntimeStateRules.can_edit_configuration 取反，与原 current_run_state != SETUP 在四个 RunState 下完全等价；
+## 旧自检迁移至 F3 后删除本函数。本包装不在此函数内执行状态切换。
 func is_configuration_locked() -> bool:
-	return current_run_state != _RuntimeInteractionTypes.RunState.SETUP
+	return not _RuntimeStateRules.can_edit_configuration(current_run_state)
 
 
 ## 查询当前是否处于普通脉冲活动窗口。
 ## [br]本函数无参数。
 ## [br]返回 true 表示 current_run_state 为 PULSE_ACTIVE；其他状态返回 false。
 ## [br]本函数无副作用；边界条件：通关目标可在 PULSE_ACTIVE 期间已成立，脉冲活动仍以运行状态为准。
+## [br]正式规则位于 RuntimeStateRules（批次 4B-F2，接口名 is_pulse_active）；本包装函数只提供当前实例的 current_run_state，不在此函数内执行状态切换。
 func is_current_pulse_active() -> bool:
-	return current_run_state == _RuntimeInteractionTypes.RunState.PULSE_ACTIVE
+	return _RuntimeStateRules.is_pulse_active(current_run_state)
 
 
 ## 查询当前是否处于运行期移动状态。
 ## [br]本函数无参数。
 ## [br]返回 true 表示当前处于 PULSE_ACTIVE 或 MOVE_WINDOW；SETUP 与 COMPLETED 返回 false。
 ## [br]本函数无副作用；边界条件：运行期移动次数只在 PULSE_ACTIVE 和 MOVE_WINDOW 中扣除，SETUP 移动不计次，COMPLETED 冻结全部布局交互。
+## [br]正式规则位于 RuntimeStateRules（批次 4B-F2）；本包装函数只提供当前实例的 current_run_state，不在此函数内执行状态切换。
 func is_runtime_move_state() -> bool:
-	return current_run_state == _RuntimeInteractionTypes.RunState.PULSE_ACTIVE or current_run_state == _RuntimeInteractionTypes.RunState.MOVE_WINDOW
+	return _RuntimeStateRules.is_runtime_move_state(current_run_state)
 
 
 ## 查询当前剩余运行期移动次数。
@@ -463,8 +474,9 @@ func _set_run_state(new_state: _RuntimeInteractionTypes.RunState) -> void:
 ## [br]返回 COMPLETED 表示已完成，返回 MOVE_WINDOW 表示未完成且可等待未来移动或再次发射。
 ## [br]本函数无副作用，不读取或修改真实场景状态。
 ## [br]边界条件：只负责 PULSE_ACTIVE 结束后的二选一状态，不处理 R、非法发射、拖拽或移动次数。
+## [br]正式规则位于 RuntimeStateRules（批次 4B-F2，接口名 get_post_pulse_state）；本包装函数只转发 level_completed 参数，不在此函数内执行状态切换。
 func _get_post_pulse_state(level_completed: bool) -> _RuntimeInteractionTypes.RunState:
-	return _RuntimeInteractionTypes.RunState.COMPLETED if level_completed else _RuntimeInteractionTypes.RunState.MOVE_WINDOW
+	return _RuntimeStateRules.get_post_pulse_state(level_completed)
 
 
 ## 发射一次核心闭环原型最小脉冲光线。
