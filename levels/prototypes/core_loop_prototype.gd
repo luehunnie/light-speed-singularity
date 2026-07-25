@@ -75,7 +75,7 @@ const _PlayerMechanismIdSnapshotCheck: GDScript = preload("res://gameplay/diagno
 # 批次 4B-D4 抽离的运行期移动规则自检模块；用 preload 引用以避开 MCP run_project 不重建全局类型缓存的问题。
 const _RuntimeMoveCheck: GDScript = preload("res://gameplay/diagnostics/self_check/checks/runtime_move_check.gd")
 # 批次 4B-C2 抽离的玩家机关 R 重置共享纯规则；正式 R 重置与自检共用同一玩法层规则来源。
-const _PlayerMechanismResetRules: GDScript = preload("res://gameplay/placement/player_mechanism_reset_rules.gd")
+const _PlayerMechanismResetRules: GDScript = preload("res://gameplay/placement/rules/player_mechanism_reset_rules.gd")
 const _SingleCellMirrorScene: PackedScene = preload("res://gameplay/mechanisms/mirrors/single_cell_mirror.tscn")
 # InventorySlotView 是本批新增 class_name 脚本；用 preload 引用以避开 MCP run_project 不重建全局类型缓存的问题，
 # 使 prototype_token_slot 拥有等效静态类型引用，可直接调用 refresh_slot()。
@@ -89,7 +89,7 @@ const _LightSegmentVisualProfile: GDScript = preload("res://gameplay/visuals/lig
 const _RuntimeInteractionTypes: GDScript = preload("res://gameplay/interaction/runtime_interaction_types.gd")
 # 批次 4B-D3-B 抽离的运行期移动纯规则共享模块；正式玩法调用与 runtime_move 启动自检共用同一规则来源。
 # 用 preload 路径引用以避开 MCP run_project 不重建全局类型缓存的问题，新 class_name 缓存可能尚未刷新，必须通过本常量调用。
-const _RuntimeMoveRules: GDScript = preload("res://gameplay/placement/runtime_move_rules.gd")
+const _RuntimeMoveRules: GDScript = preload("res://gameplay/placement/rules/runtime_move_rules.gd")
 # 默认光线路段视觉资源（四字段全空 → 运行时由 LightSegmentView 静默回退到黄色占位块）。
 # 以 Resource 类型 preload，调用 set_profile 时再 as 为 profile 脚本类型，避免常量类型解析对全局类型缓存的依赖。
 const _DefaultLightSegmentProfile: Resource = preload("res://assets/visual_profiles/basic_light_segment_visuals.tres")
@@ -159,7 +159,7 @@ func _occupancy_has_any_reference_to_mechanism(mechanism_id: StringName) -> bool
 ## 执行玩家机关 ID 快照、R 库存恢复计算与临时占用残留查询自检。
 ## [br]本函数无参数、无返回值，仅由 _ready() 在调试构建中作为第六项调用。
 ## [br]检查逻辑已迁至独立模块 PlayerMechanismIdSnapshotCheck（gameplay/diagnostics/self_check/checks/player_mechanism_id_snapshot_check.gd），
-## 真实规则位于 PlayerMechanismResetRules（gameplay/placement/player_mechanism_reset_rules.gd）。
+## 真实规则位于 PlayerMechanismResetRules（gameplay/placement/rules/player_mechanism_reset_rules.gd）。
 ## [br]批次 4B-C2 起本函数通过单项 SelfCheckRunner 执行该检查：构造 SelfCheckCallable 并交由 _run_startup_self_check_via_runner 注册、运行与校验，不再直接调用 PlayerMechanismIdSnapshotCheck.run()，也不再在核心脚本内保留测试案例。
 ## [br]本函数只通过 Runner 保持 Debug 失败语义：注册失败、Runner 结构错误或 SelfCheckResult.passed == false 时由 _run_startup_self_check_via_runner 立即 assert，保留原 Debug 硬断言边界，不降级为 warning。
 ## [br]边界条件：保持原启动顺序，本函数仍位于 _ready 中第六项；不参与业务状态修改，不写文件，不写日志。
@@ -317,7 +317,7 @@ func _run_post_pulse_state_self_check() -> void:
 ## 执行运行期移动次数纯函数自检。
 ## [br]本函数无参数、无返回值，仅由 _ready() 在调试构建中作为第五项调用。
 ## [br]检查逻辑已迁至独立模块 RuntimeMoveCheck（gameplay/diagnostics/self_check/checks/runtime_move_check.gd），
-## 真实规则位于 RuntimeMoveRules（gameplay/placement/runtime_move_rules.gd）。
+## 真实规则位于 RuntimeMoveRules（gameplay/placement/rules/runtime_move_rules.gd）。
 ## [br]批次 4B-D4 起本函数通过单项 SelfCheckRunner 执行该检查：构造 SelfCheckCallable 并交由 _run_startup_self_check_via_runner 注册、运行与校验，不再直接调用 RuntimeMoveCheck.run()，也不再在核心脚本内保留测试案例。
 ## [br]本函数只通过 Runner 保持 Debug 失败语义：注册失败、Runner 结构错误或 SelfCheckResult.passed == false 时由 _run_startup_self_check_via_runner 立即 assert，保留原 Debug 硬断言边界，不降级为 warning。
 ## [br]边界条件：保持原启动顺序，本函数仍位于 _ready 中第五项；测试案例已迁入 RuntimeMoveCheck，正式规则位于 RuntimeMoveRules，本函数只通过 Runner 保留 Debug 硬断言，不参与实际移动判定，不写文件，不写日志。
