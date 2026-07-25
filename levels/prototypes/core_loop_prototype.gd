@@ -74,6 +74,8 @@ const _MirrorReflectionCheck: GDScript = preload("res://gameplay/diagnostics/sel
 const _PlayerMechanismIdSnapshotCheck: GDScript = preload("res://gameplay/diagnostics/self_check/checks/player_mechanism_id_snapshot_check.gd")
 # 批次 4B-D4 抽离的运行期移动规则自检模块；用 preload 引用以避开 MCP run_project 不重建全局类型缓存的问题。
 const _RuntimeMoveCheck: GDScript = preload("res://gameplay/diagnostics/self_check/checks/runtime_move_check.gd")
+# 批次 4B-E3 抽离的网格坐标启动自检模块；持有只读采样快照，用 preload 引用以避开 MCP run_project 不重建全局类型缓存的问题。
+const _GridCoordinateCheck: GDScript = preload("res://gameplay/diagnostics/self_check/checks/grid_coordinate_check.gd")
 # 批次 4B-C2 抽离的玩家机关 R 重置共享纯规则；正式 R 重置与自检共用同一玩法层规则来源。
 const _PlayerMechanismResetRules: GDScript = preload("res://gameplay/placement/rules/player_mechanism_reset_rules.gd")
 const _SingleCellMirrorScene: PackedScene = preload("res://gameplay/mechanisms/mirrors/single_cell_mirror.tscn")
@@ -231,24 +233,35 @@ func _run_occupancy_registry_self_check() -> void:
 
 
 ## 执行当前原型 64 像素逻辑格坐标换算自检。
-## [br]本函数无参数、无返回值，仅由 _ready() 在调试构建中调用。
-## [br]副作用：只用 Vector2i 测试格通过 GridCoordinateRules 调用 cell_to_world() 与 world_to_cell() 并执行 assert；不修改场景节点、OccupancyRegistry、库存、拖拽状态、RunState 或光线发射。
-## [br]边界条件：当前原型在正式 TileMapLayer 接管坐标转换前使用 CELL_SIZE 常量；逻辑坐标仍为 Vector2i，64 像素只表示当前世界视觉格中心间距，窗口分辨率或 UI 尺寸变化不应改变逻辑结果。
+## [br]本函数无参数、无返回值，仅由 _ready() 在调试构建中作为第二项调用。
+## [br]检查逻辑已迁至独立模块 GridCoordinateCheck（gameplay/diagnostics/self_check/checks/grid_coordinate_check.gd），
+## 该模块在构造时复制采样快照，不保存 core_loop、Node、Crystal 或其他玩法对象引用。
+## [br]批次 4B-E3 起本函数通过单项 SelfCheckRunner 执行该检查：按原自检顺序采集真实格子
+## （Vector2i.ZERO、emitter_cell、每个 crystal.cell、每个 wall_cells 格、map_bounds.end - Vector2i.ONE 角点）
+## 构造 GridCoordinateCheck，再包装为 SelfCheckCallable 交由 _run_startup_self_check_via_runner 注册、运行与校验，
+## 不再在核心脚本内保留 cell↔world 断言或相邻格中心距测试案例。
+## [br]本函数只通过 Runner 保持 Debug 失败语义：注册失败、Runner 结构错误或 SelfCheckResult.passed == false 时由 _run_startup_self_check_via_runner 立即 assert，保留原 Debug 硬断言边界，不降级为 warning。
+## [br]边界条件：保持原启动顺序，本函数仍位于 _ready 中第二项；采样数组只在本函数局部使用，不存为字段，
+## 不排序、不去重，不改变 crystals 或 wall_cells 遍历顺序；只把 Vector2i 格子传入 Diagnostics，不把真实对象传给 Diagnostics；
+## 不使用 Callable.bind 或 lambda；不参与业务状态修改，不写文件，不写日志。
 func _run_grid_coordinate_self_check() -> void:
-	var test_cells: Array[Vector2i] = [Vector2i.ZERO, emitter_cell]
+	# 按原自检顺序采集真实格子；只收集 Vector2i，不把 Crystal/Node 等真实对象传入 Diagnostics。
+	var sample_cells: Array[Vector2i] = [Vector2i.ZERO, emitter_cell]
 	for crystal: BasicCrystal in crystals:
-		test_cells.append(crystal.cell)
+		sample_cells.append(crystal.cell)
 	for wall_cell: Vector2i in wall_cells:
-		test_cells.append(wall_cell)
-	test_cells.append(Vector2i(map_bounds.end.x - 1, map_bounds.end.y - 1))
+		sample_cells.append(wall_cell)
+	sample_cells.append(Vector2i(map_bounds.end.x - 1, map_bounds.end.y - 1))
 
-	for cell: Vector2i in test_cells:
-		assert(_GridCoordinateRules.world_to_cell(_GridCoordinateRules.cell_to_world(cell)) == cell, "64像素逻辑格自检：cell_to_world/world_to_cell 必须互逆：%s" % [cell])
-
-	var horizontal_spacing: float = _GridCoordinateRules.cell_to_world(Vector2i(1, 0)).x - _GridCoordinateRules.cell_to_world(Vector2i(0, 0)).x
-	var vertical_spacing: float = _GridCoordinateRules.cell_to_world(Vector2i(0, 1)).y - _GridCoordinateRules.cell_to_world(Vector2i(0, 0)).y
-	assert(horizontal_spacing == float(CELL_SIZE), "64像素逻辑格自检：横向相邻格中心间距应为 %d，实际为 %s" % [CELL_SIZE, horizontal_spacing])
-	assert(vertical_spacing == float(CELL_SIZE), "64像素逻辑格自检：纵向相邻格中心间距应为 %d，实际为 %s" % [CELL_SIZE, vertical_spacing])
+	# 构造持有只读采样快照的检查实例；用 preload 常量作最强静态类型注解，避开新 class_name 缓存未刷新问题。
+	var check: _GridCoordinateCheck = _GridCoordinateCheck.new(sample_cells)
+	# 无参实例 Callable：Callable(check, "run") 不使用 Callable.bind、lambda 或捕获。
+	var definition: SelfCheckCallable = SelfCheckCallable.new(
+			&"grid_coordinate",
+			"网格坐标规则自检",
+			Callable(check, "run")
+	)
+	_run_startup_self_check_via_runner(definition, &"startup_grid_coordinate")
 
 ## 执行基础单格镜面八方向反射纯函数自检。
 ## [br]本函数无参数、无返回值，仅由 _ready() 在调试构建中调用。
