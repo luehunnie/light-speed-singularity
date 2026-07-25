@@ -36,25 +36,6 @@ const INVALID_CELL: Vector2i = Vector2i(-999999, -999999)
 ## 仅用于 LightSegmentView 的占位块 color 与正式纹理 self_modulate 调制，不参与任何 RGB 玩法逻辑。
 const LIGHT_PATH_COLOR: Color = Color(1.0, 0.95, 0.2, 0.75)
 
-## 当前原型的最小运行状态。
-## SETUP 表示尚未开始本次运行；PULSE_ACTIVE 表示普通脉冲仍在统一显示窗口内；
-## MOVE_WINDOW 表示脉冲结束但未通关，未来可在此提交有限移动；COMPLETED 表示通关结果已成立。
-## 本枚举只服务当前关卡控制器，不是完整 RunStateController。
-enum RunState {
-	SETUP,
-	PULSE_ACTIVE,
-	MOVE_WINDOW,
-	COMPLETED,
-}
-
-## 当前鼠标拖拽来源。
-## NONE 表示没有拖拽；INVENTORY 表示从机关栏拿取但尚未扣库存；PLACED 表示拖动已放置机关且旧逻辑占用仍保留。
-enum DragSource {
-	NONE,
-	INVENTORY,
-	PLACED,
-}
-
 @export var emitter_cell: Vector2i = Vector2i(1, 3)
 @export var emitter_direction: Vector2i = Vector2i.RIGHT
 @export var map_bounds: Rect2i = Rect2i(0, 0, 16, 16)
@@ -96,6 +77,9 @@ const _InventorySlotViewScript: GDScript = preload("res://gameplay/ui/inventory_
 const _LightSegmentViewScript: GDScript = preload("res://gameplay/visuals/light_segment_view.gd")
 const _LightSegmentViewScene: PackedScene = preload("res://gameplay/visuals/light_segment_view.tscn")
 const _LightSegmentVisualProfile: GDScript = preload("res://gameplay/visuals/light_segment_visual_profile.gd")
+# 批次 4B-D2 抽离的运行交互共享类型契约（RunState / DragSource）；用 preload 路径引用以避开 MCP run_project 不重建全局类型缓存的问题，
+# 嵌套枚举一律通过本常量限定访问，不依赖全局 class_name 缓存。
+const _RuntimeInteractionTypes: GDScript = preload("res://gameplay/interaction/runtime_interaction_types.gd")
 # 默认光线路段视觉资源（四字段全空 → 运行时由 LightSegmentView 静默回退到黄色占位块）。
 # 以 Resource 类型 preload，调用 set_profile 时再 as 为 profile 脚本类型，避免常量类型解析对全局类型缓存的依赖。
 const _DefaultLightSegmentProfile: Resource = preload("res://assets/visual_profiles/basic_light_segment_visuals.tres")
@@ -103,7 +87,7 @@ var occupancy: _OccupancyRegistry = _OccupancyRegistry.new()
 
 ## 当前显式运行状态，是运行阶段的唯一事实来源。
 ## 配置锁定与脉冲活动状态都由它推导；完成目标事实由 is_level_completed 独立保存。
-var current_run_state: RunState = RunState.SETUP
+var current_run_state: _RuntimeInteractionTypes.RunState = _RuntimeInteractionTypes.RunState.SETUP
 
 ## 当前运行是否已经完成关卡。
 ## 与光路视觉生命周期分离；普通独立水晶和完成结果都保持到 R 重置。
@@ -127,7 +111,7 @@ var runtime_moves_used: int = 0
 var placed_tokens_by_id: Dictionary[StringName, Variant] = {}
 
 var _next_prototype_token_serial: int = 1
-var _drag_source: DragSource = DragSource.NONE
+var _drag_source: _RuntimeInteractionTypes.DragSource = _RuntimeInteractionTypes.DragSource.NONE
 var _drag_mechanism_id: StringName = &""
 var _drag_original_cell: Vector2i = INVALID_CELL
 var _drag_preview_cell: Vector2i = INVALID_CELL
@@ -278,36 +262,36 @@ func _run_single_cell_mirror_reflection_self_check() -> void:
 ## [br]状态变化：会临时直接设置 current_run_state 检查权限推导，结束前恢复原始 current_run_state；不修改库存、玩家布局、OccupancyRegistry、is_level_completed 或 pulse_generation。
 ## [br]边界条件：当前演示关卡可能首次发射直接完成，无法人工进入 MOVE_WINDOW；自检只检查纯状态规则，不改场景事实。can_edit_layout() 在非 COMPLETED 返回 true（粗粒度冻结门）；拿取/回收在所有非 COMPLETED 状态允许，移动按剩余次数受限，COMPLETED 冻结全部布局编辑。
 func _run_post_pulse_state_self_check() -> void:
-	var original_state: RunState = current_run_state
+	var original_state: _RuntimeInteractionTypes.RunState = current_run_state
 	var original_level_completed: bool = is_level_completed
 	var original_pulse_generation: int = pulse_generation
 
 	# 当前正常关卡可能无法自然进入 MOVE_WINDOW；这里只验证纯函数，不改变真实运行结果。
-	assert(_get_post_pulse_state(false) == RunState.MOVE_WINDOW, "运行状态自检：未完成脉冲结束后应进入 MOVE_WINDOW")
-	assert(_get_post_pulse_state(true) == RunState.COMPLETED, "运行状态自检：已完成脉冲结束后应进入 COMPLETED")
+	assert(_get_post_pulse_state(false) == _RuntimeInteractionTypes.RunState.MOVE_WINDOW, "运行状态自检：未完成脉冲结束后应进入 MOVE_WINDOW")
+	assert(_get_post_pulse_state(true) == _RuntimeInteractionTypes.RunState.COMPLETED, "运行状态自检：已完成脉冲结束后应进入 COMPLETED")
 
-	current_run_state = RunState.SETUP
+	current_run_state = _RuntimeInteractionTypes.RunState.SETUP
 	assert(can_edit_layout(), "运行状态自检：SETUP 应允许编辑布局")
 	assert(can_fire_light(), "运行状态自检：SETUP 应允许 Space 发射")
 	assert(can_edit_configuration(), "运行状态自检：SETUP 应允许编辑内部配置")
 	assert(not is_configuration_locked(), "运行状态自检：SETUP 不应锁定内部配置")
 	assert(not is_current_pulse_active(), "运行状态自检：SETUP 不应有活动脉冲")
 
-	current_run_state = RunState.PULSE_ACTIVE
+	current_run_state = _RuntimeInteractionTypes.RunState.PULSE_ACTIVE
 	assert(can_edit_layout(), "运行状态自检：PULSE_ACTIVE 应允许编辑布局")
 	assert(not can_fire_light(), "运行状态自检：PULSE_ACTIVE 应拒绝 Space 发射")
 	assert(not can_edit_configuration(), "运行状态自检：PULSE_ACTIVE 不允许编辑内部配置")
 	assert(is_configuration_locked(), "运行状态自检：PULSE_ACTIVE 应锁定内部配置")
 	assert(is_current_pulse_active(), "运行状态自检：PULSE_ACTIVE 应表示脉冲活动")
 
-	current_run_state = RunState.MOVE_WINDOW
+	current_run_state = _RuntimeInteractionTypes.RunState.MOVE_WINDOW
 	assert(can_edit_layout(), "运行状态自检：MOVE_WINDOW 应允许编辑布局")
 	assert(can_fire_light(), "运行状态自检：MOVE_WINDOW 应允许 Space 发射")
 	assert(not can_edit_configuration(), "运行状态自检：MOVE_WINDOW 不允许编辑内部配置")
 	assert(is_configuration_locked(), "运行状态自检：MOVE_WINDOW 应锁定内部配置")
 	assert(not is_current_pulse_active(), "运行状态自检：MOVE_WINDOW 不应有活动脉冲")
 
-	current_run_state = RunState.COMPLETED
+	current_run_state = _RuntimeInteractionTypes.RunState.COMPLETED
 	assert(not can_edit_layout(), "运行状态自检：COMPLETED 应禁止编辑布局")
 	assert(not can_fire_light(), "运行状态自检：COMPLETED 应拒绝 Space 发射")
 	assert(not can_edit_configuration(), "运行状态自检：COMPLETED 不允许编辑内部配置")
@@ -336,66 +320,66 @@ func _run_runtime_move_self_check() -> void:
 	var cell_b: Vector2i = Vector2i(11, 11)
 
 	# SETUP 移动不扣次。
-	assert(not _should_count_runtime_move(RunState.SETUP, cell_a, cell_b), "运行期移动自检：SETUP 跨格移动不应扣次")
+	assert(not _should_count_runtime_move(_RuntimeInteractionTypes.RunState.SETUP, cell_a, cell_b), "运行期移动自检：SETUP 跨格移动不应扣次")
 	# PULSE_ACTIVE 与 MOVE_WINDOW 跨格成功移动应扣次。
-	assert(_should_count_runtime_move(RunState.PULSE_ACTIVE, cell_a, cell_b), "运行期移动自检：PULSE_ACTIVE 跨格移动应扣次")
-	assert(_should_count_runtime_move(RunState.MOVE_WINDOW, cell_a, cell_b), "运行期移动自检：MOVE_WINDOW 跨格移动应扣次")
+	assert(_should_count_runtime_move(_RuntimeInteractionTypes.RunState.PULSE_ACTIVE, cell_a, cell_b), "运行期移动自检：PULSE_ACTIVE 跨格移动应扣次")
+	assert(_should_count_runtime_move(_RuntimeInteractionTypes.RunState.MOVE_WINDOW, cell_a, cell_b), "运行期移动自检：MOVE_WINDOW 跨格移动应扣次")
 	# COMPLETED 不允许移动，自然不扣次。
-	assert(not _should_count_runtime_move(RunState.COMPLETED, cell_a, cell_b), "运行期移动自检：COMPLETED 不应扣次")
+	assert(not _should_count_runtime_move(_RuntimeInteractionTypes.RunState.COMPLETED, cell_a, cell_b), "运行期移动自检：COMPLETED 不应扣次")
 	# 原格松手不扣次（即使处于运行期）。
-	assert(not _should_count_runtime_move(RunState.PULSE_ACTIVE, cell_a, cell_a), "运行期移动自检：PULSE_ACTIVE 原格松手不应扣次")
-	assert(not _should_count_runtime_move(RunState.MOVE_WINDOW, cell_a, cell_a), "运行期移动自检：MOVE_WINDOW 原格松手不应扣次")
+	assert(not _should_count_runtime_move(_RuntimeInteractionTypes.RunState.PULSE_ACTIVE, cell_a, cell_a), "运行期移动自检：PULSE_ACTIVE 原格松手不应扣次")
+	assert(not _should_count_runtime_move(_RuntimeInteractionTypes.RunState.MOVE_WINDOW, cell_a, cell_a), "运行期移动自检：MOVE_WINDOW 原格松手不应扣次")
 
 	# 拖起权限：所有非 COMPLETED 状态均允许拖起，与剩余次数分离。
 	# remaining=0 禁止提交跨格移动，但不禁止拖起，因为拖起还承担回收和取消。
-	assert(_can_begin_placed_drag(RunState.SETUP), "运行期移动自检：SETUP 应允许拖起已放置机关")
-	assert(_can_begin_placed_drag(RunState.PULSE_ACTIVE), "运行期移动自检：PULSE_ACTIVE（remaining=1 或 0）应允许拖起")
-	assert(_can_begin_placed_drag(RunState.MOVE_WINDOW), "运行期移动自检：MOVE_WINDOW（remaining=1 或 0）应允许拖起")
-	assert(not _can_begin_placed_drag(RunState.COMPLETED), "运行期移动自检：COMPLETED 不应允许拖起")
+	assert(_can_begin_placed_drag(_RuntimeInteractionTypes.RunState.SETUP), "运行期移动自检：SETUP 应允许拖起已放置机关")
+	assert(_can_begin_placed_drag(_RuntimeInteractionTypes.RunState.PULSE_ACTIVE), "运行期移动自检：PULSE_ACTIVE（remaining=1 或 0）应允许拖起")
+	assert(_can_begin_placed_drag(_RuntimeInteractionTypes.RunState.MOVE_WINDOW), "运行期移动自检：MOVE_WINDOW（remaining=1 或 0）应允许拖起")
+	assert(not _can_begin_placed_drag(_RuntimeInteractionTypes.RunState.COMPLETED), "运行期移动自检：COMPLETED 不应允许拖起")
 
 	# 库存拿取权限：所有非 COMPLETED 状态均允许从机关栏拿取（用户最终权限）。
-	assert(_can_take_from_inventory_for_state(RunState.SETUP), "运行期移动自检：SETUP 应允许从机关栏拿取")
-	assert(_can_take_from_inventory_for_state(RunState.PULSE_ACTIVE), "运行期移动自检：PULSE_ACTIVE 应允许从机关栏拿取")
-	assert(_can_take_from_inventory_for_state(RunState.MOVE_WINDOW), "运行期移动自检：MOVE_WINDOW 应允许从机关栏拿取")
-	assert(not _can_take_from_inventory_for_state(RunState.COMPLETED), "运行期移动自检：COMPLETED 禁止从机关栏拿取")
+	assert(_can_take_from_inventory_for_state(_RuntimeInteractionTypes.RunState.SETUP), "运行期移动自检：SETUP 应允许从机关栏拿取")
+	assert(_can_take_from_inventory_for_state(_RuntimeInteractionTypes.RunState.PULSE_ACTIVE), "运行期移动自检：PULSE_ACTIVE 应允许从机关栏拿取")
+	assert(_can_take_from_inventory_for_state(_RuntimeInteractionTypes.RunState.MOVE_WINDOW), "运行期移动自检：MOVE_WINDOW 应允许从机关栏拿取")
+	assert(not _can_take_from_inventory_for_state(_RuntimeInteractionTypes.RunState.COMPLETED), "运行期移动自检：COMPLETED 禁止从机关栏拿取")
 
 	# 回收权限：所有非 COMPLETED 状态均允许拖回机关栏回收（用户最终权限）。
-	assert(_can_recycle_placed_token_for_state(RunState.SETUP), "运行期移动自检：SETUP 应允许回收")
-	assert(_can_recycle_placed_token_for_state(RunState.PULSE_ACTIVE), "运行期移动自检：PULSE_ACTIVE 应允许回收")
-	assert(_can_recycle_placed_token_for_state(RunState.MOVE_WINDOW), "运行期移动自检：MOVE_WINDOW 应允许回收")
-	assert(not _can_recycle_placed_token_for_state(RunState.COMPLETED), "运行期移动自检：COMPLETED 禁止回收")
+	assert(_can_recycle_placed_token_for_state(_RuntimeInteractionTypes.RunState.SETUP), "运行期移动自检：SETUP 应允许回收")
+	assert(_can_recycle_placed_token_for_state(_RuntimeInteractionTypes.RunState.PULSE_ACTIVE), "运行期移动自检：PULSE_ACTIVE 应允许回收")
+	assert(_can_recycle_placed_token_for_state(_RuntimeInteractionTypes.RunState.MOVE_WINDOW), "运行期移动自检：MOVE_WINDOW 应允许回收")
+	assert(not _can_recycle_placed_token_for_state(_RuntimeInteractionTypes.RunState.COMPLETED), "运行期移动自检：COMPLETED 禁止回收")
 
 	# 提交权限：提交前第二次校验的纯判断。所有状态原格提交均为 false。
-	assert(_can_commit_placed_move(RunState.SETUP, 0, cell_a, cell_b), "运行期移动自检：SETUP 跨格应允许提交")
-	assert(not _can_commit_placed_move(RunState.SETUP, 0, cell_a, cell_a), "运行期移动自检：SETUP 原格不应允许提交")
-	assert(_can_commit_placed_move(RunState.PULSE_ACTIVE, 1, cell_a, cell_b), "运行期移动自检：PULSE_ACTIVE 跨格且 remaining=1 应允许提交")
-	assert(not _can_commit_placed_move(RunState.PULSE_ACTIVE, 0, cell_a, cell_b), "运行期移动自检：PULSE_ACTIVE 跨格且 remaining=0 不应允许提交")
-	assert(not _can_commit_placed_move(RunState.PULSE_ACTIVE, 1, cell_a, cell_a), "运行期移动自检：PULSE_ACTIVE 原格不应允许提交")
-	assert(_can_commit_placed_move(RunState.MOVE_WINDOW, 1, cell_a, cell_b), "运行期移动自检：MOVE_WINDOW 跨格且 remaining=1 应允许提交")
-	assert(not _can_commit_placed_move(RunState.MOVE_WINDOW, 0, cell_a, cell_b), "运行期移动自检：MOVE_WINDOW 跨格且 remaining=0 不应允许提交")
-	assert(not _can_commit_placed_move(RunState.COMPLETED, 1, cell_a, cell_b), "运行期移动自检：COMPLETED 跨格不应允许提交")
-	assert(not _can_commit_placed_move(RunState.COMPLETED, 1, cell_a, cell_a), "运行期移动自检：COMPLETED 原格不应允许提交")
+	assert(_can_commit_placed_move(_RuntimeInteractionTypes.RunState.SETUP, 0, cell_a, cell_b), "运行期移动自检：SETUP 跨格应允许提交")
+	assert(not _can_commit_placed_move(_RuntimeInteractionTypes.RunState.SETUP, 0, cell_a, cell_a), "运行期移动自检：SETUP 原格不应允许提交")
+	assert(_can_commit_placed_move(_RuntimeInteractionTypes.RunState.PULSE_ACTIVE, 1, cell_a, cell_b), "运行期移动自检：PULSE_ACTIVE 跨格且 remaining=1 应允许提交")
+	assert(not _can_commit_placed_move(_RuntimeInteractionTypes.RunState.PULSE_ACTIVE, 0, cell_a, cell_b), "运行期移动自检：PULSE_ACTIVE 跨格且 remaining=0 不应允许提交")
+	assert(not _can_commit_placed_move(_RuntimeInteractionTypes.RunState.PULSE_ACTIVE, 1, cell_a, cell_a), "运行期移动自检：PULSE_ACTIVE 原格不应允许提交")
+	assert(_can_commit_placed_move(_RuntimeInteractionTypes.RunState.MOVE_WINDOW, 1, cell_a, cell_b), "运行期移动自检：MOVE_WINDOW 跨格且 remaining=1 应允许提交")
+	assert(not _can_commit_placed_move(_RuntimeInteractionTypes.RunState.MOVE_WINDOW, 0, cell_a, cell_b), "运行期移动自检：MOVE_WINDOW 跨格且 remaining=0 不应允许提交")
+	assert(not _can_commit_placed_move(_RuntimeInteractionTypes.RunState.COMPLETED, 1, cell_a, cell_b), "运行期移动自检：COMPLETED 跨格不应允许提交")
+	assert(not _can_commit_placed_move(_RuntimeInteractionTypes.RunState.COMPLETED, 1, cell_a, cell_a), "运行期移动自检：COMPLETED 原格不应允许提交")
 
 	# 世界格松手预览合法性：同时反映空间合法性与当前松手提交权限（纯判断，无副作用）。
 	# INVENTORY 来源：只看拿取/首次放置权限与空间合法性，不读 runtime_move_limit。
-	assert(_is_world_drop_preview_valid(DragSource.INVENTORY, RunState.SETUP, 0, INVALID_CELL, cell_b, true), "运行期移动自检：INVENTORY SETUP 空间合法应预览合法")
-	assert(_is_world_drop_preview_valid(DragSource.INVENTORY, RunState.PULSE_ACTIVE, 0, INVALID_CELL, cell_b, true), "运行期移动自检：INVENTORY PULSE_ACTIVE 空间合法应预览合法")
-	assert(_is_world_drop_preview_valid(DragSource.INVENTORY, RunState.MOVE_WINDOW, 0, INVALID_CELL, cell_b, true), "运行期移动自检：INVENTORY MOVE_WINDOW 空间合法应预览合法")
-	assert(not _is_world_drop_preview_valid(DragSource.INVENTORY, RunState.COMPLETED, 1, INVALID_CELL, cell_b, true), "运行期移动自检：INVENTORY COMPLETED 应预览非法")
-	assert(not _is_world_drop_preview_valid(DragSource.INVENTORY, RunState.SETUP, 0, INVALID_CELL, cell_b, false), "运行期移动自检：INVENTORY 空间非法应预览非法")
+	assert(_is_world_drop_preview_valid(_RuntimeInteractionTypes.DragSource.INVENTORY, _RuntimeInteractionTypes.RunState.SETUP, 0, INVALID_CELL, cell_b, true), "运行期移动自检：INVENTORY SETUP 空间合法应预览合法")
+	assert(_is_world_drop_preview_valid(_RuntimeInteractionTypes.DragSource.INVENTORY, _RuntimeInteractionTypes.RunState.PULSE_ACTIVE, 0, INVALID_CELL, cell_b, true), "运行期移动自检：INVENTORY PULSE_ACTIVE 空间合法应预览合法")
+	assert(_is_world_drop_preview_valid(_RuntimeInteractionTypes.DragSource.INVENTORY, _RuntimeInteractionTypes.RunState.MOVE_WINDOW, 0, INVALID_CELL, cell_b, true), "运行期移动自检：INVENTORY MOVE_WINDOW 空间合法应预览合法")
+	assert(not _is_world_drop_preview_valid(_RuntimeInteractionTypes.DragSource.INVENTORY, _RuntimeInteractionTypes.RunState.COMPLETED, 1, INVALID_CELL, cell_b, true), "运行期移动自检：INVENTORY COMPLETED 应预览非法")
+	assert(not _is_world_drop_preview_valid(_RuntimeInteractionTypes.DragSource.INVENTORY, _RuntimeInteractionTypes.RunState.SETUP, 0, INVALID_CELL, cell_b, false), "运行期移动自检：INVENTORY 空间非法应预览非法")
 	# PLACED 原格：安全取消位置，空间合法即合法（即使 remaining=0）。
-	assert(_is_world_drop_preview_valid(DragSource.PLACED, RunState.SETUP, 0, cell_a, cell_a, true), "运行期移动自检：PLACED SETUP 原格应预览合法")
-	assert(_is_world_drop_preview_valid(DragSource.PLACED, RunState.PULSE_ACTIVE, 0, cell_a, cell_a, true), "运行期移动自检：PLACED PULSE_ACTIVE remaining=0 原格仍应预览合法")
-	assert(_is_world_drop_preview_valid(DragSource.PLACED, RunState.MOVE_WINDOW, 0, cell_a, cell_a, true), "运行期移动自检：PLACED MOVE_WINDOW remaining=0 原格仍应预览合法")
-	assert(not _is_world_drop_preview_valid(DragSource.PLACED, RunState.COMPLETED, 1, cell_a, cell_a, true), "运行期移动自检：PLACED COMPLETED 原格应预览非法")
+	assert(_is_world_drop_preview_valid(_RuntimeInteractionTypes.DragSource.PLACED, _RuntimeInteractionTypes.RunState.SETUP, 0, cell_a, cell_a, true), "运行期移动自检：PLACED SETUP 原格应预览合法")
+	assert(_is_world_drop_preview_valid(_RuntimeInteractionTypes.DragSource.PLACED, _RuntimeInteractionTypes.RunState.PULSE_ACTIVE, 0, cell_a, cell_a, true), "运行期移动自检：PLACED PULSE_ACTIVE remaining=0 原格仍应预览合法")
+	assert(_is_world_drop_preview_valid(_RuntimeInteractionTypes.DragSource.PLACED, _RuntimeInteractionTypes.RunState.MOVE_WINDOW, 0, cell_a, cell_a, true), "运行期移动自检：PLACED MOVE_WINDOW remaining=0 原格仍应预览合法")
+	assert(not _is_world_drop_preview_valid(_RuntimeInteractionTypes.DragSource.PLACED, _RuntimeInteractionTypes.RunState.COMPLETED, 1, cell_a, cell_a, true), "运行期移动自检：PLACED COMPLETED 原格应预览非法")
 	# PLACED 跨格：需同时空间合法且 _can_commit_placed_move 通过。
-	assert(_is_world_drop_preview_valid(DragSource.PLACED, RunState.SETUP, 0, cell_a, cell_b, true), "运行期移动自检：PLACED SETUP remaining=0 跨格空间合法应预览合法")
-	assert(_is_world_drop_preview_valid(DragSource.PLACED, RunState.PULSE_ACTIVE, 1, cell_a, cell_b, true), "运行期移动自检：PLACED PULSE_ACTIVE remaining=1 跨格空间合法应预览合法")
-	assert(not _is_world_drop_preview_valid(DragSource.PLACED, RunState.PULSE_ACTIVE, 0, cell_a, cell_b, true), "运行期移动自检：PLACED PULSE_ACTIVE remaining=0 跨格空间合法应预览非法")
-	assert(_is_world_drop_preview_valid(DragSource.PLACED, RunState.MOVE_WINDOW, 1, cell_a, cell_b, true), "运行期移动自检：PLACED MOVE_WINDOW remaining=1 跨格空间合法应预览合法")
-	assert(not _is_world_drop_preview_valid(DragSource.PLACED, RunState.MOVE_WINDOW, 0, cell_a, cell_b, true), "运行期移动自检：PLACED MOVE_WINDOW remaining=0 跨格空间合法应预览非法")
-	assert(not _is_world_drop_preview_valid(DragSource.PLACED, RunState.COMPLETED, 1, cell_a, cell_b, true), "运行期移动自检：PLACED COMPLETED 跨格应预览非法")
-	assert(not _is_world_drop_preview_valid(DragSource.PLACED, RunState.PULSE_ACTIVE, 1, cell_a, cell_b, false), "运行期移动自检：PLACED 空间非法应预览非法")
+	assert(_is_world_drop_preview_valid(_RuntimeInteractionTypes.DragSource.PLACED, _RuntimeInteractionTypes.RunState.SETUP, 0, cell_a, cell_b, true), "运行期移动自检：PLACED SETUP remaining=0 跨格空间合法应预览合法")
+	assert(_is_world_drop_preview_valid(_RuntimeInteractionTypes.DragSource.PLACED, _RuntimeInteractionTypes.RunState.PULSE_ACTIVE, 1, cell_a, cell_b, true), "运行期移动自检：PLACED PULSE_ACTIVE remaining=1 跨格空间合法应预览合法")
+	assert(not _is_world_drop_preview_valid(_RuntimeInteractionTypes.DragSource.PLACED, _RuntimeInteractionTypes.RunState.PULSE_ACTIVE, 0, cell_a, cell_b, true), "运行期移动自检：PLACED PULSE_ACTIVE remaining=0 跨格空间合法应预览非法")
+	assert(_is_world_drop_preview_valid(_RuntimeInteractionTypes.DragSource.PLACED, _RuntimeInteractionTypes.RunState.MOVE_WINDOW, 1, cell_a, cell_b, true), "运行期移动自检：PLACED MOVE_WINDOW remaining=1 跨格空间合法应预览合法")
+	assert(not _is_world_drop_preview_valid(_RuntimeInteractionTypes.DragSource.PLACED, _RuntimeInteractionTypes.RunState.MOVE_WINDOW, 0, cell_a, cell_b, true), "运行期移动自检：PLACED MOVE_WINDOW remaining=0 跨格空间合法应预览非法")
+	assert(not _is_world_drop_preview_valid(_RuntimeInteractionTypes.DragSource.PLACED, _RuntimeInteractionTypes.RunState.COMPLETED, 1, cell_a, cell_b, true), "运行期移动自检：PLACED COMPLETED 跨格应预览非法")
+	assert(not _is_world_drop_preview_valid(_RuntimeInteractionTypes.DragSource.PLACED, _RuntimeInteractionTypes.RunState.PULSE_ACTIVE, 1, cell_a, cell_b, false), "运行期移动自检：PLACED 空间非法应预览非法")
 
 
 ## 处理关卡输入动作和鼠标拖拽事件。
@@ -427,7 +411,7 @@ func _input(event: InputEvent) -> void:
 ## [br]返回 true 表示 SETUP 或 MOVE_WINDOW 可以发射；返回 false 表示 PULSE_ACTIVE 或 COMPLETED 必须拒绝 Space。
 ## [br]本函数无副作用；边界条件：完成标签已显示但脉冲尚未视觉结束时，状态仍是 PULSE_ACTIVE，因此重复 Space 仍被拒绝。
 func can_fire_light() -> bool:
-	return current_run_state == RunState.SETUP or current_run_state == RunState.MOVE_WINDOW
+	return current_run_state == _RuntimeInteractionTypes.RunState.SETUP or current_run_state == _RuntimeInteractionTypes.RunState.MOVE_WINDOW
 
 
 ## 查询当前是否处于非冻结状态（粗粒度冻结门）。
@@ -435,7 +419,7 @@ func can_fire_light() -> bool:
 ## [br]返回 true 表示当前不是 COMPLETED（关卡未冻结）；返回 false 表示 COMPLETED 已冻结整个关卡交互。
 ## [br]本函数无副作用；边界条件：本函数只是粗粒度冻结门（非 COMPLETED 返回 true），不是拿取、移动、回收的唯一守卫。拿取/回收在所有非 COMPLETED 状态允许（_can_take_from_inventory_for_state / _can_recycle_placed_token_for_state），拖起已放置机关由 _can_begin_placed_drag 限制（所有非 COMPLETED 状态允许，与剩余次数分离），跨格提交由 _can_commit_placed_move 按剩余次数限制（SETUP 不限，PULSE_ACTIVE/MOVE_WINDOW 需 remaining>0）。PULSE_ACTIVE 中的布局变化只影响后续再次发射，不回溯当前脉冲。
 func can_edit_layout() -> bool:
-	return current_run_state != RunState.COMPLETED
+	return current_run_state != _RuntimeInteractionTypes.RunState.COMPLETED
 
 
 ## 查询当前是否允许人工编辑内部配置。
@@ -443,7 +427,7 @@ func can_edit_layout() -> bool:
 ## [br]返回 true 仅表示当前处于 SETUP；其他状态全部返回 false。
 ## [br]本函数无副作用；边界条件：本权限只用于主发射源方向、机关内部模式等内部配置，不代表布局编辑权限，不得用于控制拖拽放置、移动或回收。
 func can_edit_configuration() -> bool:
-	return current_run_state == RunState.SETUP
+	return current_run_state == _RuntimeInteractionTypes.RunState.SETUP
 
 
 ## 查询当前人工内部配置是否已锁定。
@@ -451,7 +435,7 @@ func can_edit_configuration() -> bool:
 ## [br]返回 true 表示当前不在 SETUP，主发射源方向、机关内部模式等内部配置已由运行阶段状态推导为锁定。
 ## [br]本函数无副作用；边界条件：配置锁定不等于布局锁定，PULSE_ACTIVE 和 MOVE_WINDOW 仍可编辑布局；COMPLETED 因关卡冻结而禁止一切玩家编辑。
 func is_configuration_locked() -> bool:
-	return current_run_state != RunState.SETUP
+	return current_run_state != _RuntimeInteractionTypes.RunState.SETUP
 
 
 ## 查询当前是否处于普通脉冲活动窗口。
@@ -459,7 +443,7 @@ func is_configuration_locked() -> bool:
 ## [br]返回 true 表示 current_run_state 为 PULSE_ACTIVE；其他状态返回 false。
 ## [br]本函数无副作用；边界条件：通关目标可在 PULSE_ACTIVE 期间已成立，脉冲活动仍以运行状态为准。
 func is_current_pulse_active() -> bool:
-	return current_run_state == RunState.PULSE_ACTIVE
+	return current_run_state == _RuntimeInteractionTypes.RunState.PULSE_ACTIVE
 
 
 ## 查询当前是否处于运行期移动状态。
@@ -467,7 +451,7 @@ func is_current_pulse_active() -> bool:
 ## [br]返回 true 表示当前处于 PULSE_ACTIVE 或 MOVE_WINDOW；SETUP 与 COMPLETED 返回 false。
 ## [br]本函数无副作用；边界条件：运行期移动次数只在 PULSE_ACTIVE 和 MOVE_WINDOW 中扣除，SETUP 移动不计次，COMPLETED 冻结全部布局交互。
 func is_runtime_move_state() -> bool:
-	return current_run_state == RunState.PULSE_ACTIVE or current_run_state == RunState.MOVE_WINDOW
+	return current_run_state == _RuntimeInteractionTypes.RunState.PULSE_ACTIVE or current_run_state == _RuntimeInteractionTypes.RunState.MOVE_WINDOW
 
 
 ## 计算运行期剩余移动次数（纯函数，无副作用）。
@@ -500,8 +484,8 @@ func has_runtime_moves_remaining() -> bool:
 ## [br]返回 true 仅当处于运行期状态（PULSE_ACTIVE 或 MOVE_WINDOW）且 from_cell 与 to_cell 不同。
 ## [br]边界条件：目标是否合法、占用原子更新是否成功等运行期事实由调用方在调用前确认；本函数只负责"运行期状态 + 跨格"这一扣次前提。
 ## SETUP 跨格移动返回 false（不扣次），COMPLETED 返回 false，原格松手返回 false。
-static func _should_count_runtime_move(run_state: RunState, from_cell: Vector2i, to_cell: Vector2i) -> bool:
-	if run_state != RunState.PULSE_ACTIVE and run_state != RunState.MOVE_WINDOW:
+static func _should_count_runtime_move(run_state: _RuntimeInteractionTypes.RunState, from_cell: Vector2i, to_cell: Vector2i) -> bool:
+	if run_state != _RuntimeInteractionTypes.RunState.PULSE_ACTIVE and run_state != _RuntimeInteractionTypes.RunState.MOVE_WINDOW:
 		return false
 	if to_cell == from_cell:
 		return false
@@ -512,9 +496,9 @@ static func _should_count_runtime_move(run_state: RunState, from_cell: Vector2i,
 ## [br]run_state 是当前运行状态。
 ## [br]返回 true 表示当前不是 COMPLETED：SETUP、PULSE_ACTIVE、MOVE_WINDOW 均允许拖起；COMPLETED 与未知值返回 false。
 ## [br]边界条件：拖起权限与跨格移动提交权限分离——本函数不再以剩余次数拒绝拖起。remaining=0 禁止提交跨格移动（由 _can_commit_placed_move 负责），但不禁止拖起，因为拖起还承担回收和取消。从机关栏拿取与回收另由专用函数判断。
-static func _can_begin_placed_drag(run_state: RunState) -> bool:
+static func _can_begin_placed_drag(run_state: _RuntimeInteractionTypes.RunState) -> bool:
 	match run_state:
-		RunState.SETUP, RunState.PULSE_ACTIVE, RunState.MOVE_WINDOW:
+		_RuntimeInteractionTypes.RunState.SETUP, _RuntimeInteractionTypes.RunState.PULSE_ACTIVE, _RuntimeInteractionTypes.RunState.MOVE_WINDOW:
 			return true
 		_:
 			return false
@@ -524,9 +508,9 @@ static func _can_begin_placed_drag(run_state: RunState) -> bool:
 ## [br]run_state 是当前运行状态。
 ## [br]返回 true 表示当前不是 COMPLETED：SETUP、PULSE_ACTIVE、MOVE_WINDOW 均允许拿取；COMPLETED 与未知值返回 false。
 ## [br]边界条件：用户最终权限允许运行期拿取与首次放置；拿取/首次放置不消耗 runtime_moves_used（直接移动次数只限制已有机关从世界格 A 直接移动到世界格 B）。运行期回收后重新放置不消耗直接移动次数属已知临时边界；单纯 MoveRequest 不能自动解决该问题，后续需要机关身份跨库存保留或运行期迁移事务规则，本阶段如实记录，不改变用户确认的拿取和回收权限。
-static func _can_take_from_inventory_for_state(run_state: RunState) -> bool:
+static func _can_take_from_inventory_for_state(run_state: _RuntimeInteractionTypes.RunState) -> bool:
 	match run_state:
-		RunState.SETUP, RunState.PULSE_ACTIVE, RunState.MOVE_WINDOW:
+		_RuntimeInteractionTypes.RunState.SETUP, _RuntimeInteractionTypes.RunState.PULSE_ACTIVE, _RuntimeInteractionTypes.RunState.MOVE_WINDOW:
 			return true
 		_:
 			return false
@@ -536,9 +520,9 @@ static func _can_take_from_inventory_for_state(run_state: RunState) -> bool:
 ## [br]run_state 是当前运行状态。
 ## [br]返回 true 表示当前不是 COMPLETED：SETUP、PULSE_ACTIVE、MOVE_WINDOW 均允许回收；COMPLETED 与未知值返回 false。
 ## [br]边界条件：用户最终权限允许运行期回收；回收不消耗 runtime_moves_used。运行期回收后重新放置不消耗直接移动次数属已知临时边界；单纯 MoveRequest 不能自动解决该问题，后续需要机关身份跨库存保留或运行期迁移事务规则，本阶段如实记录，不改变用户确认的拿取和回收权限。
-static func _can_recycle_placed_token_for_state(run_state: RunState) -> bool:
+static func _can_recycle_placed_token_for_state(run_state: _RuntimeInteractionTypes.RunState) -> bool:
 	match run_state:
-		RunState.SETUP, RunState.PULSE_ACTIVE, RunState.MOVE_WINDOW:
+		_RuntimeInteractionTypes.RunState.SETUP, _RuntimeInteractionTypes.RunState.PULSE_ACTIVE, _RuntimeInteractionTypes.RunState.MOVE_WINDOW:
 			return true
 		_:
 			return false
@@ -548,13 +532,13 @@ static func _can_recycle_placed_token_for_state(run_state: RunState) -> bool:
 ## [br]run_state 是提交时的运行状态，moves_remaining 是提交时剩余运行期移动次数，from_cell/to_cell 是原始格与目标格。
 ## [br]返回 true 仅当 from_cell != to_cell，且状态为 SETUP，或处于 PULSE_ACTIVE/MOVE_WINDOW 且 moves_remaining > 0；COMPLETED 与未知值返回 false。
 ## [br]边界条件：本函数是移动提交前的第二次校验核心；目标格合法性、占用原子更新等运行期事实由调用方在调用前确认。原格松手永远返回 false。
-static func _can_commit_placed_move(run_state: RunState, moves_remaining: int, from_cell: Vector2i, to_cell: Vector2i) -> bool:
+static func _can_commit_placed_move(run_state: _RuntimeInteractionTypes.RunState, moves_remaining: int, from_cell: Vector2i, to_cell: Vector2i) -> bool:
 	if to_cell == from_cell:
 		return false
 	match run_state:
-		RunState.SETUP:
+		_RuntimeInteractionTypes.RunState.SETUP:
 			return true
-		RunState.PULSE_ACTIVE, RunState.MOVE_WINDOW:
+		_RuntimeInteractionTypes.RunState.PULSE_ACTIVE, _RuntimeInteractionTypes.RunState.MOVE_WINDOW:
 			return moves_remaining > 0
 		_:
 			return false
@@ -566,8 +550,8 @@ static func _can_commit_placed_move(run_state: RunState, moves_remaining: int, f
 ## [br]返回 true 表示该次世界格松手预览应显示合法颜色；返回 false 表示应显示非法颜色。
 ## [br]边界条件：本函数只用于视觉预览，不替代正式提交的二次校验。INVENTORY 来源只看拿取/首次放置权限与空间合法性，不读 runtime_move_limit。PLACED 来源：原格视为安全取消位置（空间合法即合法）；跨格需同时空间合法且 _can_commit_placed_move 通过。COMPLETED/未知来源返回 false。本函数不读取或修改任何实例状态、不写 OccupancyRegistry、不改库存、不移动节点、不扣次数。
 static func _is_world_drop_preview_valid(
-	drag_source: DragSource,
-	run_state: RunState,
+	drag_source: _RuntimeInteractionTypes.DragSource,
+	run_state: _RuntimeInteractionTypes.RunState,
 	moves_remaining: int,
 	from_cell: Vector2i,
 	to_cell: Vector2i,
@@ -576,9 +560,9 @@ static func _is_world_drop_preview_valid(
 	if not spatially_valid:
 		return false
 	match drag_source:
-		DragSource.INVENTORY:
+		_RuntimeInteractionTypes.DragSource.INVENTORY:
 			return _can_take_from_inventory_for_state(run_state)
-		DragSource.PLACED:
+		_RuntimeInteractionTypes.DragSource.PLACED:
 			if not _can_begin_placed_drag(run_state):
 				return false
 			# 原格是安全取消位置，不是跨格移动；空间合法即显示可接受颜色。
@@ -602,12 +586,12 @@ func _update_runtime_move_ui() -> void:
 ## [br]无返回值；副作用是更新 current_run_state，并在进入 COMPLETED 前取消未完成拖拽，随后刷新机关栏 UI。
 ## [br]状态变化：只改变 current_run_state；配置锁定、布局编辑权限和脉冲活动都由状态查询函数推导，is_level_completed 由目标完成流程单独维护。
 ## [br]边界条件：必须允许 PULSE_ACTIVE 且 is_level_completed 为 true 的中间状态，表示通关条件已成立但脉冲视觉尚未结束；COMPLETED 会冻结全部玩家布局交互，因此若脉冲结束瞬间仍在拖拽，先安全取消该拖拽，避免冻结后提交布局变化。PULSE_ACTIVE 转入 MOVE_WINDOW 时已开始的合法已放置机关拖拽可继续，但正式提交时仍按 MOVE_WINDOW 与当前剩余次数由 _commit_placed_drag_or_cancel() 重新校验。
-func _set_run_state(new_state: RunState) -> void:
-	if new_state < RunState.SETUP or new_state > RunState.COMPLETED:
+func _set_run_state(new_state: _RuntimeInteractionTypes.RunState) -> void:
+	if new_state < _RuntimeInteractionTypes.RunState.SETUP or new_state > _RuntimeInteractionTypes.RunState.COMPLETED:
 		push_error("CoreLoopPrototype: 非法运行状态：%s" % [new_state])
 		return
 
-	if new_state == RunState.COMPLETED and is_dragging():
+	if new_state == _RuntimeInteractionTypes.RunState.COMPLETED and is_dragging():
 		# COMPLETED 是唯一冻结全部布局交互的状态；进入冻结前取消未完成拖拽，防止冻结后鼠标松开仍提交移动或回收。
 		_cancel_current_drag()
 
@@ -620,15 +604,15 @@ func _set_run_state(new_state: RunState) -> void:
 ## [br]返回 COMPLETED 表示已完成，返回 MOVE_WINDOW 表示未完成且可等待未来移动或再次发射。
 ## [br]本函数无副作用，不读取或修改真实场景状态。
 ## [br]边界条件：只负责 PULSE_ACTIVE 结束后的二选一状态，不处理 R、非法发射、拖拽或移动次数。
-func _get_post_pulse_state(level_completed: bool) -> RunState:
-	return RunState.COMPLETED if level_completed else RunState.MOVE_WINDOW
+func _get_post_pulse_state(level_completed: bool) -> _RuntimeInteractionTypes.RunState:
+	return _RuntimeInteractionTypes.RunState.COMPLETED if level_completed else _RuntimeInteractionTypes.RunState.MOVE_WINDOW
 
 
 ## 发射一次核心闭环原型最小脉冲光线。
 ## [br]本函数无参数、无返回值。
 ## [br]副作用：SETUP 或 MOVE_WINDOW 且未拖拽时，清理上一轮光路视觉，按发射瞬间的当前布局计算完整路径，
 ## 光进入镜面格后先显示路径和点亮同格水晶，再通过 OccupancyRegistry 找到 SingleCellMirror 并使用其 orientation 更新传播方向，随后启动约 1 秒的光路视觉保持流程。
-## [br]状态变化：开始时通过 _set_run_state(RunState.PULSE_ACTIVE) 进入脉冲活动并递增 pulse_generation；
+## [br]状态变化：开始时通过 _set_run_state(_RuntimeInteractionTypes.RunState.PULSE_ACTIVE) 进入脉冲活动并递增 pulse_generation；
 ## 若全部必需水晶被本次脉冲满足，update_completion_state() 会先设置 is_level_completed，current_run_state 等脉冲视觉结束后再进入 COMPLETED。
 ## [br]失败条件：方向非法时报告错误并不创建脉冲；拖拽中、PULSE_ACTIVE 或 COMPLETED 中忽略 Space；镜面反射返回 Vector2i.ZERO 时安全停止传播。
 ## [br]边界条件：遇到地图边界、墙体或 MAX_PROPAGATION_STEPS 上限时停止传播；未知机关本轮保持无光学效果且不得崩溃。PULSE_ACTIVE 期间玩家可拿取/放置/回收，且可按剩余次数移动已放置机关，但不会重新计算或回溯修改这一次已经完成逻辑计算的光路结果。
@@ -650,7 +634,7 @@ func fire_light() -> void:
 	_prepare_for_new_pulse()
 
 	# 脉冲开始：PULSE_ACTIVE 同时表示配置已锁定且存在活动脉冲。
-	_set_run_state(RunState.PULSE_ACTIVE)
+	_set_run_state(_RuntimeInteractionTypes.RunState.PULSE_ACTIVE)
 	pulse_generation += 1
 	var current_pulse_generation: int = pulse_generation
 
@@ -741,18 +725,18 @@ func _finish_current_pulse(expected_generation: int) -> void:
 	clear_light_path()
 
 	# 脉冲结束后的目标状态：完成则进入 COMPLETED，否则进入 MOVE_WINDOW。
-	var next_state: RunState = _get_post_pulse_state(is_level_completed)
+	var next_state: _RuntimeInteractionTypes.RunState = _get_post_pulse_state(is_level_completed)
 	_set_run_state(next_state)
 
 	# 完成结果保留：路径消失后，已经成立的关卡完成标签继续显示。
-	if current_run_state == RunState.COMPLETED:
+	if current_run_state == _RuntimeInteractionTypes.RunState.COMPLETED:
 		complete_label.visible = true
 
 
 ## 重置本次原型关卡到完整初始运行状态。
 ## [br]本函数无参数、无返回值。
 ## [br]副作用：最先安全取消当前拖拽；随后递增 pulse_generation 使旧脉冲等待回调失效；清除当前光路视觉、普通独立水晶点亮状态、完成状态和完成标签；逐个注销并删除可确认清理的玩家 PlaceableToken；按未能清理的玩家机关数量恢复机关栏库存；刷新机关栏与运行期移动 UI。
-## [br]状态变化：is_level_completed 设为 false，runtime_moves_used 清零，current_run_state 通过 _set_run_state(RunState.SETUP) 返回 SETUP；正常情况下 placed_tokens_by_id 清空且 prototype_token_remaining 恢复为 PROTOTYPE_TOKEN_TOTAL。
+## [br]状态变化：is_level_completed 设为 false，runtime_moves_used 清零，current_run_state 通过 _set_run_state(_RuntimeInteractionTypes.RunState.SETUP) 返回 SETUP；正常情况下 placed_tokens_by_id 清空且 prototype_token_remaining 恢复为 PROTOTYPE_TOKEN_TOTAL。
 ## [br]边界条件：reset_runtime() 是 R 和脚本直接调用的唯一完整重置入口，不依赖 _input 预先取消拖拽；拖动已放置机关时先恢复正式节点原格和可见性，再统一注销占用并删除节点，避免隐藏节点遗留；只清理玩家放置机关，不调用 occupancy.clear()，不删除发射器、墙体、水晶或未来静态/预置机关。正常情况下 R 将全部玩家机关退回库存；若检测到 OccupancyRegistry 残留且无法通过公共 unregister 接口确认清理，相关机关会保留在场上且不会重复退回库存，以避免制造重复机关。
 func reset_runtime() -> void:
 	# R完整重置首先取消拖拽：库存预览只删除预览；已放置机关先恢复旧格、旧世界位置和可见性，随后再由玩家机关清理流程统一删除。
@@ -772,7 +756,7 @@ func reset_runtime() -> void:
 	if not all_player_tokens_returned:
 		push_error("CoreLoopPrototype: R重置玩家机关清理未完全成功，部分机关已保留在场上且未退回库存。")
 
-	_set_run_state(RunState.SETUP)
+	_set_run_state(_RuntimeInteractionTypes.RunState.SETUP)
 	_update_runtime_move_ui()
 
 	if OS.is_debug_build():
@@ -1093,7 +1077,7 @@ func _try_begin_drag() -> void:
 ## [br]边界条件：从库存拖拽但不提前扣数量；若之后非法松手或松回机关栏，库存和 OccupancyRegistry 都不变化。
 func _begin_inventory_drag() -> void:
 	var start_cell: Vector2i = world_to_cell(get_global_mouse_position())
-	_drag_source = DragSource.INVENTORY
+	_drag_source = _RuntimeInteractionTypes.DragSource.INVENTORY
 	_drag_mechanism_id = &""
 	_drag_original_cell = INVALID_CELL
 	_drag_preview_cell = start_cell
@@ -1123,7 +1107,7 @@ func _begin_placed_drag(mechanism_id: StringName, original_cell: Vector2i) -> bo
 	if token.cell != original_cell:
 		push_error("CoreLoopPrototype: 拖起失败，机关 %s cell 失配：参数=%s，节点=%s。" % [mechanism_id, original_cell, token.cell])
 		return false
-	_drag_source = DragSource.PLACED
+	_drag_source = _RuntimeInteractionTypes.DragSource.PLACED
 	_drag_mechanism_id = mechanism_id
 	_drag_original_cell = original_cell
 	_drag_preview_cell = original_cell
@@ -1174,14 +1158,14 @@ func _finish_drag_at_mouse() -> void:
 	var viewport_mouse_position: Vector2 = get_viewport().get_mouse_position()
 	var is_released_over_inventory: bool = _is_mouse_over_inventory_bar(viewport_mouse_position)
 
-	if _drag_source == DragSource.INVENTORY:
+	if _drag_source == _RuntimeInteractionTypes.DragSource.INVENTORY:
 		if is_released_over_inventory:
 			_cancel_current_drag()
 			return
 		_commit_inventory_drag_or_cancel()
 		return
 
-	if _drag_source == DragSource.PLACED:
+	if _drag_source == _RuntimeInteractionTypes.DragSource.PLACED:
 		if is_released_over_inventory:
 			# 回收在所有非 COMPLETED 状态允许（用户最终权限）；COMPLETED 释放到机关栏改为安全取消，保留原占用与原位置，不增库存、不扣次数。
 			if _can_recycle_placed_token_for_state(current_run_state):
@@ -1303,7 +1287,7 @@ func _commit_placed_drag_or_cancel() -> void:
 ## [br]副作用：注销 OccupancyRegistry、移除 ID 到节点映射、删除正式节点和预览节点、库存加一并刷新 UI。
 ## [br]边界条件：只有 PLACED 拖拽可以回收；回收在所有非 COMPLETED 状态允许。本函数内部含防御性 _can_recycle_placed_token_for_state 检查，COMPLETED/未知状态调用时安全取消并恢复原机关，不增库存、不扣次数，不依赖外层 _finish_drag_at_mouse 这一单一守卫。运行期回收不消耗 runtime_moves_used，只影响下一次发射。库存不得超过 PROTOTYPE_TOKEN_TOTAL；注销失败时恢复正式机关并取消拖拽。
 func _recycle_dragged_placed_token() -> void:
-	if _drag_source != DragSource.PLACED or _dragged_placed_token == null:
+	if _drag_source != _RuntimeInteractionTypes.DragSource.PLACED or _dragged_placed_token == null:
 		_cancel_current_drag()
 		return
 	# 防御性权限检查：回收在所有非 COMPLETED 状态允许；COMPLETED/未知状态即使直接调用本函数也安全取消，不增库存。
@@ -1334,7 +1318,7 @@ func _recycle_dragged_placed_token() -> void:
 ## [br]副作用：删除预览节点；若拖动的是已放置机关且节点仍有效，则恢复正式机关原位置和可见状态；随后清空拖拽状态字段。
 ## [br]边界条件：从库存取消不改变库存；已放置机关取消不改变 OccupancyRegistry，因为旧占用从未清除。若 _dragged_placed_token 已失效，不再解引用，只清理预览与拖拽状态，并在调试构建报告一致性异常；不静默重建 placed_tokens_by_id 或 OccupancyRegistry，也不实现自动恢复。R 完整重置传 false 是为了避免中间态断言早于后续玩家机关删除和占用注销流程。
 func _cancel_current_drag(should_assert_consistency: bool = true) -> void:
-	if _drag_source == DragSource.PLACED and _dragged_placed_token != null:
+	if _drag_source == _RuntimeInteractionTypes.DragSource.PLACED and _dragged_placed_token != null:
 		if is_instance_valid(_dragged_placed_token):
 			# 已放置机关拖拽期间保留旧逻辑占用，取消时只恢复正式视觉即可。
 			_dragged_placed_token.set_cell(_drag_original_cell)
@@ -1364,7 +1348,7 @@ func _clear_drag_preview_only() -> void:
 ## [br]副作用：把拖拽来源、ID、格子和节点引用恢复为空状态。
 ## [br]边界条件：只在预览删除和正式机关状态已处理后调用，避免丢失恢复所需的原始格子信息。
 func _reset_drag_state() -> void:
-	_drag_source = DragSource.NONE
+	_drag_source = _RuntimeInteractionTypes.DragSource.NONE
 	_drag_mechanism_id = &""
 	_drag_original_cell = INVALID_CELL
 	_drag_preview_cell = INVALID_CELL
@@ -1413,7 +1397,7 @@ func _make_next_prototype_token_id() -> StringName:
 ## [br]返回 true 表示 _drag_source 不是 NONE；返回 false 表示没有拖拽。
 ## [br]本函数无副作用；边界条件：预览节点可能因异常被释放，本函数仍只以拖拽来源作为状态事实。
 func is_dragging() -> bool:
-	return _drag_source != DragSource.NONE
+	return _drag_source != _RuntimeInteractionTypes.DragSource.NONE
 
 
 ## 判断鼠标是否位于整个机关栏区域。
