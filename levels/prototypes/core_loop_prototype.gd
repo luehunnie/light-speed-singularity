@@ -26,6 +26,11 @@ extends Node2D
 const GridMetrics: GDScript = preload("res://gameplay/grid/grid_metrics.gd")
 # 当前原型在正式 TileMapLayer 接管坐标转换前，统一通过 GridMetrics.CELL_SIZE 做格↔世界换算；64 世界格对应半格 32。
 const CELL_SIZE: int = GridMetrics.CELL_SIZE
+# 格↔世界纯换算规则共享模块（批次 4B-E2）：cell_to_world / world_to_cell 已迁出本脚本，统一通过此 preload 调用，
+# 避免坐标公式在关卡控制器与网格坐标自检之间重复维护；新 class_name 缓存未刷新时仍通过 preload 引用。
+const _GridCoordinateRules: GDScript = preload(
+	"res://gameplay/grid/grid_coordinate_rules.gd"
+)
 const MAX_PROPAGATION_STEPS: int = 128
 const PULSE_VISUAL_DURATION_SECONDS: float = 1.0
 const PROTOTYPE_TOKEN_TOTAL: int = 1
@@ -45,7 +50,7 @@ const LIGHT_PATH_COLOR: Color = Color(1.0, 0.95, 0.2, 0.75)
 @export_range(0, 99, 1) var runtime_move_limit: int = 1
 
 # terrain_layer 保留以满足 plan §3.1 / step 5 的节点树与成员约定；
-# 当前核心闭环原型不使用 TileSet，cell_to_world 用 CELL_SIZE 常量实现，不依赖 map_to_local。
+# 当前核心闭环原型不使用 TileSet，格↔世界换算由 GridCoordinateRules 用 CELL_SIZE 常量实现，不依赖 map_to_local。
 @onready var terrain_layer: TileMapLayer = $TerrainLayer
 @onready var runtime_objects: Node2D = $RuntimeObjects
 @onready var light_path_layer: Node2D = $LightPathLayer
@@ -227,7 +232,7 @@ func _run_occupancy_registry_self_check() -> void:
 
 ## 执行当前原型 64 像素逻辑格坐标换算自检。
 ## [br]本函数无参数、无返回值，仅由 _ready() 在调试构建中调用。
-## [br]副作用：只用 Vector2i 测试格调用 cell_to_world() 与 world_to_cell() 并执行 assert；不修改场景节点、OccupancyRegistry、库存、拖拽状态、RunState 或光线发射。
+## [br]副作用：只用 Vector2i 测试格通过 GridCoordinateRules 调用 cell_to_world() 与 world_to_cell() 并执行 assert；不修改场景节点、OccupancyRegistry、库存、拖拽状态、RunState 或光线发射。
 ## [br]边界条件：当前原型在正式 TileMapLayer 接管坐标转换前使用 CELL_SIZE 常量；逻辑坐标仍为 Vector2i，64 像素只表示当前世界视觉格中心间距，窗口分辨率或 UI 尺寸变化不应改变逻辑结果。
 func _run_grid_coordinate_self_check() -> void:
 	var test_cells: Array[Vector2i] = [Vector2i.ZERO, emitter_cell]
@@ -238,10 +243,10 @@ func _run_grid_coordinate_self_check() -> void:
 	test_cells.append(Vector2i(map_bounds.end.x - 1, map_bounds.end.y - 1))
 
 	for cell: Vector2i in test_cells:
-		assert(world_to_cell(cell_to_world(cell)) == cell, "64像素逻辑格自检：cell_to_world/world_to_cell 必须互逆：%s" % [cell])
+		assert(_GridCoordinateRules.world_to_cell(_GridCoordinateRules.cell_to_world(cell)) == cell, "64像素逻辑格自检：cell_to_world/world_to_cell 必须互逆：%s" % [cell])
 
-	var horizontal_spacing: float = cell_to_world(Vector2i(1, 0)).x - cell_to_world(Vector2i(0, 0)).x
-	var vertical_spacing: float = cell_to_world(Vector2i(0, 1)).y - cell_to_world(Vector2i(0, 0)).y
+	var horizontal_spacing: float = _GridCoordinateRules.cell_to_world(Vector2i(1, 0)).x - _GridCoordinateRules.cell_to_world(Vector2i(0, 0)).x
+	var vertical_spacing: float = _GridCoordinateRules.cell_to_world(Vector2i(0, 1)).y - _GridCoordinateRules.cell_to_world(Vector2i(0, 0)).y
 	assert(horizontal_spacing == float(CELL_SIZE), "64像素逻辑格自检：横向相邻格中心间距应为 %d，实际为 %s" % [CELL_SIZE, horizontal_spacing])
 	assert(vertical_spacing == float(CELL_SIZE), "64像素逻辑格自检：纵向相邻格中心间距应为 %d，实际为 %s" % [CELL_SIZE, vertical_spacing])
 
@@ -795,33 +800,9 @@ func add_light_visual(cell: Vector2i, direction: Vector2i) -> void:
 	view.set_profile(_DefaultLightSegmentProfile as _LightSegmentVisualProfile)
 	view.set_direction(direction)
 	view.set_light_color(LIGHT_PATH_COLOR)
-	# 根节点局部原点表示光路格中心；position 直接使用 cell_to_world(cell)，由 LightSegmentView 内部 offset 居中。
-	view.position = cell_to_world(cell)
+	# 根节点局部原点表示光路格中心；position 直接使用 _GridCoordinateRules.cell_to_world(cell)，由 LightSegmentView 内部 offset 居中。
+	view.position = _GridCoordinateRules.cell_to_world(cell)
 	light_path_layer.add_child(view)
-
-
-## 将格子坐标转换为当前原型使用的世界坐标中心点。
-## [br]cell 是要转换的 Vector2i 逻辑格坐标。
-## [br]返回该 64 像素逻辑格中心点的世界坐标；本函数无副作用。
-## [br]边界条件：当前核心闭环原型使用 CELL_SIZE 常量直接计算，不依赖 TileMapLayer.map_to_local()；逻辑位置仍为 Vector2i，窗口分辨率和 CanvasLayer UI 尺寸不改变格子换算结果，正式 TileMapLayer 接入后再由 map_to_local/local_to_map 接管。
-func cell_to_world(cell: Vector2i) -> Vector2:
-	# 格中心 = 格原点 + 半格偏移；CELL_SIZE=64 时半格为 32，即 cell_to_world(Vector2i.ZERO) == Vector2(32, 32)。
-	return Vector2(
-		cell.x * CELL_SIZE + CELL_SIZE / 2.0,
-		cell.y * CELL_SIZE + CELL_SIZE / 2.0
-	)
-
-
-## 将世界坐标转换为当前原型使用的格子坐标。
-## [br]world_position 是鼠标或节点的世界坐标。
-## [br]返回包含该世界点的 Vector2i 逻辑格坐标；本函数无副作用。
-## [br]边界条件：与 cell_to_world() 使用同一个 CELL_SIZE，64 像素逻辑格中心点必然换回同一个 cell；负坐标会向下取整，地图合法性另由放置检查处理。
-func world_to_cell(world_position: Vector2) -> Vector2i:
-	# 坐标转换统一在关卡控制器中完成，避免机关或 UI 产生第二套换算规则。
-	return Vector2i(
-		floori(world_position.x / float(CELL_SIZE)),
-		floori(world_position.y / float(CELL_SIZE))
-	)
 
 
 ## 处理鼠标左键拖拽与右键镜面朝向配置。
@@ -861,7 +842,7 @@ func _try_toggle_mirror_at_mouse() -> void:
 			print_debug("CoreLoopPrototype: 当前运行状态锁定内部配置，忽略镜面右键切换：%s。" % [current_run_state])
 		return
 
-	var target_cell: Vector2i = world_to_cell(get_global_mouse_position())
+	var target_cell: Vector2i = _GridCoordinateRules.world_to_cell(get_global_mouse_position())
 	var mechanism_id: StringName = get_mechanism_at(target_cell)
 	if mechanism_id == &"" or not placed_tokens_by_id.has(mechanism_id):
 		return
@@ -896,7 +877,7 @@ func _try_begin_drag() -> void:
 	if _is_mouse_over_inventory_bar(viewport_mouse_position):
 		return
 
-	var target_cell: Vector2i = world_to_cell(get_global_mouse_position())
+	var target_cell: Vector2i = _GridCoordinateRules.world_to_cell(get_global_mouse_position())
 	var mechanism_id: StringName = get_mechanism_at(target_cell)
 	if mechanism_id == &"":
 		return
@@ -917,7 +898,7 @@ func _try_begin_drag() -> void:
 ## [br]副作用：创建一个默认 SLASH 朝向的镜面预览节点并设置拖拽来源为 INVENTORY。
 ## [br]边界条件：从库存拖拽但不提前扣数量；若之后非法松手或松回机关栏，库存和 OccupancyRegistry 都不变化。
 func _begin_inventory_drag() -> void:
-	var start_cell: Vector2i = world_to_cell(get_global_mouse_position())
+	var start_cell: Vector2i = _GridCoordinateRules.world_to_cell(get_global_mouse_position())
 	_drag_source = _RuntimeInteractionTypes.DragSource.INVENTORY
 	_drag_mechanism_id = &""
 	_drag_original_cell = INVALID_CELL
@@ -975,7 +956,7 @@ func _update_drag_preview_from_mouse() -> void:
 		return
 
 	_drag_preview_token.set_drag_preview_visible(true)
-	_drag_preview_cell = world_to_cell(get_global_mouse_position())
+	_drag_preview_cell = _GridCoordinateRules.world_to_cell(get_global_mouse_position())
 	# 预览合法性同时反映空间合法性与当前是否允许该次松手提交；预览只是视觉反馈，不替代正式提交的二次校验。
 	var spatially_valid: bool = _is_valid_prototype_placement_cell(_drag_preview_cell, _drag_mechanism_id)
 	var is_valid: bool = _RuntimeMoveRules.is_world_drop_preview_valid(
@@ -987,7 +968,7 @@ func _update_drag_preview_from_mouse() -> void:
 		spatially_valid
 	)
 	_drag_preview_token.set_cell(_drag_preview_cell)
-	_drag_preview_token.set_world_position(cell_to_world(_drag_preview_cell))
+	_drag_preview_token.set_world_position(_GridCoordinateRules.cell_to_world(_drag_preview_cell))
 	_drag_preview_token.set_drag_preview(true, is_valid)
 
 
@@ -1103,7 +1084,7 @@ func _commit_placed_drag_or_cancel() -> void:
 		if not occupancy.register_single_cell(mechanism_id, from_cell):
 			push_error("CoreLoopPrototype: 恢复旧占用失败，停止继续修改。")
 		token.set_cell(from_cell)
-		token.set_world_position(cell_to_world(from_cell))
+		token.set_world_position(_GridCoordinateRules.cell_to_world(from_cell))
 		token.set_placed_visible(true)
 		_clear_drag_preview_only()
 		_reset_drag_state()
@@ -1111,7 +1092,7 @@ func _commit_placed_drag_or_cancel() -> void:
 		return
 
 	token.set_cell(to_cell)
-	token.set_world_position(cell_to_world(to_cell))
+	token.set_world_position(_GridCoordinateRules.cell_to_world(to_cell))
 	token.set_placed_visible(true)
 	_clear_drag_preview_only()
 	_reset_drag_state()
@@ -1163,7 +1144,7 @@ func _cancel_current_drag(should_assert_consistency: bool = true) -> void:
 		if is_instance_valid(_dragged_placed_token):
 			# 已放置机关拖拽期间保留旧逻辑占用，取消时只恢复正式视觉即可。
 			_dragged_placed_token.set_cell(_drag_original_cell)
-			_dragged_placed_token.set_world_position(cell_to_world(_drag_original_cell))
+			_dragged_placed_token.set_world_position(_GridCoordinateRules.cell_to_world(_drag_original_cell))
 			_dragged_placed_token.set_placed_visible(true)
 		elif OS.is_debug_build():
 			# 失效节点不得再次解引用；仅报告一致性异常，不静默重建占用或映射。
@@ -1204,7 +1185,7 @@ func _create_token_node(mechanism_id: StringName, cell: Vector2i, is_preview: bo
 	var token = _SingleCellMirrorScene.instantiate()
 	runtime_objects.add_child(token)
 	token.configure(mechanism_id, cell)
-	token.set_world_position(cell_to_world(cell))
+	token.set_world_position(_GridCoordinateRules.cell_to_world(cell))
 	token.set_drag_preview(is_preview, true)
 	return token
 
