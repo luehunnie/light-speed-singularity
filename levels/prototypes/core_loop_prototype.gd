@@ -95,6 +95,14 @@ const _InventoryConsistencyCheck: GDScript = preload(
 const _DiagnosticsController: GDScript = preload(
 	"res://gameplay/diagnostics/diagnostics_controller.gd"
 )
+# 批次 5A-H4：启动摘要日志所需的等级与条目数据契约；用 preload 引用以避开 MCP run_project 不重建全局 class_name 缓存的问题。
+# 核心只构造 DiagnosticLogEntry 并通过 DiagnosticsController.write_entry_to_file 落盘，不直接 new RuntimeLogger，不接入 RuntimeSnapshotData。
+const _DiagnosticSeverity: GDScript = preload(
+	"res://gameplay/diagnostics/logging/diagnostic_severity.gd"
+)
+const _DiagnosticLogEntry: GDScript = preload(
+	"res://gameplay/diagnostics/logging/diagnostic_log_entry.gd"
+)
 # 批次 4B-C2 抽离的玩家机关 R 重置共享纯规则；正式 R 重置与自检共用同一玩法层规则来源。
 const _PlayerMechanismResetRules: GDScript = preload("res://gameplay/placement/rules/player_mechanism_reset_rules.gd")
 const _SingleCellMirrorScene: PackedScene = preload("res://gameplay/mechanisms/mirrors/single_cell_mirror.tscn")
@@ -175,6 +183,9 @@ func _ready() -> void:
 		_run_runtime_move_self_check()
 		_run_player_mechanism_id_snapshot_self_check()
 		_run_inventory_consistency_self_check()
+		# 批次 5A-H4：只有第七项（库存一致性）成功返回后才写一条启动摘要日志；
+		# 任一自检硬断言失败时执行不会到达此处，摘要自然不写入。日志调用不得移出 Debug 守卫。
+		_write_startup_self_check_summary_log()
 
 
 ## 查询当前真实 OccupancyRegistry 是否仍有任一索引引用指定机关 ID（只读，无副作用）。
@@ -249,6 +260,34 @@ func _run_startup_self_check_via_runner(
 	# 第三层：检查未通过——任一 SelfCheckResult.passed=false 使 is_success() 为 false，必须硬断言，
 	# 错误信息包含失败 Check 的 check_id/summary/details，不只输出模糊"自检失败"。
 	assert(run_result.is_success(), "启动自检：检查未通过：\n%s" % [assert_message])
+
+
+## 在七项 Debug 启动自检全部通过后写入一条最小启动摘要日志（批次 5A-H4）。
+## [br]职责：构造一条强类型 DiagnosticLogEntry（severity=INFO），通过核心持有的 DiagnosticsController.write_entry_to_file
+## [br]落盘到 RuntimeLogger 默认目录（user://diagnostics/logs）与默认文件名（runtime.log）；不接入 RuntimeSnapshotData 采集，不修改任何玩法行为。
+## [br]输入：无参数；调用方保证仅在七项启动自检全部硬断言通过后才调用本函数（任一自检失败时执行不会到达此处）。
+## [br]输出：无返回值；写入问题只逐项 push_warning，不 assert、不抛异常、不改变 RunState、不阻止主场景启动。
+## [br]副作用：可能向默认诊断日志追加一条 INFO 摘要；目录创建、文件轮转与容量收敛继续由 RuntimeLogger 负责。
+## [br]失败与边界：日志属于 Diagnostics 而非玩法事务，写入失败只 push_warning，不触发 R、不修复目录、不复制轮转或文件清理算法；
+## [br]核心不直接创建 RuntimeLogger，不调用 record_entry——write_entry_to_file 已是独立正式写盘操作，不重复记录同一条目；
+## [br]同一次主场景启动只通过本函数写一条摘要，不逐项记录每个自检的 PASS，不记录鼠标、拖拽、光传播或 Snapshot JSON。
+func _write_startup_self_check_summary_log() -> void:
+	# 时间戳取 Unix 毫秒：Time.get_unix_time_from_system 返回自纪元起的秒数（浮点），乘 1000 取整即为非负毫秒时间戳，满足 DiagnosticLogEntry 契约。
+	var timestamp_unix_msec: int = int(Time.get_unix_time_from_system() * 1000.0)
+	# 构造强类型日志条目：等级 INFO、稳定 module_name 与 execution_id、稳定中文摘要正文；
+	# 构造参数顺序严格匹配 DiagnosticLogEntry 当前真实签名（timestamp, severity, module, execution, message）。
+	var entry: _DiagnosticLogEntry = _DiagnosticLogEntry.new(
+		timestamp_unix_msec,
+		_DiagnosticSeverity.Level.INFO,
+		&"startup_self_check",
+		&"startup_all_self_checks",
+		"七项启动自检全部通过"
+	)
+	# 通过 DiagnosticsController 正式写盘：返回空 PackedStringArray 表示成功；非空表示 RuntimeLogger 现有错误契约的全部中文错误。
+	var write_problems: PackedStringArray = _diagnostics_controller.write_entry_to_file(entry)
+	# 写入成功不额外输出；写入失败逐项 push_warning，不 assert、不中断主场景启动、不改变玩法状态。
+	for problem: String in write_problems:
+		push_warning("启动摘要日志写入失败：%s" % [problem])
 
 
 ## 执行 OccupancyRegistry 启动期轻量自检。
