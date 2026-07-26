@@ -4,7 +4,7 @@ extends Node2D
 ## 职责：读取 fire_light / reset_level 输入，发起普通主发射源最小脉冲光线（Vector2i 逐格路径，无 Area2D/Tween/物理射线），
 ## 通过 OccupancyRegistry 解析单格镜面并改向、点亮普通独立水晶、保持关卡完成结果；实现最小镜面库存、拖拽放置/移动/回收与 SETUP 右键朝向配置。
 ## 状态事实所有权：四态（SETUP/PULSE_ACTIVE/MOVE_WINDOW/COMPLETED）由 _run_state_controller 持有；核心持有 is_level_completed、
-## pulse_generation、prototype_token_remaining、runtime_moves_used 与 placed_tokens_by_id。OccupancyRegistry 是格子占用唯一事实来源。
+## pulse_generation、runtime_moves_used；玩家机关映射 placed_tokens_by_id 与机关序号由 _placement_controller 唯一持有；玩家机关库存剩余由 _inventory_controller 持有。OccupancyRegistry 是格子占用唯一事实来源。
 ## 正式运行权限：SETUP 允许完整布置且移动不计次；PULSE_ACTIVE/MOVE_WINDOW 允许拿取/放置/移动/回收但右键配置锁定、PULSE_ACTIVE 禁止 Space；
 ## 仅“已放置机关跨格直接移动”成功提交后消耗 runtime_move_limit 一次；COMPLETED 冻结全部交互，只允许 R。
 ## R 是完整关卡重置：安全取消拖拽 → 递增 pulse_generation → 清光路/水晶/完成状态 → 逐个注销玩家机关占用并退回库存 → 清零 runtime_moves_used → 回 SETUP；不删除发射器/墙体/水晶/静态内容。
@@ -27,6 +27,7 @@ const INVALID_CELL: Vector2i = Vector2i(-999999, -999999)
 ## 原型光路视觉黄色显示色；仅用于 LightSegmentView 占位块 color 与正式纹理 self_modulate 调制，不参与 RGB 玩法。
 const LIGHT_PATH_COLOR: Color = Color(1.0, 0.95, 0.2, 0.75)
 
+# 以下两项仅为 Inspector 初始配置；_ready 中据此构造 _fixed_emitter，运行期格子/方向只由 FixedEmitter 提供。
 @export var emitter_cell: Vector2i = Vector2i(1, 3)
 @export var emitter_direction: Vector2i = Vector2i.RIGHT
 @export var map_bounds: Rect2i = Rect2i(0, 0, 16, 16)
@@ -67,6 +68,14 @@ const _InventoryConsistencyRules: GDScript = preload(
 const _InventoryConsistencyCheck: GDScript = preload(
 	"res://gameplay/diagnostics/self_check/checks/inventory_consistency_check.gd"
 )
+# 玩家机关库存事实所有者：核心持有的唯一实例，保存总量与剩余量，提供扣除/归还/重置与一致性判断；不持有 placed_tokens_by_id、不访问占用/UI/RunState。
+const _InventoryController: GDScript = preload(
+	"res://gameplay/placement/inventory_controller.gd"
+)
+# 玩家机关放置/移动/回收原子事务控制器：唯一持有 placed_tokens_by_id 与机关序号，负责事务提交与回滚；核心只发请求并按结果清理拖拽。
+const _PlacementController: GDScript = preload(
+	"res://gameplay/placement/placement_controller.gd"
+)
 # 诊断控制器：核心持有的唯一实例，协调七项启动自检；每次调用内部新建 SelfCheckRunner 并返回结果，不执行 assert，失败策略由核心决定。
 const _DiagnosticsController: GDScript = preload(
 	"res://gameplay/diagnostics/diagnostics_controller.gd"
@@ -78,8 +87,6 @@ const _DiagnosticSeverity: GDScript = preload(
 const _DiagnosticLogEntry: GDScript = preload(
 	"res://gameplay/diagnostics/logging/diagnostic_log_entry.gd"
 )
-# 玩家机关 R 重置共享纯规则；正式 R 重置与自检共用同一玩法层规则来源。
-const _PlayerMechanismResetRules: GDScript = preload("res://gameplay/placement/rules/player_mechanism_reset_rules.gd")
 const _SingleCellMirrorScene: PackedScene = preload("res://gameplay/mechanisms/mirrors/single_cell_mirror.tscn")
 const _InventorySlotViewScript: GDScript = preload("res://gameplay/ui/inventory_slot_view.gd")
 const _LightSegmentViewScript: GDScript = preload("res://gameplay/visuals/light_segments/light_segment_view.gd")
@@ -93,6 +100,10 @@ const _RuntimeMoveRules: GDScript = preload("res://gameplay/placement/rules/runt
 const _RuntimeStateRules: GDScript = preload("res://gameplay/interaction/runtime_state_rules.gd")
 # RunStateController：核心持有的唯一运行状态所有者，负责四态事实、最小合法转换与 state_changed 信号；不加入场景树、不设为 Autoload。
 const _RunStateController: GDScript = preload("res://gameplay/interaction/run_state_controller.gd")
+# 一次拖拽的临时事实唯一所有者：来源/机关 ID/原格/预览格/起始朝向；不持有 Node、Controller 或场景树引用，预览与正式节点句柄仍由核心保留。
+const _DragContext: GDScript = preload("res://gameplay/interaction/drag_context.gd")
+# 玩家输入分类器：把 InputEvent 分类为业务命令；不查询状态、不命中 UI、不转网格、不执行业务。
+const _PlayerInteractionController: GDScript = preload("res://gameplay/interaction/player_interaction_controller.gd")
 # 世界只读查询门面与光线层薄适配器；不加入场景树、不设为 Autoload。
 const _LevelWorldQuery: GDScript = preload("res://gameplay/world/level_world_query.gd")
 const _LightWorldQuery: GDScript = preload("res://gameplay/world/light_world_query.gd")
@@ -102,6 +113,9 @@ const _RayMechanismResult: GDScript = preload("res://gameplay/light/ray_mechanis
 # 普通光线执行模块与结果协议；核心只调用 _RayExecutionModule.execute()，逐格传播循环全部迁入模块，结果只保存事实。
 const _RayExecutionModule: GDScript = preload("res://gameplay/light/ray_execution_module.gd")
 const _RayExecutionResult: GDScript = preload("res://gameplay/light/ray_execution_result.gd")
+# 固定发射器与发射请求数据；运行期格子和方向唯一所有者为 FixedEmitter，emitter_cell/emitter_direction 仅作 Inspector 初始配置。
+const _FixedEmitter: GDScript = preload("res://gameplay/mechanisms/emitters/fixed_emitter.gd")
+const _FireRequest: GDScript = preload("res://gameplay/light/fire_request.gd")
 # 默认光线路段视觉资源（四字段全空 → LightSegmentView 静默回退到黄色占位块）；以 Resource 类型 preload，set_profile 时再 as 为 profile 脚本类型，避免常量类型解析对全局类型缓存的依赖。
 const _DefaultLightSegmentProfile: Resource = preload("res://assets/visual_profiles/basic_light_segment_visuals.tres")
 var occupancy: _OccupancyRegistry = _OccupancyRegistry.new()
@@ -112,22 +126,23 @@ var is_level_completed: bool = false
 ## 当前脉冲版本号；每次开始脉冲或 R 重置递增，用于让旧异步等待回调失效，避免误清理新脉冲。
 var pulse_generation: int = 0
 
-## 原型单格机关库存剩余数量；只在成功从库存放置后减少、拖回机关栏回收后增加，拖拽开始时不提前扣数量。
-var prototype_token_remaining: int = PROTOTYPE_TOKEN_TOTAL
+## 玩家机关库存事实所有者：运行期剩余数量唯一事实来源，扣除/归还/重置经此实例；拖拽开始时不提前扣数量，仅合法放置成功后才扣除。
+var _inventory_controller: _InventoryController = _InventoryController.new(PROTOTYPE_TOKEN_TOTAL)
 
 ## 运行期已使用移动次数（R 重置清零）。remaining = max(limit - used, 0)；remaining=0 不禁止拖起（仍可取消/回收），只禁止提交到另一世界格。
 var runtime_moves_used: int = 0
 
-## 玩家已放置机关 ID → PlaceableToken 节点；格子占用以 OccupancyRegistry 为唯一事实来源，本映射只用于找到正式视觉节点。
-var placed_tokens_by_id: Dictionary[StringName, Variant] = {}
+## 玩家机关放置/移动/回收事务控制器；唯一持有 placed_tokens_by_id 与机关序号，_ready 中构造并注入依赖。核心只发事务请求并按结果清理拖拽。
+var _placement_controller: _PlacementController = null
 
-var _next_prototype_token_serial: int = 1
-var _drag_source: _RuntimeInteractionTypes.DragSource = _RuntimeInteractionTypes.DragSource.NONE
-var _drag_mechanism_id: StringName = &""
-var _drag_original_cell: Vector2i = INVALID_CELL
-var _drag_preview_cell: Vector2i = INVALID_CELL
+var _drag_context: _DragContext = _DragContext.new()
+## 拖拽预览节点句柄；仅作生命周期管理，不作为机关事实来源，事实由 _drag_context 持有。
 var _drag_preview_token: Variant = null
+## 被拖正式机关节点句柄；仅作生命周期管理，正式机关事实仍由 PlacementController 持有。
 var _dragged_placed_token: Variant = null
+
+## 玩家输入分类器：把 _input 收到的 InputEvent 分类为业务命令，自身不执行任何业务副作用。
+var _player_interaction_controller: _PlayerInteractionController = _PlayerInteractionController.new()
 
 ## 诊断控制器：核心持有的唯一实例，仅协调七项启动自检；不作为 Node、不设为 Autoload，运行期库存断言不经本 Controller。
 var _diagnostics_controller: _DiagnosticsController = _DiagnosticsController.new()
@@ -142,20 +157,32 @@ var _level_world_query: _LevelWorldQuery = null
 ## 普通光线只读薄适配层：内部依赖 _level_world_query，只组合既有边界与墙体规则，不新增规则、不执行传播循环或副作用。
 var _light_world_query: _LightWorldQuery = null
 
+## 固定发射器：运行期格子与方向的唯一所有者；_ready 中由 Inspector 初始配置构造一次，此后 fire_light 与 LevelWorldQuery 只读取本实例。
+var _fixed_emitter: _FixedEmitter = null
+
 
 ## 初始化核心闭环原型关卡：刷新机关栏 UI；仅调试构建执行七项启动自检与摘要日志，发布构建跳过，避免把调试断言作为运行期必需流程。
 func _ready() -> void:
 	# 早期连接运行状态信号，避免错过首次状态变化；本回调只刷新机关栏 UI。
 	_run_state_controller.state_changed.connect(_on_run_state_changed)
-	# 在所有真实依赖（@onready crystals、occupancy、placed_tokens_by_id 与 @export 边界/墙体/发射器格）初始化后构造只读查询门面。
+	# 放置事务控制器先于只读查询门面构造：LevelWorldQuery 需持有控制器映射引用，供光线层 cell→ID→节点解析。
+	_placement_controller = _PlacementController.new(
+		occupancy,
+		_inventory_controller,
+		Callable(self, "_create_formal_token_node")
+	)
+	# 固定发射器先于只读查询门面构造：LevelWorldQuery 与 fire_light 的运行期格子只取自本实例，emitter_cell 仅在此处作为初始配置读入。
+	_fixed_emitter = _FixedEmitter.new(emitter_cell, emitter_direction)
+	# 在所有真实依赖（@onready crystals、occupancy、控制器映射与 @export 边界/墙体/发射器格）初始化后构造只读查询门面。
 	_level_world_query = _LevelWorldQuery.new(
 		map_bounds,
 		wall_cells,
-		emitter_cell,
+		_fixed_emitter.get_cell(),
 		crystals,
 		occupancy,
-		placed_tokens_by_id
+		_placement_controller.get_placed_tokens_by_id_reference()
 	)
+	_placement_controller.set_level_world_query(_level_world_query)
 	_light_world_query = _LightWorldQuery.new(_level_world_query, crystals)
 	_update_inventory_ui()
 	_update_runtime_move_ui()
@@ -169,11 +196,6 @@ func _ready() -> void:
 		_run_inventory_consistency_self_check()
 		# 只有第七项（库存一致性）成功后才写一条启动摘要日志；任一自检硬断言失败时执行不会到达此处。日志调用不得移出 Debug 守卫。
 		_write_startup_self_check_summary_log()
-
-
-## 查询真实 OccupancyRegistry 是否仍有任一索引引用指定机关 ID（只读）；R 重置用它决定 unregister 失败时是否必须失败关闭。规则位于 PlayerMechanismResetRules。
-func _occupancy_has_any_reference_to_mechanism(mechanism_id: StringName) -> bool:
-	return _PlayerMechanismResetRules.registry_has_any_reference_to_mechanism(occupancy, mechanism_id)
 
 
 ## 玩家机关 ID 快照、R 库存恢复计算与残留占用查询自检（_ready 第六项）；规则位于 PlayerMechanismResetRules，保留 Debug 硬断言边界。
@@ -251,7 +273,7 @@ func _run_occupancy_registry_self_check() -> void:
 ## 64 像素逻辑格坐标换算自检（_ready 第二项）；按原顺序采集真实格子构造 GridCoordinateCheck，只把 Vector2i 传入 Diagnostics，不传真实对象，不改遍历顺序。
 func _run_grid_coordinate_self_check() -> void:
 	# 按原自检顺序采集真实格子；只收集 Vector2i，不把 Crystal/Node 等真实对象传入 Diagnostics。
-	var sample_cells: Array[Vector2i] = [Vector2i.ZERO, emitter_cell]
+	var sample_cells: Array[Vector2i] = [Vector2i.ZERO, _fixed_emitter.get_cell()]
 	for crystal: BasicCrystal in crystals:
 		sample_cells.append(crystal.cell)
 	for wall_cell: Vector2i in wall_cells:
@@ -300,23 +322,28 @@ func _run_runtime_move_self_check() -> void:
 ## 处理关卡输入动作和鼠标拖拽事件：fire_light 在 SETUP/MOVE_WINDOW 且未拖拽时触发一次脉冲；reset_level 直接调用 reset_runtime() 完整重置；鼠标左键按运行权限驱动放置/移动/回收。
 ## 拖拽中按 Space 安全忽略；拖拽中按 R 不依赖 _input 预取消，由 reset_runtime() 统一安全取消拖拽；PULSE_ACTIVE 期间布局变化只影响后续发射，不回溯当前脉冲。
 func _input(event: InputEvent) -> void:
-	if event.is_action_pressed("reset_level"):
-		reset_runtime()
-		return
-
-	if event.is_action_pressed("fire_light"):
-		# 拖拽中拒绝 Space：一次拖拽事务未完成时不得启动新脉冲。
-		if is_dragging():
-			if OS.is_debug_build():
-				print_debug("CoreLoopPrototype: 拖拽中忽略 Space 发射。")
-			return
-		fire_light()
-		return
-
-	if event is InputEventMouseButton:
-		_handle_mouse_button(event as InputEventMouseButton)
-	elif event is InputEventMouseMotion:
-		_update_drag_preview_from_mouse()
+	var command: _PlayerInteractionController.Command = _player_interaction_controller.translate(event)
+	match command.kind:
+		_PlayerInteractionController.Command.Kind.RESET:
+			reset_runtime()
+		_PlayerInteractionController.Command.Kind.FIRE:
+			# 拖拽中拒绝 Space：一次拖拽事务未完成时不得启动新脉冲。
+			if is_dragging():
+				if OS.is_debug_build():
+					print_debug("CoreLoopPrototype: 拖拽中忽略 Space 发射。")
+				return
+			fire_light()
+		_PlayerInteractionController.Command.Kind.PRIMARY_PRESS:
+			_try_begin_drag()
+		_PlayerInteractionController.Command.Kind.PRIMARY_RELEASE:
+			if is_dragging():
+				_finish_drag_at_mouse()
+		_PlayerInteractionController.Command.Kind.SECONDARY_PRESS:
+			_try_toggle_mirror_at_mouse()
+		_PlayerInteractionController.Command.Kind.POINTER_MOTION:
+			_update_drag_preview_from_mouse()
+		_PlayerInteractionController.Command.Kind.NONE:
+			pass
 
 
 ## state_changed 回调：只刷新机关栏 UI；不在此取消拖拽或修改 is_level_completed/pulse_generation/水晶/光路/占用。COMPLETED 前取消拖拽由 _finish_current_pulse 在请求转换前完成。
@@ -389,9 +416,10 @@ func fire_light() -> void:
 			print_debug("CoreLoopPrototype: 当前运行状态拒绝 Space 发射：%s。" % [_get_current_run_state()])
 		return
 
-	var direction: Vector2i = emitter_direction
-	if not is_valid_direction(direction):
-		push_error("Invalid emitter direction: %s" % [direction])
+	# 在与旧代码相同的时点构建发射请求；方向非法时 build_fire_request 返回 null，按旧行为 push_error 并退出（先于 _prepare_for_new_pulse 与 begin_pulse，顺序与旧 fire_light 完全一致）。
+	var fire_request: _FireRequest = _fixed_emitter.build_fire_request(MAX_PROPAGATION_STEPS)
+	if fire_request == null:
+		push_error("Invalid emitter direction: %s" % [_fixed_emitter.get_direction()])
 		return
 
 	_prepare_for_new_pulse()
@@ -402,11 +430,11 @@ func fire_light() -> void:
 	pulse_generation += 1
 	var current_pulse_generation: int = pulse_generation
 
-	# 传播计算在 RayExecutionModule 内无副作用完成，核心只应用结果。
+	# 传播计算在 RayExecutionModule 内无副作用完成，核心只应用结果；起点/方向/最大步数取自 FireRequest。
 	var execution_result: _RayExecutionResult = _RayExecutionModule.execute(
-		emitter_cell,
-		direction,
-		MAX_PROPAGATION_STEPS,
+		fire_request.get_start_cell(),
+		fire_request.get_direction(),
+		fire_request.get_max_steps(),
 		_light_world_query
 	)
 	if execution_result.reached_step_limit:
@@ -475,9 +503,9 @@ func _finish_current_pulse(expected_generation: int) -> void:
 		complete_label.visible = true
 
 
-## R 完整重置：安全取消拖拽 → 递增 pulse_generation 使旧等待回调失效 → 清光路/水晶/完成状态 → 逐个注销并删除可确认清理的玩家机关 → 按未清理数量恢复库存 → 回 SETUP。
-## 不依赖 _input 预取消拖拽；拖动已放置机关时先恢复正式节点原格和可见性，再统一注销占用并删除节点。只清理玩家放置机关，不调用 occupancy.clear()，不删除发射器/墙体/水晶/静态内容。
-## 残留边界：若 OccupancyRegistry 残留且无法通过公共 unregister 确认清理，相关机关保留在场上且不重复退回库存，避免制造重复机关。
+## R 完整重置：安全取消拖拽 → 递增 pulse_generation 使旧等待回调失效 → 清光路/水晶/完成状态 → 由 PlacementController 逐个清理玩家机关 → 库存按残留数 reconcile → 回 SETUP。
+## 不依赖 _input 预取消拖拽；拖动已放置机关时先恢复正式节点原格和可见性，再由控制器统一注销占用并删除节点。只清理玩家放置机关，不调用 occupancy.clear()，不删除发射器/墙体/水晶/静态内容。
+## 残留边界：若 OccupancyRegistry 残留且无法通过公共 unregister 确认清理，相关机关保留在场上且映射不移除；库存按残留数 reconcile，保持 remaining+placed_count==total，残留机关由 _assert_inventory_consistency 暴露异常。
 func reset_runtime() -> void:
 	# R 完整重置首先取消拖拽：库存预览只删预览；已放置机关先恢复旧格/旧位置/可见性，再由玩家机关清理流程统一删除。
 	if is_dragging():
@@ -492,64 +520,18 @@ func reset_runtime() -> void:
 	_reset_independent_crystals()
 	complete_label.visible = false
 
-	var all_player_tokens_returned: bool = _return_all_player_placed_tokens_to_inventory()
-	if not all_player_tokens_returned:
-		push_error("CoreLoopPrototype: R重置玩家机关清理未完全成功，部分机关已保留在场上且未退回库存。")
+	# 玩家机关清理由 PlacementController 负责；部分失败时保留残留映射与占用，库存按残留数 reconcile，保持 remaining+placed_count==total。
+	var clear_result: _PlacementController.ClearPlacedResult = _placement_controller.clear_all_placed()
+	if clear_result.unresolved_count > 0:
+		push_error("CoreLoopPrototype: R重置玩家机关清理未完全成功，残留 %d 个机关，库存按残留数对齐。" % [clear_result.unresolved_count])
 
+	_update_inventory_ui()
 	# 状态回 SETUP 必须在玩家机关清理、库存恢复与 UI 刷新之后；reset_to_setup 幂等，已在 SETUP 时不发信号。
-	# 机关栏 UI 不依赖该信号唯一触发——_return_all_player_placed_tokens_to_inventory 内部已先行 _update_inventory_ui()。
 	_run_state_controller.reset_to_setup()
 	_update_runtime_move_ui()
 
 	if OS.is_debug_build():
 		_assert_inventory_consistency()
-
-
-## 将全部可确认清理的玩家放置机关退回库存；返回 true 表示全部完成注销/删除/移除，false 表示至少一个因 OccupancyRegistry 残留引用而未清理。
-## 复制 mechanism_id 快照逐个 unregister（必须先快照，遍历中 erase 会改变迭代集合）；不得调用 occupancy.clear()，不得强制修改内部索引——未来可能含预置/静态机关占用，R 只清理 placed_tokens_by_id 登记的玩家机关。
-## 异常处理：unregister 失败且无残留引用时继续删除节点回库；仍有残留引用时失败关闭（保留节点与映射、不退回库存）；节点失效但占用已清理时移除映射并回库，节点失效且占用仍残留时不 queue_free、不回库，保留异常事实供一致性断言暴露。
-func _return_all_player_placed_tokens_to_inventory() -> bool:
-	var mechanism_ids: Array[StringName] = _PlayerMechanismResetRules.copy_player_mechanism_ids(placed_tokens_by_id)
-	var all_tokens_returned: bool = true
-
-	for mechanism_id: StringName in mechanism_ids:
-		var token: PlaceableToken = placed_tokens_by_id.get(mechanism_id) as PlaceableToken
-
-		var was_unregistered: bool = occupancy.unregister(mechanism_id)
-		var has_residual_reference: bool = _occupancy_has_any_reference_to_mechanism(mechanism_id)
-
-		if has_residual_reference:
-			all_tokens_returned = false
-			push_error(
-				"CoreLoopPrototype: R重置无法清理玩家机关占用，机关将保留在场上且不会退回库存：%s"
-				% [mechanism_id]
-			)
-			if not is_instance_valid(token):
-				push_error(
-					"CoreLoopPrototype: R重置时玩家机关节点已失效且占用仍有残留，保留映射供一致性断言暴露：%s"
-					% [mechanism_id]
-				)
-			continue
-
-		if not was_unregistered and OS.is_debug_build():
-			push_warning(
-				"CoreLoopPrototype: R重置时玩家机关占用已提前不存在，继续清理玩家节点：%s"
-				% [mechanism_id]
-			)
-
-		if is_instance_valid(token):
-			token.queue_free()
-		elif OS.is_debug_build():
-			push_error("CoreLoopPrototype: R重置时玩家机关节点已失效：%s" % [mechanism_id])
-
-		placed_tokens_by_id.erase(mechanism_id)
-
-	prototype_token_remaining = _PlayerMechanismResetRules.compute_inventory_remaining_after_reset(
-		PROTOTYPE_TOKEN_TOTAL,
-		placed_tokens_by_id.size()
-	)
-	_update_inventory_ui()
-	return all_tokens_returned
 
 
 ## 重置普通独立水晶为未点亮；只在 R 完整重置中调用（不由脉冲结束调用），普通独立水晶保持到 R 才恢复。
@@ -562,15 +544,6 @@ func _reset_independent_crystals() -> void:
 func clear_light_path() -> void:
 	for child: Node in light_path_layer.get_children():
 		child.queue_free()
-
-
-## 判断传播方向是否合法：非零且每分量在 -1..1；Vector2i.ZERO、超过一格的方向和非法斜率都会被拒绝。
-func is_valid_direction(direction: Vector2i) -> bool:
-	return (
-		direction != Vector2i.ZERO
-		and abs(direction.x) <= 1
-		and abs(direction.y) <= 1
-	)
 
 
 ## 查询指定格子被哪个机关占用（薄包装，转发 _level_world_query.get_mechanism_id_at）；未被占用返回空 StringName（&""），不报错。
@@ -629,25 +602,6 @@ func add_light_visual(cell: Vector2i, direction: Vector2i) -> void:
 	light_path_layer.add_child(view)
 
 
-## 处理鼠标左键拖拽与右键镜面朝向配置：左键按运行权限开始库存拖拽或已放置机关拖起，松开时提交/回收/取消；右键仅 SETUP 且未拖拽时切换已放置镜面 orientation。
-## 其他按键忽略；运行期内部配置锁定，右键不改镜面方向；COMPLETED 冻结全部交互；InventoryBar 区域阻止右键穿透到世界镜面。
-func _handle_mouse_button(event: InputEventMouseButton) -> void:
-	if event.button_index == MOUSE_BUTTON_RIGHT:
-		if event.pressed:
-			_try_toggle_mirror_at_mouse()
-		return
-
-	if event.button_index != MOUSE_BUTTON_LEFT:
-		return
-
-	if event.pressed:
-		_try_begin_drag()
-		return
-
-	if is_dragging():
-		_finish_drag_at_mouse()
-
-
 ## 尝试右键切换鼠标所在已放置镜面的内部朝向；仅 SETUP 且未拖拽、鼠标位于世界已放置 SingleCellMirror 时调用 toggle_orientation()。拖拽中、InventoryBar 区域、未知机关和空格安全忽略。
 func _try_toggle_mirror_at_mouse() -> void:
 	if is_dragging():
@@ -662,10 +616,10 @@ func _try_toggle_mirror_at_mouse() -> void:
 
 	var target_cell: Vector2i = _GridCoordinateRules.world_to_cell(get_global_mouse_position())
 	var mechanism_id: StringName = get_mechanism_at(target_cell)
-	if mechanism_id == &"" or not placed_tokens_by_id.has(mechanism_id):
+	if mechanism_id == &"" or not _placement_controller.has_placed(mechanism_id):
 		return
 
-	var token: Variant = placed_tokens_by_id[mechanism_id]
+	var token: Variant = _placement_controller.get_placed_node(mechanism_id)
 	if not is_instance_valid(token):
 		return
 	if token is not SingleCellMirror:
@@ -685,7 +639,7 @@ func _try_begin_drag() -> void:
 	var viewport_mouse_position: Vector2 = get_viewport().get_mouse_position()
 	if _is_mouse_over_prototype_slot(viewport_mouse_position):
 		# 库存拿取权限：所有非 COMPLETED 状态允许从机关栏拿取新机关（用户最终权限）。
-		if prototype_token_remaining > 0 and _RuntimeMoveRules.can_take_from_inventory_for_state(_get_current_run_state()):
+		if _inventory_controller.can_consume_one() and _RuntimeMoveRules.can_take_from_inventory_for_state(_get_current_run_state()):
 			_begin_inventory_drag()
 		elif OS.is_debug_build() and not _RuntimeMoveRules.can_take_from_inventory_for_state(_get_current_run_state()):
 			print_debug("CoreLoopPrototype: 当前运行状态禁止从机关栏拿取：%s。" % [_get_current_run_state()])
@@ -697,7 +651,7 @@ func _try_begin_drag() -> void:
 	var mechanism_id: StringName = get_mechanism_at(target_cell)
 	if mechanism_id == &"":
 		return
-	if not placed_tokens_by_id.has(mechanism_id):
+	if not _placement_controller.has_placed(mechanism_id):
 		return
 	# 已放置机关拖起权限：所有非 COMPLETED 状态允许拖起（与跨格提交权限分离）。
 	# 剩余次数为 0 时仍允许拖起，以便回收或取消；跨格提交由 _commit_placed_drag_or_cancel 的二次校验拒绝。
@@ -712,24 +666,21 @@ func _try_begin_drag() -> void:
 ## 从机关栏开始一次基础单格镜面拖拽；创建默认 SLASH 朝向的预览节点，拖拽来源设为 INVENTORY。从库存拖拽但不提前扣数量，非法松手或松回机关栏时库存和占用都不变化。
 func _begin_inventory_drag() -> void:
 	var start_cell: Vector2i = _GridCoordinateRules.world_to_cell(get_global_mouse_position())
-	_drag_source = _RuntimeInteractionTypes.DragSource.INVENTORY
-	_drag_mechanism_id = &""
-	_drag_original_cell = INVALID_CELL
-	_drag_preview_cell = start_cell
+	_drag_context.begin_inventory(MIRROR_TOKEN_TYPE_ID, start_cell, SingleCellMirror.MirrorOrientation.SLASH)
 	_dragged_placed_token = null
-	# 只有合法松手提交后才减少 prototype_token_remaining；新拿出的镜面默认 SLASH。
+	# 只有合法松手提交后才扣除库存；新拿出的镜面默认 SLASH。
 	_drag_preview_token = _create_token_node(StringName("preview_%s" % MIRROR_TOKEN_TYPE_ID), start_cell, true)
 	_update_drag_preview_from_mouse()
 
 
 ## 从已放置机关开始一次拖拽移动；检查通过后隐藏正式视觉、创建预览并记录原始占用。返回 false 表示一致性检查失败，未进入拖拽、未创建预览、未隐藏节点。
-## 写入拖拽字段前必须先确认 placed_tokens_by_id 存在该 ID、节点有效、mechanism_id 与 cell 与参数一致；任一失败输出错误并返回 false。拖拽期间保留旧逻辑占用，预览不写入 OccupancyRegistry，非法松手恢复正式节点。
+## 写入拖拽字段前必须先确认玩家机关映射存在该 ID、节点有效、mechanism_id 与 cell 与参数一致；任一失败输出错误并返回 false。拖拽期间保留旧逻辑占用，预览不写入 OccupancyRegistry，非法松手恢复正式节点。
 func _begin_placed_drag(mechanism_id: StringName, original_cell: Vector2i) -> bool:
 	# 写入拖拽字段前完成全部一致性检查，避免半写入或对失效节点解引用。
-	if not placed_tokens_by_id.has(mechanism_id):
-		push_error("CoreLoopPrototype: 拖起失败，placed_tokens_by_id 缺少机关 %s。" % [mechanism_id])
+	if not _placement_controller.has_placed(mechanism_id):
+		push_error("CoreLoopPrototype: 拖起失败，玩家机关映射缺少机关 %s。" % [mechanism_id])
 		return false
-	var token: Variant = placed_tokens_by_id[mechanism_id]
+	var token: Variant = _placement_controller.get_placed_node(mechanism_id)
 	if not is_instance_valid(token):
 		push_error("CoreLoopPrototype: 拖起失败，机关 %s 节点已失效。" % [mechanism_id])
 		return false
@@ -739,10 +690,11 @@ func _begin_placed_drag(mechanism_id: StringName, original_cell: Vector2i) -> bo
 	if token.cell != original_cell:
 		push_error("CoreLoopPrototype: 拖起失败，机关 %s cell 失配：参数=%s，节点=%s。" % [mechanism_id, original_cell, token.cell])
 		return false
-	_drag_source = _RuntimeInteractionTypes.DragSource.PLACED
-	_drag_mechanism_id = mechanism_id
-	_drag_original_cell = original_cell
-	_drag_preview_cell = original_cell
+	# 起始朝向快照取自正式节点；已放置拖拽保留当前镜面朝向，库存拖拽另由 _begin_inventory_drag 设为 SLASH。
+	var orientation: SingleCellMirror.MirrorOrientation = SingleCellMirror.MirrorOrientation.SLASH
+	if token is SingleCellMirror:
+		orientation = (token as SingleCellMirror).orientation
+	_drag_context.begin_placed(mechanism_id, original_cell, original_cell, orientation)
 	_dragged_placed_token = token
 	# 拖拽期间保留旧逻辑占用，只隐藏正式视觉，松手后再原子更新；预览复制当前镜面朝向。
 	_dragged_placed_token.set_placed_visible(false)
@@ -755,7 +707,7 @@ func _begin_placed_drag(mechanism_id: StringName, original_cell: Vector2i) -> bo
 ## 根据鼠标位置更新拖拽预览：位于 InventoryBar 时只隐藏世界预览（不把 UI 坐标转成虚假地图格子），离开后恢复显示、吸附 cell_to_world 格中心，按空间合法性与松手提交权限刷新合法/非法颜色。
 ## 隐藏预览不等于取消拖拽；预览颜色只是视觉反馈，不替代正式提交的二次校验。
 func _update_drag_preview_from_mouse() -> void:
-	if not is_dragging() or _drag_preview_token == null:
+	if not _drag_context.is_active() or _drag_preview_token == null:
 		return
 
 	var viewport_mouse_position: Vector2 = get_viewport().get_mouse_position()
@@ -764,19 +716,19 @@ func _update_drag_preview_from_mouse() -> void:
 		return
 
 	_drag_preview_token.set_drag_preview_visible(true)
-	_drag_preview_cell = _GridCoordinateRules.world_to_cell(get_global_mouse_position())
+	_drag_context.update_preview_cell(_GridCoordinateRules.world_to_cell(get_global_mouse_position()))
 	# 预览合法性同时反映空间合法性与当前是否允许松手提交；不替代正式提交的二次校验。
-	var spatially_valid: bool = _is_valid_prototype_placement_cell(_drag_preview_cell, _drag_mechanism_id)
+	var spatially_valid: bool = _is_valid_prototype_placement_cell(_drag_context.preview_cell, _drag_context.mechanism_id)
 	var is_valid: bool = _RuntimeMoveRules.is_world_drop_preview_valid(
-		_drag_source,
+		_drag_context.source,
 		_get_current_run_state(),
 		get_runtime_moves_remaining(),
-		_drag_original_cell,
-		_drag_preview_cell,
+		_drag_context.original_cell,
+		_drag_context.preview_cell,
 		spatially_valid
 	)
-	_drag_preview_token.set_cell(_drag_preview_cell)
-	_drag_preview_token.set_world_position(_GridCoordinateRules.cell_to_world(_drag_preview_cell))
+	_drag_preview_token.set_cell(_drag_context.preview_cell)
+	_drag_preview_token.set_world_position(_GridCoordinateRules.cell_to_world(_drag_context.preview_cell))
 	_drag_preview_token.set_drag_preview(true, is_valid)
 
 
@@ -786,14 +738,14 @@ func _finish_drag_at_mouse() -> void:
 	var viewport_mouse_position: Vector2 = get_viewport().get_mouse_position()
 	var is_released_over_inventory: bool = _is_mouse_over_inventory_bar(viewport_mouse_position)
 
-	if _drag_source == _RuntimeInteractionTypes.DragSource.INVENTORY:
+	if _drag_context.is_inventory_source():
 		if is_released_over_inventory:
 			_cancel_current_drag()
 			return
 		_commit_inventory_drag_or_cancel()
 		return
 
-	if _drag_source == _RuntimeInteractionTypes.DragSource.PLACED:
+	if _drag_context.is_placed_source():
 		if is_released_over_inventory:
 			# 回收在所有非 COMPLETED 状态允许；COMPLETED 释放到机关栏改为安全取消，保留原占用与原位置，不增库存、不扣次数。
 			if _RuntimeMoveRules.can_recycle_placed_token_for_state(_get_current_run_state()):
@@ -806,8 +758,8 @@ func _finish_drag_at_mouse() -> void:
 		_commit_placed_drag_or_cancel()
 
 
-## 提交从库存开始的拖拽，或在非法位置取消：合法时创建正式机关、登记 OccupancyRegistry、库存减一并删除预览；非法时只删除预览（库存和占用不变化）。
-## 提交前防御性重检 _can_take_from_inventory_for_state：COMPLETED/未知状态取消拖拽，不扣库存、不创建正式机关、不登记占用。运行期首次放置不消耗 runtime_moves_used。
+## 提交从库存开始的拖拽，或在非法位置取消：放置事务由 PlacementController 原子负责（格校验/库存/节点/占用/映射/扣库存与回滚）。
+## 提交前防御性重检 can_take_from_inventory_for_state：COMPLETED/未知状态取消拖拽，不扣库存、不创建正式机关。运行期首次放置不消耗 runtime_moves_used。
 func _commit_inventory_drag_or_cancel() -> void:
 	# 首次放置在所有非 COMPLETED 状态允许；COMPLETED/未知状态取消拖拽，不扣库存、不创建正式机关。
 	if not _RuntimeMoveRules.can_take_from_inventory_for_state(_get_current_run_state()):
@@ -815,48 +767,34 @@ func _commit_inventory_drag_or_cancel() -> void:
 			print_debug("CoreLoopPrototype: 当前运行状态禁止首次放置，取消库存拖拽：%s。" % [_get_current_run_state()])
 		_cancel_current_drag()
 		return
-	if not _is_valid_prototype_placement_cell(_drag_preview_cell, &""):
-		# 非法位置取消：不扣库存、不写占用、不留残影。
+	# 原子放置事务：非法格/节点创建/占用登记/扣库存失败时控制器已逆序回滚，核心只需取消拖拽（不扣库存、不写占用、不留残影）。
+	# 类型/预览格/朝向均取自 _drag_context，库存拖拽朝向恒为 SLASH。
+	var result := _placement_controller.place_from_inventory(
+		_drag_context.token_type_id,
+		_drag_context.preview_cell,
+		_drag_context.original_orientation,
+	)
+	if not result.is_success():
 		_cancel_current_drag()
 		return
-	if prototype_token_remaining <= 0:
-		_cancel_current_drag()
-		return
-
-	var mechanism_id: StringName = _make_next_prototype_token_id()
-	if not occupancy.register_single_cell(mechanism_id, _drag_preview_cell):
-		push_error("CoreLoopPrototype: 原型机关登记占用失败：%s at %s" % [mechanism_id, _drag_preview_cell])
-		_cancel_current_drag()
-		return
-
-	var placed_token = _create_token_node(mechanism_id, _drag_preview_cell, false)
-	placed_tokens_by_id[mechanism_id] = placed_token
-	prototype_token_remaining -= 1
+	# 成功：库存已扣、占用与映射已成立；核心清除预览、重置拖拽、刷新 UI、断言一致性。
 	_update_inventory_ui()
 	_clear_drag_preview_only()
 	_reset_drag_state()
 	_assert_inventory_consistency()
 
 
-## 提交已放置机关移动，或在非法位置/原格松手时取消：合法新格时原子清除旧占用并登记新占用，更新正式机关节点；非法时恢复原节点可见性。
-## 原格松手视为取消，库存不变；新占用提交失败必须尝试恢复原占用和原位置。
-## 提交前二次校验：修改 OccupancyRegistry 前重新验证节点有效、mechanism_id/from_cell 仍正确、to_cell 仍合法、状态与剩余次数仍允许提交；失败安全取消并恢复原机关，不注销旧占用、不登记新占用、不扣次数。
-## 运行期扣次：仅 PULSE_ACTIVE/MOVE_WINDOW 且跨格成功提交后扣一次 runtime_moves_used；SETUP、非法、原格、取消与回滚均在此前 return。
+## 提交已放置机关移动，或在非法位置/原格松手时取消：移动事务由 PlacementController 原子负责（旧占用注销/新占用登记/节点 cell 更新与回滚）。
+## 原格松手视为取消，库存不变；新占用登记失败时控制器恢复旧占用与节点原格，核心再恢复可见性。
+## 提交前二次校验：节点有效、mechanism_id/from_cell 仍正确、状态与剩余次数仍允许提交；失败安全取消，不扣次数。
+## 运行期扣次：仅 PULSE_ACTIVE/MOVE_WINDOW 且跨格成功提交后扣一次 runtime_moves_used；SETUP、非法、原格、取消与回滚均不扣次。
 func _commit_placed_drag_or_cancel() -> void:
-	if _drag_preview_cell == _drag_original_cell:
-		_cancel_current_drag()
-		return
-	if not _is_valid_prototype_placement_cell(_drag_preview_cell, _drag_mechanism_id):
-		# 非法移动取消：旧占用从拖拽开始到取消一直保留，正式机关只需恢复显示。
-		_cancel_current_drag()
-		return
-
 	var token = _dragged_placed_token
-	var mechanism_id: StringName = _drag_mechanism_id
-	var from_cell: Vector2i = _drag_original_cell
-	var to_cell: Vector2i = _drag_preview_cell
+	var mechanism_id: StringName = _drag_context.mechanism_id
+	var from_cell: Vector2i = _drag_context.original_cell
+	var to_cell: Vector2i = _drag_context.preview_cell
 
-	# 提交前第二次校验：状态转换或次数变化后正式提交前重新确认整次移动仍合法；失败安全取消，保留原占用，不扣次数。
+	# 提交前校验：节点有效、拖拽状态一致；失败安全取消，保留原占用，不扣次数。
 	if not is_instance_valid(token):
 		push_error("CoreLoopPrototype: 提交移动前拖拽节点已失效，取消拖拽。")
 		_cancel_current_drag()
@@ -866,48 +804,34 @@ func _commit_placed_drag_or_cancel() -> void:
 		push_error("CoreLoopPrototype: 提交移动前拖拽节点状态不一致，取消拖拽。")
 		_cancel_current_drag()
 		return
-	if not _is_valid_prototype_placement_cell(to_cell, mechanism_id):
-		_cancel_current_drag()
-		return
+	# 状态与剩余次数权限（核心职责）；原格/非法格由控制器返回 NO_CHANGE/INVALID，核心据此取消，不扣次数。
 	if not _RuntimeMoveRules.can_commit_placed_move(_get_current_run_state(), get_runtime_moves_remaining(), from_cell, to_cell):
 		if OS.is_debug_build():
 			print_debug("CoreLoopPrototype: 提交前二次校验拒绝移动：%s remaining=%d %s->%s。" % [_get_current_run_state(), get_runtime_moves_remaining(), from_cell, to_cell])
 		_cancel_current_drag()
 		return
 
-	# 原子更新：先清除旧占用再登记新占用；失败必须恢复旧格，避免旧占用和新占用同时丢失。
-	if not occupancy.unregister(mechanism_id):
-		push_error("CoreLoopPrototype: 移动前旧占用不存在，恢复原机关。")
-		_cancel_current_drag()
-		return
-	if not occupancy.register_single_cell(mechanism_id, to_cell):
-		push_error("CoreLoopPrototype: 新占用登记失败，尝试恢复旧占用：%s -> %s" % [from_cell, to_cell])
-		if not occupancy.register_single_cell(mechanism_id, from_cell):
-			push_error("CoreLoopPrototype: 恢复旧占用失败，停止继续修改。")
-		token.set_cell(from_cell)
-		token.set_world_position(_GridCoordinateRules.cell_to_world(from_cell))
+	# 原子移动事务：控制器更新占用与节点 cell；世界位置与可见性由核心处理，orientation 不变。
+	var result := _placement_controller.move_placed(mechanism_id, to_cell)
+	if result.is_success():
+		token.set_world_position(_GridCoordinateRules.cell_to_world(to_cell))
 		token.set_placed_visible(true)
 		_clear_drag_preview_only()
 		_reset_drag_state()
 		_assert_inventory_consistency()
+		# 占用原子更新与节点提交都成功后才扣一次；SETUP 跨格移动不计次，非法/原格/取消/回滚不会到达本处。
+		if _RuntimeMoveRules.should_count_runtime_move(_get_current_run_state(), from_cell, to_cell):
+			runtime_moves_used += 1
+			_update_runtime_move_ui()
 		return
-
-	token.set_cell(to_cell)
-	token.set_world_position(_GridCoordinateRules.cell_to_world(to_cell))
-	token.set_placed_visible(true)
-	_clear_drag_preview_only()
-	_reset_drag_state()
-	_assert_inventory_consistency()
-	# 占用原子更新与节点提交都成功后才扣一次；SETUP 跨格移动不计次，非法/原格/取消/回滚/新占用登记失败不会到达本处。
-	if _RuntimeMoveRules.should_count_runtime_move(_get_current_run_state(), from_cell, to_cell):
-		runtime_moves_used += 1
-		_update_runtime_move_ui()
+	# NO_CHANGE/INVALID/FAILED：节点仍在原格，恢复可见性并取消拖拽，不扣次数。
+	_cancel_current_drag()
 
 
-## 回收当前从已放置机关拖拽的原型机关：注销占用、移除映射、删除正式与预览节点、库存加一（不超过 PROTOTYPE_TOKEN_TOTAL）并刷新 UI。
-## 只有 PLACED 拖拽可回收；内部含防御性 _can_recycle_placed_token_for_state 检查，COMPLETED/未知状态安全取消并恢复原机关，不依赖外层单一守卫。运行期回收不消耗 runtime_moves_used；注销失败时恢复正式机关并取消拖拽。
+## 回收当前从已放置机关拖拽的原型机关：回收事务由 PlacementController 原子负责（注销占用/删映射/销毁节点/库存归还）。
+## 只有 PLACED 拖拽可回收；内部含防御性 can_recycle_placed_token_for_state 检查，COMPLETED/未知状态安全取消并恢复原机关，不依赖外层单一守卫。运行期回收不消耗 runtime_moves_used；注销失败时控制器保留节点/映射/库存，核心恢复可见性并取消拖拽。
 func _recycle_dragged_placed_token() -> void:
-	if _drag_source != _RuntimeInteractionTypes.DragSource.PLACED or _dragged_placed_token == null:
+	if not _drag_context.is_placed_source() or _dragged_placed_token == null:
 		_cancel_current_drag()
 		return
 	# 防御性权限检查：COMPLETED/未知状态即使直接调用本函数也安全取消，不增库存。
@@ -917,15 +841,12 @@ func _recycle_dragged_placed_token() -> void:
 		_cancel_current_drag()
 		return
 
-	# 整个 InventoryBar 都是有效回收区域，不要求精准松回小栏位。
-	if not occupancy.unregister(_drag_mechanism_id):
-		push_error("CoreLoopPrototype: 回收时注销占用失败，恢复原机关。")
+	# 原子回收事务：成功则占用/映射/节点已清理、库存已归还；失败则节点/映射/库存保持，核心恢复可见性并取消拖拽。
+	var result := _placement_controller.recycle_placed(_drag_context.mechanism_id)
+	if not result.is_success():
+		push_error("CoreLoopPrototype: 回收事务失败，恢复原机关：%s（%s）。" % [_drag_context.mechanism_id, result.error_message])
 		_cancel_current_drag()
 		return
-
-	placed_tokens_by_id.erase(_drag_mechanism_id)
-	_dragged_placed_token.queue_free()
-	prototype_token_remaining = min(PROTOTYPE_TOKEN_TOTAL, prototype_token_remaining + 1)
 	_update_inventory_ui()
 	_clear_drag_preview_only()
 	_reset_drag_state()
@@ -936,15 +857,15 @@ func _recycle_dragged_placed_token() -> void:
 ## should_assert_consistency：普通取消默认 true；R 完整重置传 false，把断言延后到玩家机关统一清理完成之后，避免中间态断言早于后续删除/注销。
 ## 从库存取消不改变库存；已放置机关取消不改变 OccupancyRegistry（旧占用从未清除）。_dragged_placed_token 已失效时不再解引用，只清理预览与状态并在调试构建报告一致性异常，不静默重建映射或占用。
 func _cancel_current_drag(should_assert_consistency: bool = true) -> void:
-	if _drag_source == _RuntimeInteractionTypes.DragSource.PLACED and _dragged_placed_token != null:
+	if _drag_context.is_placed_source() and _dragged_placed_token != null:
 		if is_instance_valid(_dragged_placed_token):
 			# 拖拽期间保留旧逻辑占用，取消时只恢复正式视觉。
-			_dragged_placed_token.set_cell(_drag_original_cell)
-			_dragged_placed_token.set_world_position(_GridCoordinateRules.cell_to_world(_drag_original_cell))
+			_dragged_placed_token.set_cell(_drag_context.original_cell)
+			_dragged_placed_token.set_world_position(_GridCoordinateRules.cell_to_world(_drag_context.original_cell))
 			_dragged_placed_token.set_placed_visible(true)
 		elif OS.is_debug_build():
 			# 失效节点不得再次解引用；仅报告一致性异常，不静默重建占用或映射。
-			push_error("CoreLoopPrototype: 取消拖拽时已放置机关节点已失效，未恢复视觉，请检查 placed_tokens_by_id 与 OccupancyRegistry 一致性。")
+			push_error("CoreLoopPrototype: 取消拖拽时已放置机关节点已失效，未恢复视觉，请检查玩家机关映射与 OccupancyRegistry 一致性。")
 	_clear_drag_preview_only()
 	_reset_drag_state()
 	if should_assert_consistency:
@@ -958,13 +879,11 @@ func _clear_drag_preview_only() -> void:
 		_drag_preview_token = null
 
 
-## 清空当前拖拽状态字段；只在预览删除和正式机关状态已处理后调用，避免丢失恢复所需的原始格子信息。
+## 清空节点句柄与 DragContext 临时事实；只在预览删除和正式机关状态已处理后调用，避免丢失恢复所需的原始格子信息。
 func _reset_drag_state() -> void:
-	_drag_source = _RuntimeInteractionTypes.DragSource.NONE
-	_drag_mechanism_id = &""
-	_drag_original_cell = INVALID_CELL
-	_drag_preview_cell = INVALID_CELL
+	_drag_preview_token = null
 	_dragged_placed_token = null
+	_drag_context.clear()
 
 
 ## 创建一个 SingleCellMirror 节点并加入 RuntimeObjects；世界坐标由 cell_to_world() 统一计算。不写库存、不写 OccupancyRegistry、不判断放置合法性；新建镜面默认 SLASH，拖动已有镜面由调用方复制原 orientation。
@@ -974,6 +893,22 @@ func _create_token_node(mechanism_id: StringName, cell: Vector2i, is_preview: bo
 	token.configure(mechanism_id, cell)
 	token.set_world_position(_GridCoordinateRules.cell_to_world(cell))
 	token.set_drag_preview(is_preview, true)
+	return token
+
+
+## 创建正式机关节点工厂（注入 PlacementController）：实例化 SingleCellMirror 并加入 RuntimeObjects，配置 ID/格/朝向/世界坐标。
+## 不写占用、不写库存、不判断合法性；orientation 由 place_from_inventory 传入，新镜面为 SLASH。实例化失败返回 null 由控制器回滚。
+func _create_formal_token_node(mechanism_id: StringName, cell: Vector2i, orientation: Variant) -> Variant:
+	var token = _SingleCellMirrorScene.instantiate()
+	if not is_instance_valid(token):
+		push_error("CoreLoopPrototype: 正式机关节点实例化失败：%s at %s" % [mechanism_id, cell])
+		return null
+	runtime_objects.add_child(token)
+	token.configure(mechanism_id, cell)
+	if token is SingleCellMirror:
+		(token as SingleCellMirror).set_orientation(orientation)
+	token.set_world_position(_GridCoordinateRules.cell_to_world(cell))
+	token.set_drag_preview(false, true)
 	return token
 
 
@@ -988,16 +923,9 @@ func _copy_mirror_orientation_if_possible(source_token: Variant, target_token: V
 	target_mirror.set_orientation(source_mirror.orientation)
 
 
-## 生成下一个正式镜面机关唯一 ID；即使镜面被回收，旧 ID 不复用，避免占用表和节点映射调试时混淆。
-func _make_next_prototype_token_id() -> StringName:
-	var mechanism_id: StringName = StringName("%s_%d" % [MIRROR_TOKEN_TYPE_ID, _next_prototype_token_serial])
-	_next_prototype_token_serial += 1
-	return mechanism_id
-
-
-## 是否存在拖拽操作（_drag_source != NONE）；预览节点可能因异常被释放，仍只以拖拽来源作为状态事实。
+## 是否存在拖拽操作（_drag_context.is_active()）；预览节点可能因异常被释放，仍只以 DragContext 来源作为状态事实。
 func is_dragging() -> bool:
-	return _drag_source != _RuntimeInteractionTypes.DragSource.NONE
+	return _drag_context.is_active()
 
 
 ## 鼠标是否位于整个 InventoryBar 区域；用于回收判断，不要求精准拖到单个栏位。
@@ -1030,19 +958,20 @@ func _is_cell_occupied_by_other(cell: Vector2i, ignored_mechanism_id: StringName
 ## 刷新底部机关栏 UI：把库存剩余与是否允许拿取传给 InventorySlotView.refresh_slot()，由槽位组件统一负责剩余文本/占位符颜色/图标 self_modulate。UI 只显示库存事实，不自行修改库存。
 func _update_inventory_ui() -> void:
 	# 拿取可用性：库存大于 0 且当前运行状态允许从机关栏拿取（非 COMPLETED）。
+	var remaining: int = _inventory_controller.get_remaining()
 	var is_available: bool = (
-		prototype_token_remaining > 0
+		remaining > 0
 		and _RuntimeMoveRules.can_take_from_inventory_for_state(_get_current_run_state())
 	)
 	prototype_token_slot.refresh_slot(
-		prototype_token_remaining,
+		remaining,
 		is_available
 	)
 
 
 ## 采集库存一致性只读纯数据快照：冻结库存标量、OccupancyRegistry 本体一致性标志与六组对齐的条目级事实。
 ## D 类 Node 生命周期检查（is_instance_valid、is_queued_for_deletion）保留在本函数不迁入 Diagnostics，验证通过后才读取 token.mechanism_id 与 token.cell；不把真实 Node 传给 Snapshot/Rules/Check，不把生命周期状态写进 Snapshot。
-## 六组容器按 placed_tokens_by_id 当前迭代顺序严格同步追加，不排序、不去重，不修改 OccupancyRegistry 返回数组；is_consistent() 每次只调用一次，不在核心复制其内部算法；count==0 时 first_cell 用 Vector2i.ZERO 占位（规则只在 count==1 时比较）。
+## 六组容器按 PlacementController.get_placed_ids() 当前迭代顺序严格同步追加，不排序、不去重，不修改 OccupancyRegistry 返回数组；is_consistent() 每次只调用一次，不在核心复制其内部算法；count==0 时 first_cell 用 Vector2i.ZERO 占位（规则只在 count==1 时比较）。
 func _collect_inventory_consistency_snapshot() -> _InventoryConsistencySnapshot:
 	var dictionary_ids: Array[StringName] = []
 	var token_ids: Array[StringName] = []
@@ -1051,8 +980,9 @@ func _collect_inventory_consistency_snapshot() -> _InventoryConsistencySnapshot:
 	var occupancy_cell_counts: PackedInt32Array = PackedInt32Array()
 	var occupancy_first_cells: Array[Vector2i] = []
 
-	for mechanism_id: StringName in placed_tokens_by_id:
-		var token: Variant = placed_tokens_by_id[mechanism_id]
+	# 通过控制器只读接口取得 ID 快照与节点，避免核心直接读写 placed_tokens_by_id。
+	for mechanism_id: StringName in _placement_controller.get_placed_ids():
+		var token: Variant = _placement_controller.get_placed_node(mechanism_id)
 		var token_is_valid: bool = is_instance_valid(token)
 		assert(token_is_valid, "玩家机关映射失效：mechanism_id=%s" % [mechanism_id])
 		if not token_is_valid:
@@ -1084,8 +1014,8 @@ func _collect_inventory_consistency_snapshot() -> _InventoryConsistencySnapshot:
 	var occupancy_consistent: bool = occupancy.is_consistent()
 
 	return _InventoryConsistencySnapshot.new(
-			PROTOTYPE_TOKEN_TOTAL,
-			prototype_token_remaining,
+			_inventory_controller.get_total(),
+			_inventory_controller.get_remaining(),
 			occupancy_consistent,
 			dictionary_ids,
 			token_ids,
