@@ -3,6 +3,9 @@
 > 适用项目：光速奇点
 > 适用成员：陈俊贤、潘陈俣、张梓涵
 > 当前仓库：`light-speed-singularity`
+> 更新日期：2026 年 7 月 26 日
+>
+> 说明：本文示例围绕当前阶段“机关公共接口与最小模板”。完整统一光运行架构、FixedEmitter、光粒等仍为长期目标，不在当前立即任务示例中。
 
 ## 1. 分支管理原则
 
@@ -37,9 +40,9 @@ release
 
 示例：
 ```text
-feat/kud-grid-service
-feat/pan-light-splitter
-content/zhang-level-03
+feat/kud-mechanism-interface
+feat/pan-single-mirror-rule-adapter
+test/zhang-mechanism-template-visual
 ```
 
 ## 3. 成员身份标识
@@ -54,17 +57,17 @@ content/zhang-level-03
 
 陈俊贤：
 ```text
-feat/kud-grid-service
+feat/kud-mechanism-interface
 ```
 
 潘陈俣：
 ```text
-feat/pan-light-splitter
+feat/pan-single-mirror-rule-adapter
 ```
 
 张梓涵：
 ```text
-content/zhang-level-03
+test/zhang-mechanism-template-visual
 ```
 
 ## 4. 分支类型前缀
@@ -95,9 +98,9 @@ content/zhang-level-03
 
 正确示例：
 ```text
-feat/kud-level-loader
-feat/pan-emitter-direction
-content/zhang-level-02
+feat/kud-mechanism-interface
+refactor/kud-single-mirror-contract
+feat/pan-single-mirror-rule-adapter
 ```
 
 错误示例：
@@ -121,13 +124,19 @@ fix/pan-bug
 
 推荐：
 ```text
-feat/kud-level-loader
-feat/pan-particle-propagation
-content/zhang-achievement-icons
-fix/pan-light-split-direction
+feat/kud-mechanism-interface
+feat/kud-mechanism-template
+test/pan-mechanism-contract-cases
+docs/zhang-mechanism-art-requirements
 ```
 
 # 6. 陈俊贤分支命名
+
+> 状态说明（适用于 §6–§8 全部职责表示例）：
+> - 以下分支名属于长期或未来阶段参考命名库；
+> - 不代表当前下一批任务；
+> - 当前阶段推荐分支以 §13“机关公共接口与最小模板”为准；
+> - 光粒、分光器、FixedEmitter、完整统一光运行架构当前均不在立即实施范围。
 
 ## 6.1 职责范围
 
@@ -430,43 +439,37 @@ content/zhang-level-03
 | 潘陈俣 | 水晶、检测器和胜利判定 |
 | 张梓涵 | 第三关地图、机关位置和提示文字 |
 
-## 9.3 分光器
+## 9.3 单格镜接入公共机关契约与最小模板
 
 ```text
-feat/kud-gameplay-interfaces
-feat/pan-light-splitter
-content/zhang-device-icons
+feat/kud-mechanism-interface
+refactor/kud-single-mirror-contract
+feat/pan-single-mirror-rule-adapter
+test/zhang-mechanism-template-visual
 ```
 
+| 成员 | 负责内容 |
 |---|---|
-| 陈俊贤 | 提供统一的机关输入输出接口 |
-| 潘陈俣 | 实现分光方向和光强计算 |
-| 张梓涵 | 制作分光器图标和关卡中的视觉配置 |
+| 陈俊贤 | 公共机关契约、最小机关模板、核心接线边界 |
+| 潘陈俣 | 单格镜规则适配和玩法测试 |
+| 张梓涵 | 视觉/Profile 与关卡编辑侧验证 |
 
-# 10. 当前分支重命名
+三人不在同一分支同时修改同一个核心脚本；公共契约由陈俊贤先合并，潘陈俣与张梓涵从最新 `main` 接入。
 
-当前旧分支：
-```text
-feat/prototype-light-loop
-```
+# 10. 旧分支说明（历史提醒）
 
-陈俊贤的身份标识为 `kud`，因此应改为：
-```text
-feat/kud-prototype-light-loop
-```
+历史曾存在旧分支示例（如 `feat/prototype-light-loop`），现已失效。当前仓库状态：
 
-本地重命名并推送：
-```bash
-git branch -m feat/kud-prototype-light-loop
-git push -u origin feat/kud-prototype-light-loop
-git push origin --delete feat/prototype-light-loop
-```
+- 本地与远程只剩 `main`；
+- Diagnostics 已通过 PR #16 合并，对应任务分支已删除；
+- 新任务一律从最新 `main` 创建新分支。
 
-如果已经创建 Pull Request，优先在 GitHub 网页的分支页面中重命名，再同步本地分支。
+旧分支重命名步骤不再适用，不在此提供 `git branch -m` 等命令。如需对历史分支做整理，由用户人工执行；AI 不执行 Git 写操作。
 
 # 11. 创建新分支的标准流程
 
-所有成员都必须先同步最新的 `main`：
+所有成员都必须先同步最新的 `main`，再创建自己的任务分支。以下命令仅由用户人工执行；AI 不执行 Git 写操作。
+
 ```bash
 git switch main
 git pull origin main
@@ -476,17 +479,17 @@ git pull origin main
 
 陈俊贤示例：
 ```bash
-git switch -c feat/kud-grid-service
+git switch -c feat/kud-mechanism-interface
 ```
 
 潘陈俣示例：
 ```bash
-git switch -c feat/pan-emitter-direction
+git switch -c feat/pan-single-mirror-rule-adapter
 ```
 
 张梓涵示例：
 ```bash
-git switch -c content/zhang-level-template
+git switch -c test/zhang-mechanism-template-visual
 ```
 
 # 12. 提交与合并标准
@@ -524,38 +527,44 @@ git switch -c content/zhang-level-template
 3. 拉取最新代码。
 4. 再创建下一个任务分支。
 
-示例：
+示例（仅由用户人工执行；AI 不执行 Git 写操作）：
 ```bash
 git switch main
 git pull origin main
-git branch -d feat/kud-grid-service
+git branch -d feat/kud-mechanism-interface
 ```
 
 远程分支未自动删除时：
 ```bash
-git push origin --delete feat/kud-grid-service
+git push origin --delete feat/kud-mechanism-interface
 ```
 
 # 13. 推荐的下一批分支
 
-第一阶段原型完成并合并后，推荐三人分别创建：
+Diagnostics foundation 已合并入 `main`。当前下一阶段为“机关公共接口与最小模板”，推荐三人分别从最新 `main` 创建：
 
 陈俊贤：
 ```text
-feat/kud-grid-service
+feat/kud-mechanism-interface
+refactor/kud-single-mirror-contract
+feat/kud-mechanism-template
 ```
 
 潘陈俣：
 ```text
-feat/pan-emitter-direction
+feat/pan-single-mirror-rule-adapter
+test/pan-mechanism-contract-cases
 ```
 
 张梓涵：
 ```text
-content/zhang-level-template
+test/zhang-mechanism-template-visual
+docs/zhang-mechanism-art-requirements
 ```
 
-三个人都从最新的 `main` 创建，不要从彼此尚未完成的分支创建。
+方向围绕：公共机关接口、现有单格镜契约接入、最小机关模板、玩法规则测试、视觉/Profile 与编辑器侧验证。
+
+不要把完整关卡制作、FixedEmitter、光粒或完整统一光运行架构写成当前立即任务。三个人都从最新的 `main` 创建，不要从彼此尚未完成的分支创建。
 
 # 14. 核心分工总结
 
