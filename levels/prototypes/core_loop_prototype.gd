@@ -201,8 +201,8 @@ func _occupancy_has_any_reference_to_mechanism(mechanism_id: StringName) -> bool
 ## [br]本函数无参数、无返回值，仅由 _ready() 在调试构建中作为第六项调用。
 ## [br]检查逻辑已迁至独立模块 PlayerMechanismIdSnapshotCheck（gameplay/diagnostics/self_check/checks/player_mechanism_id_snapshot_check.gd），
 ## 真实规则位于 PlayerMechanismResetRules（gameplay/placement/rules/player_mechanism_reset_rules.gd）。
-## [br]批次 4B-C2 起本函数通过单项 SelfCheckRunner 执行该检查：构造 SelfCheckCallable 并交由 _run_startup_self_check_via_runner 注册、运行与校验，不再直接调用 PlayerMechanismIdSnapshotCheck.run()，也不再在核心脚本内保留测试案例。
-## [br]本函数只通过 Runner 保持 Debug 失败语义：注册失败、Runner 结构错误或 SelfCheckResult.passed == false 时由 _run_startup_self_check_via_runner 立即 assert，保留原 Debug 硬断言边界，不降级为 warning。
+## [br]批次 4B-C2 起本函数通过单项 SelfCheckRunner 执行该检查：构造 SelfCheckCallable 并交由 _run_startup_self_check_via_controller 注册、运行与校验，不再直接调用 PlayerMechanismIdSnapshotCheck.run()，也不再在核心脚本内保留测试案例。
+## [br]本函数只通过 Runner 保持 Debug 失败语义：注册失败、Runner 结构错误或 SelfCheckResult.passed == false 时由 _run_startup_self_check_via_controller 立即 assert，保留原 Debug 硬断言边界，不降级为 warning。
 ## [br]边界条件：保持原启动顺序，本函数仍位于 _ready 中第六项；不参与业务状态修改，不写文件，不写日志。
 func _run_player_mechanism_id_snapshot_self_check() -> void:
 	var definition: SelfCheckCallable = SelfCheckCallable.new(
@@ -210,21 +210,23 @@ func _run_player_mechanism_id_snapshot_self_check() -> void:
 			"玩家机关 ID 快照、R 库存计算与残留引用自检",
 			_PlayerMechanismIdSnapshotCheck.run
 	)
-	_run_startup_self_check_via_runner(definition, &"startup_player_mechanism_id_snapshot")
+	_run_startup_self_check_via_controller(definition, &"startup_player_mechanism_id_snapshot")
 
 
-## 启动期 Debug 兼容执行入口：通过 DiagnosticsController 执行一条自检定义（批次 5A-H3）。
-## [br]职责：把单项自检交由核心持有的 DiagnosticsController 协调执行，Controller 每次内部新建 SelfCheckRunner，
+## 启动期单项自检执行入口：通过 DiagnosticsController 执行一项启动自检定义（批次 5A-H3）。
+## [br]职责：把单项自检交由核心持有的 DiagnosticsController 协调执行；Controller 负责临时 SelfCheckRunner 的创建、注册与执行，
 ## [br]注册失败与协调错误统一表达为 SelfCheckRunResult.errors；Controller 不执行 assert，失败策略仍由核心决定。
+## [br]核心职责：解释 SelfCheckRunResult，保留执行错误、结构错误和检查失败三层 Debug 硬断言。
 ## [br]输入：definition 为已构造的 SelfCheckCallable，不得为 null；execution_id 为本次运行的稳定 StringName。
 ## [br]返回：无返回值。
+## [br]真实数据：由各启动包装函数采集后构造 SelfCheckCallable 传入；本函数不采集玩法数据。
 ## [br]副作用：仅委托 Controller.run_self_check；核心不在本函数内 new SelfCheckRunner、不调用 Check.run()、不写文件、不写日志、不修改玩法状态、不访问场景树。
 ## [br]失败方式（三层 Debug 硬断言）：第一层 run_result 为 null 或 errors 非空（执行级错误）；
 ## [br]第二层 validate() 非空（结果结构错误）；第三层 is_success() 为 false（任一 Check 未通过）。
 ## [br]断言信息汇总 execution_id、errors、validate 错误与每项 check_id/summary/details，不降级为 warning。
+## [br]边界：本函数只用于启动期自检，不用于运行期事务硬不变量（运行期库存一致性由 _assert_inventory_consistency 直接断言，不经本函数）。
 ## [br]保持启动顺序的边界：本函数只执行传入的单项定义，不合并多项，不改变 _ready 调用顺序。
-## [br]这是迁移期的 Debug 兼容执行入口，不参与业务状态修改。
-func _run_startup_self_check_via_runner(
+func _run_startup_self_check_via_controller(
 		definition: SelfCheckCallable,
 		execution_id: StringName
 ) -> void:
@@ -293,8 +295,8 @@ func _write_startup_self_check_summary_log() -> void:
 ## 执行 OccupancyRegistry 启动期轻量自检。
 ## [br]本函数无参数、无返回值，仅由 _ready() 在调试构建中调用。
 ## [br]检查逻辑已迁至独立模块 OccupancyRegistryCheck（gameplay/diagnostics/self_check/checks/occupancy_registry_check.gd）。
-## [br]批次 4B-B2 起本函数通过单项 SelfCheckRunner 执行该检查：构造 SelfCheckCallable 并交由 _run_startup_self_check_via_runner 注册、运行与校验，不再直接调用 OccupancyRegistryCheck.run()。
-## [br]失败语义：注册失败、Runner 结构错误或 SelfCheckResult.passed == false 时由 _run_startup_self_check_via_runner 立即 assert，保留原 Debug 硬断言边界，不降级为 warning。
+## [br]批次 4B-B2 起本函数通过单项 SelfCheckRunner 执行该检查：构造 SelfCheckCallable 并交由 _run_startup_self_check_via_controller 注册、运行与校验，不再直接调用 OccupancyRegistryCheck.run()。
+## [br]失败语义：注册失败、Runner 结构错误或 SelfCheckResult.passed == false 时由 _run_startup_self_check_via_controller 立即 assert，保留原 Debug 硬断言边界，不降级为 warning。
 ## [br]边界条件：保持原启动顺序，本函数仍位于 _ready 中第一项；不参与业务状态修改，不写文件，不写日志。
 func _run_occupancy_registry_self_check() -> void:
 	var definition: SelfCheckCallable = SelfCheckCallable.new(
@@ -302,7 +304,7 @@ func _run_occupancy_registry_self_check() -> void:
 			"OccupancyRegistry 启动期轻量自检",
 			_OccupancyRegistryCheck.run
 	)
-	_run_startup_self_check_via_runner(definition, &"startup_occupancy_registry")
+	_run_startup_self_check_via_controller(definition, &"startup_occupancy_registry")
 
 
 ## 执行当前原型 64 像素逻辑格坐标换算自检。
@@ -311,9 +313,9 @@ func _run_occupancy_registry_self_check() -> void:
 ## 该模块在构造时复制采样快照，不保存 core_loop、Node、Crystal 或其他玩法对象引用。
 ## [br]批次 4B-E3 起本函数通过单项 SelfCheckRunner 执行该检查：按原自检顺序采集真实格子
 ## （Vector2i.ZERO、emitter_cell、每个 crystal.cell、每个 wall_cells 格、map_bounds.end - Vector2i.ONE 角点）
-## 构造 GridCoordinateCheck，再包装为 SelfCheckCallable 交由 _run_startup_self_check_via_runner 注册、运行与校验，
+## 构造 GridCoordinateCheck，再包装为 SelfCheckCallable 交由 _run_startup_self_check_via_controller 注册、运行与校验，
 ## 不再在核心脚本内保留 cell↔world 断言或相邻格中心距测试案例。
-## [br]本函数只通过 Runner 保持 Debug 失败语义：注册失败、Runner 结构错误或 SelfCheckResult.passed == false 时由 _run_startup_self_check_via_runner 立即 assert，保留原 Debug 硬断言边界，不降级为 warning。
+## [br]本函数只通过 Runner 保持 Debug 失败语义：注册失败、Runner 结构错误或 SelfCheckResult.passed == false 时由 _run_startup_self_check_via_controller 立即 assert，保留原 Debug 硬断言边界，不降级为 warning。
 ## [br]边界条件：保持原启动顺序，本函数仍位于 _ready 中第二项；采样数组只在本函数局部使用，不存为字段，
 ## 不排序、不去重，不改变 crystals 或 wall_cells 遍历顺序；只把 Vector2i 格子传入 Diagnostics，不把真实对象传给 Diagnostics；
 ## 不使用 Callable.bind 或 lambda；不参与业务状态修改，不写文件，不写日志。
@@ -334,13 +336,13 @@ func _run_grid_coordinate_self_check() -> void:
 			"网格坐标规则自检",
 			Callable(check, "run")
 	)
-	_run_startup_self_check_via_runner(definition, &"startup_grid_coordinate")
+	_run_startup_self_check_via_controller(definition, &"startup_grid_coordinate")
 
 ## 执行基础单格镜面八方向反射纯函数自检。
 ## [br]本函数无参数、无返回值，仅由 _ready() 在调试构建中调用。
 ## [br]检查逻辑已迁至独立模块 MirrorReflectionCheck（gameplay/diagnostics/self_check/checks/mirror_reflection_check.gd）。
-## [br]批次 4B-B2 起本函数通过单项 SelfCheckRunner 执行该检查：构造 SelfCheckCallable 并交由 _run_startup_self_check_via_runner 注册、运行与校验，不再直接调用 MirrorReflectionCheck.run()。
-## [br]失败语义：注册失败、Runner 结构错误或 SelfCheckResult.passed == false 时由 _run_startup_self_check_via_runner 立即 assert，保留原 Debug 硬断言边界，不降级为 warning。
+## [br]批次 4B-B2 起本函数通过单项 SelfCheckRunner 执行该检查：构造 SelfCheckCallable 并交由 _run_startup_self_check_via_controller 注册、运行与校验，不再直接调用 MirrorReflectionCheck.run()。
+## [br]失败语义：注册失败、Runner 结构错误或 SelfCheckResult.passed == false 时由 _run_startup_self_check_via_controller 立即 assert，保留原 Debug 硬断言边界，不降级为 warning。
 ## [br]边界条件：保持原启动顺序，本函数仍位于 _ready 中网格坐标自检之后，不得前移至网格检查之前；不参与业务状态修改，不写文件，不写日志。
 func _run_single_cell_mirror_reflection_self_check() -> void:
 	var definition: SelfCheckCallable = SelfCheckCallable.new(
@@ -348,16 +350,16 @@ func _run_single_cell_mirror_reflection_self_check() -> void:
 			"基础单格镜面八方向反射纯函数自检",
 			_MirrorReflectionCheck.run
 	)
-	_run_startup_self_check_via_runner(definition, &"startup_single_cell_mirror_reflection")
+	_run_startup_self_check_via_controller(definition, &"startup_single_cell_mirror_reflection")
 
 
 ## 执行当前原型运行状态纯规则自检。
 ## [br]本函数无参数、无返回值，仅由 _ready() 在调试构建中作为第四项调用。
 ## [br]检查逻辑已迁至独立模块 RuntimeStateCheck（gameplay/diagnostics/self_check/checks/runtime_state_check.gd），
 ## 正式规则位于 RuntimeStateRules（gameplay/interaction/runtime_state_rules.gd）。
-## [br]批次 4B-F3 起本函数通过单项 SelfCheckRunner 执行该检查：构造 SelfCheckCallable 并交由 _run_startup_self_check_via_runner 注册、运行与校验，
+## [br]批次 4B-F3 起本函数通过单项 SelfCheckRunner 执行该检查：构造 SelfCheckCallable 并交由 _run_startup_self_check_via_controller 注册、运行与校验，
 ## 不再直接调用 RuntimeStateCheck.run()，也不再在核心脚本内保留测试案例或直接改写 current_run_state 进行自检。
-## [br]本函数只通过 Runner 保持 Debug 失败语义：注册失败、Runner 结构错误或 SelfCheckResult.passed == false 时由 _run_startup_self_check_via_runner 立即 assert，
+## [br]本函数只通过 Runner 保持 Debug 失败语义：注册失败、Runner 结构错误或 SelfCheckResult.passed == false 时由 _run_startup_self_check_via_controller 立即 assert，
 ## 保留原 Debug 硬断言边界，不降级为 warning。
 ## [br]测试案例位于 RuntimeStateCheck（22 项：2 项脉冲结束目标状态 + 四个 RunState × 五条纯权限规则）；
 ## [br]正式规则位于 RuntimeStateRules；本函数只通过 Runner 保留 Debug 硬断言，不修改真实运行状态。
@@ -369,15 +371,15 @@ func _run_post_pulse_state_self_check() -> void:
 			"运行状态规则自检",
 			_RuntimeStateCheck.run
 	)
-	_run_startup_self_check_via_runner(definition, &"startup_runtime_state_rules")
+	_run_startup_self_check_via_controller(definition, &"startup_runtime_state_rules")
 
 
 ## 执行运行期移动次数纯函数自检。
 ## [br]本函数无参数、无返回值，仅由 _ready() 在调试构建中作为第五项调用。
 ## [br]检查逻辑已迁至独立模块 RuntimeMoveCheck（gameplay/diagnostics/self_check/checks/runtime_move_check.gd），
 ## 真实规则位于 RuntimeMoveRules（gameplay/placement/rules/runtime_move_rules.gd）。
-## [br]批次 4B-D4 起本函数通过单项 SelfCheckRunner 执行该检查：构造 SelfCheckCallable 并交由 _run_startup_self_check_via_runner 注册、运行与校验，不再直接调用 RuntimeMoveCheck.run()，也不再在核心脚本内保留测试案例。
-## [br]本函数只通过 Runner 保持 Debug 失败语义：注册失败、Runner 结构错误或 SelfCheckResult.passed == false 时由 _run_startup_self_check_via_runner 立即 assert，保留原 Debug 硬断言边界，不降级为 warning。
+## [br]批次 4B-D4 起本函数通过单项 SelfCheckRunner 执行该检查：构造 SelfCheckCallable 并交由 _run_startup_self_check_via_controller 注册、运行与校验，不再直接调用 RuntimeMoveCheck.run()，也不再在核心脚本内保留测试案例。
+## [br]本函数只通过 Runner 保持 Debug 失败语义：注册失败、Runner 结构错误或 SelfCheckResult.passed == false 时由 _run_startup_self_check_via_controller 立即 assert，保留原 Debug 硬断言边界，不降级为 warning。
 ## [br]边界条件：保持原启动顺序，本函数仍位于 _ready 中第五项；测试案例已迁入 RuntimeMoveCheck，正式规则位于 RuntimeMoveRules，本函数只通过 Runner 保留 Debug 硬断言，不参与实际移动判定，不写文件，不写日志。
 func _run_runtime_move_self_check() -> void:
 	var definition: SelfCheckCallable = SelfCheckCallable.new(
@@ -385,7 +387,7 @@ func _run_runtime_move_self_check() -> void:
 			"运行期移动规则自检",
 			_RuntimeMoveCheck.run
 	)
-	_run_startup_self_check_via_runner(definition, &"startup_runtime_move_rules")
+	_run_startup_self_check_via_controller(definition, &"startup_runtime_move_rules")
 
 
 ## 处理关卡输入动作和鼠标拖拽事件。
@@ -1433,8 +1435,8 @@ func _assert_inventory_consistency() -> void:
 ## 执行库存一致性启动期自检（Diagnostics 批次 4B-G4）。
 ## [br]本函数无参数、无返回值，仅由 _ready() 在调试构建中作为第七项调用。
 ## [br]检查逻辑复用玩法层共享纯规则 InventoryConsistencyRules（单一来源）与只读快照 InventoryConsistencySnapshot，由 InventoryConsistencyCheck 包装为无参 run()。
-## [br]本函数通过单项 SelfCheckRunner 执行该检查：采集快照、构造 Check、包装为 SelfCheckCallable 并交由 _run_startup_self_check_via_runner 注册、运行与校验。
-## [br]失败语义：注册失败、Runner 结构错误或 SelfCheckResult.passed == false 时由 _run_startup_self_check_via_runner 立即 assert，保留原 Debug 硬断言边界，不降级为 warning；启动采集前的 Node 生命周期保护仍在 core_loop 的 _collect_inventory_consistency_snapshot 中。
+## [br]本函数通过单项 SelfCheckRunner 执行该检查：采集快照、构造 Check、包装为 SelfCheckCallable 并交由 _run_startup_self_check_via_controller 注册、运行与校验。
+## [br]失败语义：注册失败、Runner 结构错误或 SelfCheckResult.passed == false 时由 _run_startup_self_check_via_controller 立即 assert，保留原 Debug 硬断言边界，不降级为 warning；启动采集前的 Node 生命周期保护仍在 core_loop 的 _collect_inventory_consistency_snapshot 中。
 ## [br]边界条件：保持原启动顺序，本函数仍位于 _ready 中第七项；不使用 Callable.bind、不使用 lambda；不修改 SelfCheckRunner；不直接调用 check.run()；不在 Check 中采集真实状态；不让 Diagnostics 持有 Node 或 OccupancyRegistry；不参与业务状态修改，不写文件，不写日志。
 func _run_inventory_consistency_self_check() -> void:
 	var snapshot: _InventoryConsistencySnapshot = _collect_inventory_consistency_snapshot()
@@ -1444,4 +1446,4 @@ func _run_inventory_consistency_self_check() -> void:
 			"库存与玩家机关占用一致性自检",
 			Callable(check, "run")
 	)
-	_run_startup_self_check_via_runner(definition, &"startup_inventory_consistency")
+	_run_startup_self_check_via_controller(definition, &"startup_inventory_consistency")
