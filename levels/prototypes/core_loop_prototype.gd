@@ -78,6 +78,17 @@ const _RuntimeMoveCheck: GDScript = preload("res://gameplay/diagnostics/self_che
 const _GridCoordinateCheck: GDScript = preload("res://gameplay/diagnostics/self_check/checks/grid_coordinate_check.gd")
 # 批次 4B-F3 抽离的运行状态纯规则启动自检模块；用 preload 引用以避开 MCP run_project 不重建全局类型缓存的问题。
 const _RuntimeStateCheck: GDScript = preload("res://gameplay/diagnostics/self_check/checks/runtime_state_check.gd")
+# 批次 4B-G4 接入的库存一致性只读纯数据快照、共享纯规则与启动期自检模块；用 preload 引用以避开 MCP run_project 不重建全局类型缓存的问题。
+# 运行期 _assert_inventory_consistency() 与启动期 _run_inventory_consistency_self_check() 共用同一采集函数与同一规则来源，A/B/C 规则不在核心中保留副本。
+const _InventoryConsistencySnapshot: GDScript = preload(
+	"res://gameplay/placement/inventory_consistency_snapshot.gd"
+)
+const _InventoryConsistencyRules: GDScript = preload(
+	"res://gameplay/placement/rules/inventory_consistency_rules.gd"
+)
+const _InventoryConsistencyCheck: GDScript = preload(
+	"res://gameplay/diagnostics/self_check/checks/inventory_consistency_check.gd"
+)
 # 批次 4B-C2 抽离的玩家机关 R 重置共享纯规则；正式 R 重置与自检共用同一玩法层规则来源。
 const _PlayerMechanismResetRules: GDScript = preload("res://gameplay/placement/rules/player_mechanism_reset_rules.gd")
 const _SingleCellMirrorScene: PackedScene = preload("res://gameplay/mechanisms/mirrors/single_cell_mirror.tscn")
@@ -151,7 +162,7 @@ func _ready() -> void:
 		_run_post_pulse_state_self_check()
 		_run_runtime_move_self_check()
 		_run_player_mechanism_id_snapshot_self_check()
-		_assert_inventory_consistency()
+		_run_inventory_consistency_self_check()
 
 
 ## 查询当前真实 OccupancyRegistry 是否仍有任一索引引用指定机关 ID（只读，无副作用）。
@@ -1286,18 +1297,24 @@ func _update_inventory_ui() -> void:
 	)
 
 
-## 断言原型机关库存、玩家机关节点映射与占用表保持一致。
-## [br]本函数无参数、无返回值。
-## [br]副作用：调试构建中运行 assert，验证库存数量合法、库存剩余加玩家 PlaceableToken 数量等于总数、OccupancyRegistry 自身一致，并验证 placed_tokens_by_id 中每个玩家 PlaceableToken 都在 OccupancyRegistry 的 token.cell 处登记为相同 mechanism_id；发布构建无副作用。
-## [br]边界条件：本函数只验证玩家 PlaceableToken → OccupancyRegistry 的正向关系，不要求 OccupancyRegistry 中未来可能存在的预置机关反向出现在 placed_tokens_by_id；每个 assert 后都有显式 if/continue 保护，避免无效节点继续解引用或占用格数组长度异常后访问 [0]。
-func _assert_inventory_consistency() -> void:
-	if not OS.is_debug_build():
-		return
-	# 库存一致性断言：库存剩余 + 已放置原型机关数量必须恒等于总数量 1。
-	assert(prototype_token_remaining >= 0, "原型机关库存不能小于 0")
-	assert(prototype_token_remaining <= PROTOTYPE_TOKEN_TOTAL, "原型机关库存不能超过总数量")
-	assert(prototype_token_remaining + placed_tokens_by_id.size() == PROTOTYPE_TOKEN_TOTAL, "原型机关库存与已放置数量不一致")
-	assert(occupancy.is_consistent(), "原型机关占用表必须保持双向一致")
+## 采集库存一致性只读纯数据快照（Diagnostics 批次 4B-G4）。
+## [br]本函数无参数。
+## [br]返回：InventoryConsistencySnapshot，冻结当前库存标量事实、OccupancyRegistry 本体一致性标志与六组对齐的条目级事实。
+## [br]职责：执行 Node 生命周期保护；从真实状态读取纯数据；构造 InventoryConsistencySnapshot；返回快照。
+## [br]副作用：只读访问 placed_tokens_by_id 与 occupancy；不修改库存、不修改 placed_tokens_by_id、不修改 OccupancyRegistry、不修复状态、不 queue_free、不写日志、不调用 SelfCheckRunner、不执行 A/B/C 一致性判断。
+## [br]边界条件：D 类 Node 生命周期检查（is_instance_valid、is_queued_for_deletion）保留在本函数，不迁入 Diagnostics，不降级为 details/warning/日志；
+## 生命周期验证通过后才读取 token.mechanism_id 与 token.cell；不把真实 Node 传给 Snapshot、Rules 或 Check；不把生命周期状态写进 Snapshot；
+## dictionary_id == token.mechanism_id 属于 B 类共享规则，本函数只记录两个值，不在核心中重复 assert 它们相等；
+## 六组容器按 placed_tokens_by_id 当前迭代顺序严格同步追加，不排序、不去重，不修改 OccupancyRegistry 返回数组，不持有其返回数组；
+## occupancy.is_consistent() 每次采集只调用一次，不在核心复制 OccupancyRegistry 内部一致性算法；count==0 时 first_cell 使用 Vector2i.ZERO 占位；快照构造后由 Snapshot 自行 duplicate 输入。
+func _collect_inventory_consistency_snapshot() -> _InventoryConsistencySnapshot:
+	var dictionary_ids: Array[StringName] = []
+	var token_ids: Array[StringName] = []
+	var token_cells: Array[Vector2i] = []
+	var occupancy_ids_at_token_cells: Array[StringName] = []
+	var occupancy_cell_counts: PackedInt32Array = PackedInt32Array()
+	var occupancy_first_cells: Array[Vector2i] = []
+
 	for mechanism_id: StringName in placed_tokens_by_id:
 		var token: Variant = placed_tokens_by_id[mechanism_id]
 		var token_is_valid: bool = is_instance_valid(token)
@@ -1310,21 +1327,64 @@ func _assert_inventory_consistency() -> void:
 		if token_is_pending_deletion:
 			continue
 
-		var token_id_matches: bool = token.mechanism_id == mechanism_id
-		assert(token_id_matches, "玩家机关 ID 失配：映射键=%s，节点ID=%s" % [mechanism_id, token.mechanism_id])
-		if not token_id_matches:
-			continue
+		# 生命周期验证通过后才读取 token.mechanism_id 与 token.cell；dictionary_id 与 token_id 是否相等由 B 类共享规则判定，本函数不重复 assert。
+		var token_id: StringName = token.mechanism_id
+		var token_cell: Vector2i = token.cell
 
-		var registered_id: StringName = occupancy.get_mechanism_at(token.cell)
-		var registered_id_matches: bool = registered_id == mechanism_id
-		assert(registered_id_matches, "玩家机关占用失配：mechanism_id=%s，token.cell=%s，OccupancyRegistry实际ID=%s" % [mechanism_id, token.cell, registered_id])
-		if not registered_id_matches:
-			continue
-
+		var occupancy_id_at_token_cell: StringName = occupancy.get_mechanism_at(token_cell)
 		var occupied_cells: Array[Vector2i] = occupancy.get_cells_of(mechanism_id)
-		var has_exactly_one_cell: bool = occupied_cells.size() == 1
-		assert(has_exactly_one_cell, "玩家机关占用格数量失配：mechanism_id=%s，实际格子数量=%d，占用格=%s" % [mechanism_id, occupied_cells.size(), occupied_cells])
-		if not has_exactly_one_cell:
-			continue
+		var occupancy_cell_count: int = occupied_cells.size()
+		# count==0 时 first_cell 使用 Vector2i.ZERO 占位；规则只在 count==1 时比较 first_cell，占位值不参与比较。
+		var occupancy_first_cell: Vector2i = Vector2i.ZERO if occupancy_cell_count == 0 else occupied_cells[0]
 
-		assert(occupied_cells[0] == token.cell, "玩家机关按ID占用格失配：mechanism_id=%s，token.cell=%s，占用格=%s" % [mechanism_id, token.cell, occupied_cells])
+		dictionary_ids.append(mechanism_id)
+		token_ids.append(token_id)
+		token_cells.append(token_cell)
+		occupancy_ids_at_token_cells.append(occupancy_id_at_token_cell)
+		occupancy_cell_counts.append(occupancy_cell_count)
+		occupancy_first_cells.append(occupancy_first_cell)
+
+	# occupancy.is_consistent() 每次采集只调用一次；保留旧实现中 OccupancyRegistry 本体一致性判断的 push_error 行为，不在核心复制其内部算法。
+	var occupancy_consistent: bool = occupancy.is_consistent()
+
+	return _InventoryConsistencySnapshot.new(
+			PROTOTYPE_TOKEN_TOTAL,
+			prototype_token_remaining,
+			occupancy_consistent,
+			dictionary_ids,
+			token_ids,
+			token_cells,
+			occupancy_ids_at_token_cells,
+			occupancy_cell_counts,
+			occupancy_first_cells
+	)
+
+
+## 断言原型机关库存、玩家机关节点映射与占用表保持一致。
+## [br]本函数无参数、无返回值。
+## [br]副作用：调试构建中采集纯数据快照并调用 InventoryConsistencyRules.collect_failures，对失败列表为空执行 Debug 硬 assert，失败消息完整包含全部失败详情；发布构建因首部守卫直接返回，无副作用。
+## [br]边界条件：六个运行期事务边界调用点继续调用本函数，事务完成不依赖本函数返回值；A/B/C 规则唯一来源为 InventoryConsistencyRules，核心中不存在其副本；D 类 Node 生命周期检查只存在于采集函数；不使用 SelfCheckRunner，不创建 InventoryConsistencyCheck，不修复任何数据，不把 assert 改为 push_warning、普通日志或返回 bool。
+func _assert_inventory_consistency() -> void:
+	if not OS.is_debug_build():
+		return
+	var snapshot: _InventoryConsistencySnapshot = _collect_inventory_consistency_snapshot()
+	var failures: PackedStringArray = _InventoryConsistencyRules.collect_failures(snapshot)
+	assert(failures.is_empty(),
+			"库存一致性断言失败：\n%s" % ["\n".join(failures)])
+
+
+## 执行库存一致性启动期自检（Diagnostics 批次 4B-G4）。
+## [br]本函数无参数、无返回值，仅由 _ready() 在调试构建中作为第七项调用。
+## [br]检查逻辑复用玩法层共享纯规则 InventoryConsistencyRules（单一来源）与只读快照 InventoryConsistencySnapshot，由 InventoryConsistencyCheck 包装为无参 run()。
+## [br]本函数通过单项 SelfCheckRunner 执行该检查：采集快照、构造 Check、包装为 SelfCheckCallable 并交由 _run_startup_self_check_via_runner 注册、运行与校验。
+## [br]失败语义：注册失败、Runner 结构错误或 SelfCheckResult.passed == false 时由 _run_startup_self_check_via_runner 立即 assert，保留原 Debug 硬断言边界，不降级为 warning；启动采集前的 Node 生命周期保护仍在 core_loop 的 _collect_inventory_consistency_snapshot 中。
+## [br]边界条件：保持原启动顺序，本函数仍位于 _ready 中第七项；不使用 Callable.bind、不使用 lambda；不修改 SelfCheckRunner；不直接调用 check.run()；不在 Check 中采集真实状态；不让 Diagnostics 持有 Node 或 OccupancyRegistry；不参与业务状态修改，不写文件，不写日志。
+func _run_inventory_consistency_self_check() -> void:
+	var snapshot: _InventoryConsistencySnapshot = _collect_inventory_consistency_snapshot()
+	var check: _InventoryConsistencyCheck = _InventoryConsistencyCheck.new(snapshot)
+	var definition: SelfCheckCallable = SelfCheckCallable.new(
+			&"inventory_consistency",
+			"库存与玩家机关占用一致性自检",
+			Callable(check, "run")
+	)
+	_run_startup_self_check_via_runner(definition, &"startup_inventory_consistency")
