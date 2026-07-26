@@ -89,6 +89,12 @@ const _InventoryConsistencyRules: GDScript = preload(
 const _InventoryConsistencyCheck: GDScript = preload(
 	"res://gameplay/diagnostics/self_check/checks/inventory_consistency_check.gd"
 )
+# 批次 5A-H3：诊断控制器（Diagnostics 最外层协调器）。核心只持有一个实例，统一协调七项启动自检的执行；
+# Controller 每次调用内部新建 SelfCheckRunner 并返回 SelfCheckRunResult，不执行 assert，失败策略仍由核心决定。
+# 用 preload 引用以避开 MCP run_project 不重建全局 class_name 缓存的问题，同时作为本脚本内强类型注解。
+const _DiagnosticsController: GDScript = preload(
+	"res://gameplay/diagnostics/diagnostics_controller.gd"
+)
 # 批次 4B-C2 抽离的玩家机关 R 重置共享纯规则；正式 R 重置与自检共用同一玩法层规则来源。
 const _PlayerMechanismResetRules: GDScript = preload("res://gameplay/placement/rules/player_mechanism_reset_rules.gd")
 const _SingleCellMirrorScene: PackedScene = preload("res://gameplay/mechanisms/mirrors/single_cell_mirror.tscn")
@@ -146,6 +152,12 @@ var _drag_preview_cell: Vector2i = INVALID_CELL
 var _drag_preview_token: Variant = null
 var _dragged_placed_token: Variant = null
 
+## 诊断控制器（批次 5A-H3）：核心持有的唯一 DiagnosticsController 实例，仅用于协调七项启动自检的执行。
+## Controller 只负责每次调用内部新建 SelfCheckRunner 并返回 SelfCheckRunResult；核心仍决定启动失败时的 Debug 硬 assert。
+## 真实样本仍由各包装函数采集后构造 SelfCheckCallable 传入；运行期库存断言不经过本 Controller。
+## 不作为 Node、不 add_child、不设为 Autoload、不传入 core_loop；本批不调用其 Logger 或 Snapshot 接口。
+var _diagnostics_controller: _DiagnosticsController = _DiagnosticsController.new()
+
 
 ## 初始化核心闭环原型关卡。
 ## [br]本函数无参数、无返回值。
@@ -190,12 +202,15 @@ func _run_player_mechanism_id_snapshot_self_check() -> void:
 	_run_startup_self_check_via_runner(definition, &"startup_player_mechanism_id_snapshot")
 
 
-## 启动期 Debug 兼容执行入口：通过单项 SelfCheckRunner 执行一条自检定义。
-## [br]职责：在迁移期把单项自检接入 SelfCheckRunner，保留原“注册失败/结构错误/未通过即硬断言”的 Debug 行为。
+## 启动期 Debug 兼容执行入口：通过 DiagnosticsController 执行一条自检定义（批次 5A-H3）。
+## [br]职责：把单项自检交由核心持有的 DiagnosticsController 协调执行，Controller 每次内部新建 SelfCheckRunner，
+## [br]注册失败与协调错误统一表达为 SelfCheckRunResult.errors；Controller 不执行 assert，失败策略仍由核心决定。
 ## [br]输入：definition 为已构造的 SelfCheckCallable，不得为 null；execution_id 为本次运行的稳定 StringName。
 ## [br]返回：无返回值。
-## [br]副作用：仅创建局部 SelfCheckRunner 并调用 register_check 与 run_all；不写文件、不写日志、不修改玩法状态、不访问场景树。
-## [br]失败方式：definition 为 null、注册失败、RunResult 为 null、validate() 非空、errors 非空或 is_success() 为 false 时立即 assert；断言信息汇总 execution_id、errors、validate 错误与每项 check_id/summary/details。
+## [br]副作用：仅委托 Controller.run_self_check；核心不在本函数内 new SelfCheckRunner、不调用 Check.run()、不写文件、不写日志、不修改玩法状态、不访问场景树。
+## [br]失败方式（三层 Debug 硬断言）：第一层 run_result 为 null 或 errors 非空（执行级错误）；
+## [br]第二层 validate() 非空（结果结构错误）；第三层 is_success() 为 false（任一 Check 未通过）。
+## [br]断言信息汇总 execution_id、errors、validate 错误与每项 check_id/summary/details，不降级为 warning。
 ## [br]保持启动顺序的边界：本函数只执行传入的单项定义，不合并多项，不改变 _ready 调用顺序。
 ## [br]这是迁移期的 Debug 兼容执行入口，不参与业务状态修改。
 func _run_startup_self_check_via_runner(
@@ -204,33 +219,36 @@ func _run_startup_self_check_via_runner(
 ) -> void:
 	# 拒绝 null 定义，避免后续访问空对象。
 	assert(definition != null, "启动自检：definition 为 null，必须传入 SelfCheckCallable。")
-	# 创建只注册单项定义的局部 Runner，保证每次 run_all 仅执行一项检查。
-	var runner: SelfCheckRunner = SelfCheckRunner.new()
-	var register_problems: PackedStringArray = runner.register_check(definition)
-	assert(register_problems.is_empty(),
-			"启动自检：注册失败 execution_id=%s | errors=%s" % [execution_id, register_problems])
-	# 执行本次运行并校验汇总结果非 null。
-	var result: SelfCheckRunResult = runner.run_all(execution_id)
-	assert(result != null, "启动自检：run_all 返回 null execution_id=%s。" % [execution_id])
-	# 结构校验：validate() 一次返回全部字段问题。
-	var structure_problems: PackedStringArray = result.validate()
+	# 通过核心持有的唯一 DiagnosticsController 协调执行：Controller 内部新建 SelfCheckRunner，
+	# 注册失败/协调错误统一表达为 run_result.errors；Controller 不执行 assert，三层失败判定仍由核心负责。
+	var run_result: SelfCheckRunResult = _diagnostics_controller.run_self_check(
+		definition,
+		execution_id
+	)
+	# 执行级前置：Controller 必须返回非 null 结果。
+	assert(run_result != null, "启动自检：Controller 返回 null execution_id=%s。" % [execution_id])
+	# 结果结构校验：validate() 一次返回全部字段问题，结构错误也用于断言信息汇总。
+	var structure_problems: PackedStringArray = run_result.validate()
 	# 汇总断言信息：execution_id、errors、validate 错误、每项 check_id/summary/details；
 	# 用 PackedStringArray 拼装，不使用 Dictionary、无类型 Array 或 Variant。
 	var assert_lines: PackedStringArray = PackedStringArray()
 	assert_lines.append("execution_id=%s" % [execution_id])
-	assert_lines.append("errors=%s" % [result.errors])
+	assert_lines.append("errors=%s" % [run_result.errors])
 	assert_lines.append("validate=%s" % [structure_problems])
-	for index: int in range(result.results.size()):
-		var item: SelfCheckResult = result.results[index]
+	for index: int in range(run_result.results.size()):
+		var item: SelfCheckResult = run_result.results[index]
 		if item == null:
 			assert_lines.append("results[%d]=null" % [index])
 		else:
 			assert_lines.append("results[%d] check_id=%s summary=%s details=%s" % [index, item.check_id, item.summary, item.details])
 	var assert_message: String = "\n".join(assert_lines)
-	# 结构错误、Runner 错误、未通过三项各自立即硬断言，不降级为 warning 或普通日志。
+	# 第一层：执行级错误——注册失败或协调错误由 Controller 表达为 run_result.errors，必须硬断言，不降级为 warning。
+	assert(run_result.errors.is_empty(), "启动自检：执行级错误（注册/协调失败）：\n%s" % [assert_message])
+	# 第二层：结果结构——validate() 返回的字段问题必须硬断言，不吞掉 validation details。
 	assert(structure_problems.is_empty(), "启动自检：结果结构无效：\n%s" % [assert_message])
-	assert(result.errors.is_empty(), "启动自检：Runner 结构错误：\n%s" % [assert_message])
-	assert(result.is_success(), "启动自检：未通过：\n%s" % [assert_message])
+	# 第三层：检查未通过——任一 SelfCheckResult.passed=false 使 is_success() 为 false，必须硬断言，
+	# 错误信息包含失败 Check 的 check_id/summary/details，不只输出模糊"自检失败"。
+	assert(run_result.is_success(), "启动自检：检查未通过：\n%s" % [assert_message])
 
 
 ## 执行 OccupancyRegistry 启动期轻量自检。
