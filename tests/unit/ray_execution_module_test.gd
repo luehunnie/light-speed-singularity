@@ -12,6 +12,7 @@ const _RayExecutionModule: GDScript = preload("res://gameplay/light/ray_executio
 const _RayExecutionResult: GDScript = preload("res://gameplay/light/ray_execution_result.gd")
 const _LevelWorldQuery: GDScript = preload("res://gameplay/world/level_world_query.gd")
 const _LightWorldQuery: GDScript = preload("res://gameplay/world/light_world_query.gd")
+const _LevelObjectRegistry: GDScript = preload("res://gameplay/level/level_object_registry.gd")
 const _OccupancyRegistry: GDScript = preload("res://gameplay/placement/occupancy_registry.gd")
 const _SingleCellMirrorScript: GDScript = preload("res://gameplay/mechanisms/mirrors/single_cell_mirror.gd")
 const _SingleCellMirrorScene: PackedScene = preload("res://gameplay/mechanisms/mirrors/single_cell_mirror.tscn")
@@ -37,20 +38,34 @@ func _initialize() -> void:
 
 
 ## 构造一个 10×10 边界、给定墙体与水晶的只读光线查询门面，附带独立占用表与已放置机关映射。
-## [br]wall_cells 为墙体格；crystals 为普通独立水晶数组（默认空）；返回 { query, occupancy, placed }，query 为 LightWorldQuery，调用方按需登记机关。
+## [br]wall_cells 为墙体格；crystals 为普通独立水晶数组（默认空，每颗须已配置非空 crystal_id）；返回 { query, occupancy, placed }，query 为 LightWorldQuery，调用方按需登记机关。
 func _build_world(wall_cells: Array[Vector2i], crystals: Array[BasicCrystal] = []) -> Dictionary:
 	var occupancy: _OccupancyRegistry = _OccupancyRegistry.new()
+	var registry: _LevelObjectRegistry = _LevelObjectRegistry.new()
+	for crystal: BasicCrystal in crystals:
+		registry.register_crystal(crystal.get_crystal_id(), crystal.cell, crystal)
 	var placed: Dictionary[StringName, Variant] = {}
+	var lookup: _PlacedLookup = _PlacedLookup.new()
+	lookup.placed = placed
 	var level_query: _LevelWorldQuery = _LevelWorldQuery.new(
 		Rect2i(0, 0, 10, 10),
 		wall_cells,
 		Vector2i(0, 5),
-		crystals,
+		registry,
 		occupancy,
-		placed
+		Callable(lookup, "get_node")
 	)
-	var light_query: _LightWorldQuery = _LightWorldQuery.new(level_query, crystals)
-	return { "query": light_query, "occupancy": occupancy, "placed": placed }
+	var light_query: _LightWorldQuery = _LightWorldQuery.new(level_query)
+	return { "query": light_query, "occupancy": occupancy, "placed": placed, "lookup": lookup }
+
+
+## 机关节点只读查表桩：供 LevelWorldQuery 的 get_placed_node_by_id Callable 解析 placed 字典，不暴露可写引用。
+class _PlacedLookup:
+	var placed: Dictionary[StringName, Variant] = {}
+	func get_node(mechanism_id: StringName) -> Variant:
+		if not placed.has(mechanism_id):
+			return null
+		return placed[mechanism_id]
 
 
 ## 1. 直线传播到边界：从 (0,5) 向右，无墙无机关，应进入 (1,5)..(9,5) 后在 (10,5) 越界停止。
@@ -161,6 +176,7 @@ func _test_06_crystal_per_step_order() -> void:
 	const NAME: String = "06_水晶逐格顺序"
 	var crystal: BasicCrystal = _BasicCrystalScript.new()
 	crystal.cell = Vector2i(3, 5)
+	crystal.crystal_id = &"crystal_3_5"
 	var crystals: Array[BasicCrystal] = [crystal]
 	var world: Dictionary = _build_world([], crystals)
 	var result: _RayExecutionResult = _RayExecutionModule.execute(

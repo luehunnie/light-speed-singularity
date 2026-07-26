@@ -35,6 +35,7 @@ color = Color(0.2, 0.85, 1, 1)
 [node name="Crystal" type="Node2D" parent="RuntimeObjects" unique_id=1716045995]
 script = ExtResource("1_crystal")
 cell = Vector2i(3, 1)
+crystal_id = &"crystal_001"
 
 [node name="VisualView" parent="RuntimeObjects/Crystal" instance=ExtResource("3_view")]
 position = Vector2(224, 96)
