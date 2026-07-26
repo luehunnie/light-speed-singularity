@@ -1,11 +1,11 @@
 # 《光速奇点》美术资源替换与 Godot 关卡编辑指南
 
 > 版本：v1.1
-> 更新日期：2026 年 7 月 26 日
+> 更新日期：2026 年 7 月 27 日
 > 适用角色：美术与关卡制作人员
 > 适用环境：Godot 4.6.1 Standard
 > 项目路径：`E:\godot_project\light-speed-singularity`
-> 文档定位：本指南同时包含**当前可操作流程**和**未来目标流程**。当前只能按已实现的视觉接口操作；未实现的目标流程（`GridPlacedObject`、方法 A/B、注册器、校验器、完整关卡模板、`FixedEmitter`、开始运行按钮、光粒编辑）**不得作为张梓涵当前的验收前置条件**。
+> 文档定位：本指南同时包含**当前可操作流程**和**未来目标流程**。当前只能按已实现的视觉接口操作；未实现的目标流程（`GridPlacedObject`、方法 A 代码、方法 B、完整 `LevelObjectRegistry` 扫描、`LevelValidator`、完整关卡模板、`FixedEmitter` 编辑流程与视觉 Profile、`READY_TO_FIRE`、开始运行按钮、光粒编辑）**不得作为张梓涵当前的验收前置条件**。
 
 ---
 
@@ -14,7 +14,7 @@
 本指南区分两类内容：
 
 - **当前可用**：基于已实现视觉接口（`VisualStateTexture`、`ObjectVisualProfile`、`ObjectVisualView`、`InventorySlotView`、`LightSegmentVisualProfile`、`LightSegmentView`）和现有原型场景的流程，张梓涵现在就可以执行；
-- **目标 / 未实现**：`GridPlacedObject`、方法 A、方法 B、`LevelObjectRegistry`、`LevelValidator`、完整正式关卡模板、`FixedEmitter` 编辑流程、`READY_TO_FIRE`、开始运行按钮、光粒编辑与验收等，属于未来目标，当前不具备可依赖的代码或字段。
+- **目标 / 未实现**：`GridPlacedObject`、方法 A 代码（方法 A 为正式采用方向，`@tool` setter 尚未实现）、方法 B、完整 `LevelObjectRegistry` 扫描、`LevelValidator`、完整正式关卡模板、`FixedEmitter` 编辑流程与视觉 Profile、`READY_TO_FIRE`、开始运行按钮、光粒编辑与验收等，属于未来目标，当前不具备可依赖的代码或字段。
 
 契约存在不等于代码已经实现。已实现视觉接口的路径、`class_name`、基类和公开方法以真实代码为准（详见《永久视觉与关卡编辑接口设计 v1.1》§7–§10、§14.4）。
 
@@ -30,12 +30,12 @@
 | 光线四类片段视觉 | 当前可用 | `LightSegmentVisualProfile` 四方向纹理 |
 | 编辑器问题反馈 | 当前可用 | 按本文 §31 格式反馈 |
 | `GridPlacedObject` | 目标 / 未实现 | 统一固定对象基础 |
-| 方法 A：Inspector 改 `cell` 同步位置 | 目标 / 未实现 | 当前不会自动同步 |
+| 方法 A：Inspector 改 `cell` 同步位置 | 正式采用方向 / 代码未实现 | `@tool` setter 尚未落地，当前不会自动同步 |
 | 方法 B：2D 拖动吸附并回写 `cell` | 目标 / 未实现且**延后** | 当前不会自动吸附或回写 |
-| `LevelObjectRegistry` | 目标 / 未实现 | 不能作为当前保存必跑步骤 |
+| `LevelObjectRegistry`（完整扫描） | 部分实现 | 水晶按 `crystal_id` 与 cell 双向索引已实现；扫描/多类型对象注册仍为目标，不能作为当前保存必跑步骤 |
 | `LevelValidator` | 目标 / 未实现 | 不能作为当前验收必跑步骤 |
 | 完整正式关卡模板 | 目标 / 未实现 | 仅存在核心原型场景 |
-| `FixedEmitter` 编辑流程 | 目标 / 未实现 | 仍由原型字段和占位节点表示 |
+| `FixedEmitter` 编辑流程与视觉 Profile | 部分实现 | 运行期 cell/direction 与 `FireRequest` 已实现；`fixed_emitter.tscn`/视觉 Profile/`light_form` 仍为目标 |
 | `READY_TO_FIRE` | 目标 / 未实现 | 不在当前验收项 |
 | 开始运行按钮 | 目标 / 未实现 | 不在当前验收项 |
 | 光粒编辑与验收 | 目标 / 未实现 | 不在当前验收项 |
@@ -430,7 +430,7 @@ backslash_texture
 
 # 10. 发射器美术和配置
 
-> **状态：目标 / 未实现。** `FixedEmitter` 正式接口当前未实现，仍由原型字段和占位节点表示。本节为未来美术需求，**不放在当前必测清单**。光线 / 光粒两套发射器视觉亦为目标能力。
+> **状态：部分实现。** `FixedEmitter` 运行期 cell/direction 与 `FireRequest` 已实现（`gameplay/mechanisms/emitters/fixed_emitter.gd`，由核心 `_ready` 据 Inspector 初始配置构造）；`fixed_emitter.tscn`、发射器视觉 Profile、`light_form` 与光线/光粒两套外观仍为目标，**不放在当前必测清单**。本节为未来美术需求。
 
 固定发射器目标上包含：
 
@@ -560,7 +560,7 @@ LegalAreaLayer
 
 # 14. 固定对象的复制
 
-> **状态：目标流程，当前部分依赖未实现能力。** 复制后的自动吸附与“运行时注册器检查”依赖方法 B 与 `LevelObjectRegistry` / `LevelValidator`，当前均未实现。张梓涵当前可复制对象节点，但不得依赖自动吸附或注册器校验。
+> **状态：目标流程，当前部分依赖未实现能力。** 复制后的自动吸附与“运行时注册器检查”依赖方法 B 与 `LevelObjectRegistry` 完整扫描 / `LevelValidator`，当前均未实现（`LevelObjectRegistry` 仅实现水晶双向索引）。张梓涵当前可复制对象节点，但不得依赖自动吸附或注册器校验。
 
 目标操作：
 

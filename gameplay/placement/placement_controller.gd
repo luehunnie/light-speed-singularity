@@ -71,12 +71,12 @@ var _occupancy: _OccupancyRegistry
 var _level_world_query: _LevelWorldQuery = null
 var _inventory: _InventoryController
 var _factory: Callable
-## 玩家已放置机关 ID → 正式节点；本控制器是唯一修改者，LevelWorldQuery 持有同一引用用于光线层 cell→节点解析。
+## 玩家已放置机关 ID → 正式节点；本控制器是唯一修改者，光线层经 get_placed_node 只读 Callable 解析，不再共享可写映射。
 var _placed_tokens_by_id: Dictionary[StringName, Variant] = {}
 var _next_serial: int = 1
 
 
-## 构造事务控制器；occupancy、inventory、factory 必须非空。LevelWorldQuery 依赖本控制器映射，构造后由 set_level_world_query 注入。
+## 构造事务控制器；occupancy、inventory、factory 必须非空。LevelWorldQuery 依赖本控制器 get_placed_node，构造后由 set_level_world_query 注入。
 func _init(
 		occupancy: _OccupancyRegistry,
 		inventory: _InventoryController,
@@ -90,11 +90,6 @@ func _init(
 ## 注入只读世界查询门面；必须在任何事务前调用，提供放置/移动格合法性校验。
 func set_level_world_query(level_world_query: _LevelWorldQuery) -> void:
 	_level_world_query = level_world_query
-
-
-## 返回内部映射引用；仅供核心构造 LevelWorldQuery 时传入，本控制器是唯一修改者，不得由调用方写入。
-func get_placed_tokens_by_id_reference() -> Dictionary[StringName, Variant]:
-	return _placed_tokens_by_id
 
 
 ## 新机关放置原子事务。
@@ -138,7 +133,7 @@ func place_from_inventory(
 
 
 ## 已有机关移动原子事务。
-## [br]原格返回 NO_CHANGE；非法格返回 INVALID；注销旧占用与登记新占用原子，新占用失败恢复旧占用与节点格。
+## [br]原格返回 NO_CHANGE；非法格返回 INVALID；占用迁移委托 OccupancyRegistry.move_single_cell 原子完成，失败则节点/占用/映射/库存全部保持原状。
 ## [br]不修改 orientation、不扣库存、不直接扣 runtime_moves_used；成功跨格返回 consumes_runtime_move=true，由核心按规则扣次。
 func move_placed(
 		mechanism_id: StringName,
@@ -157,25 +152,21 @@ func move_placed(
 	# 非法格：INVALID。
 	if not _is_valid_placement_cell(target_cell, mechanism_id):
 		return PlacementTransactionResult.new(Status.INVALID, mechanism_id, source_cell, target_cell, false, "目标格非法")
-	# 原子更新：先注销旧占用再登记新占用；失败必须恢复旧占用，避免新旧同时丢失。
-	if not _occupancy.unregister(mechanism_id):
-		push_error("PlacementController: 移动前旧占用不存在，回滚：%s" % [mechanism_id])
-		return PlacementTransactionResult.new(Status.FAILED, mechanism_id, source_cell, target_cell, false, "旧占用缺失")
-	if not _occupancy.register_single_cell(mechanism_id, target_cell):
-		push_error("PlacementController: 新占用登记失败，恢复旧占用：%s -> %s" % [source_cell, target_cell])
-		# 恢复旧占用；若连恢复也失败则占用处于丢失状态，保留节点原格供一致性断言暴露。
-		if not _occupancy.register_single_cell(mechanism_id, source_cell):
-			push_error("PlacementController: 恢复旧占用失败，占用丢失，保留节点原格供断言暴露：%s" % [mechanism_id])
-			return PlacementTransactionResult.new(Status.FAILED, mechanism_id, source_cell, target_cell, false, "恢复旧占用失败")
-		return PlacementTransactionResult.new(Status.FAILED, mechanism_id, source_cell, target_cell, false, "新占用登记失败")
-	# 占用原子更新成功；更新节点逻辑格（世界位置与可见性由核心处理），orientation 不变。
+	# 原子占用迁移：校验全部通过后一次性更新正反向索引，失败则节点保持原格、占用/映射/库存不变。
+	if not _occupancy.move_single_cell(mechanism_id, source_cell, target_cell):
+		push_error("PlacementController: 原子占用迁移失败，节点保持原格：%s %s -> %s" % [mechanism_id, source_cell, target_cell])
+		return PlacementTransactionResult.new(Status.FAILED, mechanism_id, source_cell, target_cell, false, "原子占用迁移失败")
+	# 占用原子迁移成功；更新节点逻辑格（世界位置与可见性由核心处理），orientation 不变。
 	token.set_cell(target_cell)
 	return PlacementTransactionResult.new(Status.SUCCESS, mechanism_id, source_cell, target_cell, true)
 
 
-## 回收原子事务。
-## [br]顺序：确认存在 → 注销占用 → 删映射 → 销毁节点 → 库存归还。
-## [br]注销占用失败则不删映射、不销毁节点、不归还库存，返回 FAILED，避免半提交。
+## 回收原子事务（预留两阶段归还）。
+## [br]顺序：确认存在 → 预留库存归还 → 注销占用 → 删映射 → 销毁节点 → 提交归还。
+## [br]预留失败：不注销占用、不删映射、不销毁节点，返回 FAILED，全部保持。
+## [br]注销占用失败：取消预留，节点/映射/库存保持，返回 FAILED。
+## [br]提交归还失败（预留已锁定容量，正常同步事务不应发生）：push_error 并返回 FAILED，视为不变量破坏。
+## [br]正常路径最终不出现“机关已删除但库存未归还”；不调用普通 try_return_one。
 func recycle_placed(mechanism_id: StringName) -> PlacementTransactionResult:
 	if not _placed_tokens_by_id.has(mechanism_id):
 		return PlacementTransactionResult.new(Status.FAILED, mechanism_id, Vector2i.ZERO, Vector2i.ZERO, false, "机关不存在")
@@ -183,23 +174,29 @@ func recycle_placed(mechanism_id: StringName) -> PlacementTransactionResult:
 	var source_cell: Vector2i = Vector2i.ZERO
 	if is_instance_valid(token):
 		source_cell = token.cell
-	# 注销占用；失败则保留节点/映射/库存。
+	# 1. 不可逆销毁前先预留库存归还容量；失败则节点/映射/占用/库存全部保持。
+	if not _inventory.try_reserve_return_one():
+		push_error("PlacementController: 回收库存归还预留失败，保留节点/映射/占用：%s" % [mechanism_id])
+		return PlacementTransactionResult.new(Status.FAILED, mechanism_id, source_cell, Vector2i.ZERO, false, "库存归还预留失败")
+	# 2. 注销占用；失败则取消预留，节点/映射/库存保持。
 	if not _occupancy.unregister(mechanism_id):
-		push_error("PlacementController: 回收注销占用失败，保留节点/映射/库存：%s" % [mechanism_id])
+		push_error("PlacementController: 回收注销占用失败，取消预留并保留节点/映射/库存：%s" % [mechanism_id])
+		_inventory.cancel_reserved_return()
 		return PlacementTransactionResult.new(Status.FAILED, mechanism_id, source_cell, Vector2i.ZERO, false, "注销占用失败")
-	# 占用已清理：删映射 → 销毁节点 → 归还库存（queue_free 不必等待真正释放）。
+	# 3. 占用已清理：删映射 → 销毁节点（queue_free 不必等待真正释放）。
 	_placed_tokens_by_id.erase(mechanism_id)
 	_destroy_token(token)
-	if not _inventory.try_return_one():
-		# 归还失败（已达总量，异常）：映射与节点已清理，库存未增，由一致性断言暴露。
-		push_error("PlacementController: 回收归还库存失败（已达总量？），映射与节点已清理，库存未增：%s" % [mechanism_id])
-		return PlacementTransactionResult.new(Status.FAILED, mechanism_id, source_cell, Vector2i.ZERO, false, "库存归还失败")
+	# 4. 提交归还；预留已锁定容量，正常同步事务不应失败，否则视为不变量破坏。
+	if not _inventory.commit_reserved_return():
+		push_error("PlacementController: 回收提交归还失败（不变量破坏），映射与节点已清理，库存未增：%s" % [mechanism_id])
+		return PlacementTransactionResult.new(Status.FAILED, mechanism_id, source_cell, Vector2i.ZERO, false, "库存归还提交失败")
 	return PlacementTransactionResult.new(Status.SUCCESS, mechanism_id, source_cell, Vector2i.ZERO, false)
 
 
-## R 清理：逐个尝试注销/销毁/移除玩家机关。
-## [br]成功项：注销、erase、queue_free；失败项（OccupancyRegistry 残留引用）保留映射与占用，不假装成功。
-## [br]清理后按残留数 reconcile 库存，保持 remaining + placed_count == total；不使用 Node.name，不静默归还未清理机关库存。
+## R 清理：复用 recycle_placed 单一回收事务逐个清理玩家机关，不维护第二套回收路径。
+## [br]成功项：预留→注销→删映射→销毁→提交归还，库存随每次成功回收原子加一。
+## [br]失败项（预留失败或注销失败）保留节点/映射/占用并取消预留，不残留归还预留。
+## [br]正常全部清理后库存恢复满，部分失败时 remaining + unresolved_count == total；不修改 LevelRuntimeController 的 R 顺序。
 func clear_all_placed() -> ClearPlacedResult:
 	# 必须先快照 ID，遍历中 erase 会改变迭代集合。
 	var mechanism_ids: Array[StringName] = _PlayerMechanismResetRules.copy_player_mechanism_ids(_placed_tokens_by_id)
@@ -207,27 +204,14 @@ func clear_all_placed() -> ClearPlacedResult:
 	var unresolved_ids: Array[StringName] = []
 
 	for mechanism_id: StringName in mechanism_ids:
-		var token: Variant = _placed_tokens_by_id.get(mechanism_id)
-		var was_unregistered: bool = _occupancy.unregister(mechanism_id)
-		var has_residual: bool = _PlayerMechanismResetRules.registry_has_any_reference_to_mechanism(_occupancy, mechanism_id)
-
-		if has_residual:
-			# 残留引用：保留映射/节点/库存，失败关闭，由一致性断言暴露。
-			unresolved_ids.append(mechanism_id)
-			push_error("PlacementController: R 清理无法注销玩家机关占用，保留映射与节点：%s" % [mechanism_id])
-			if not is_instance_valid(token):
-				push_error("PlacementController: R 清理时节点已失效且占用残留，保留映射供断言暴露：%s" % [mechanism_id])
+		var r: PlacementTransactionResult = recycle_placed(mechanism_id)
+		if r.is_success():
+			removed_count += 1
 			continue
+		# 失败项保留节点/映射/占用，由一致性断言暴露；recycle_placed 内部已取消任何未提交预留。
+		unresolved_ids.append(mechanism_id)
+		push_error("PlacementController: R 清理无法回收玩家机关，保留节点/映射/占用：%s（%s）" % [mechanism_id, r.error_message])
 
-		if not was_unregistered and OS.is_debug_build():
-			push_warning("PlacementController: R 清理时占用已提前缺失，继续清理节点：%s" % [mechanism_id])
-
-		_destroy_token(token)
-		_placed_tokens_by_id.erase(mechanism_id)
-		removed_count += 1
-
-	# 按残留数 reconcile 库存：全部清理恢复满库存，部分失败扣除残留数。
-	_inventory.reconcile_with_placed_count(unresolved_ids.size())
 	return ClearPlacedResult.new(removed_count, unresolved_ids.size(), unresolved_ids)
 
 

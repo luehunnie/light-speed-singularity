@@ -61,6 +61,40 @@ func unregister(mechanism_id: StringName) -> bool:
 	return true
 
 
+## 单格机关占用原子迁移：全部校验通过后一次性更新正反向索引，失败不修改任何事实，无需“先注销再恢复”。
+## [br]仅负责占用事实的原子更新；地图边界/墙体/水晶/放置权限仍由 PlacementController 与 LevelWorldQuery 把关。
+## [br]返回 true 表示迁移成功；任一校验失败返回 false 且内部事实完全不变。
+func move_single_cell(mechanism_id: StringName, source_cell: Vector2i, target_cell: Vector2i) -> bool:
+	# 校验阶段：全部通过前不触碰任何数据，杜绝半写入或“先注销后恢复”中间态。
+	if mechanism_id == &"":
+		push_error("OccupancyRegistry: 原子移动机关 ID 不能为空。")
+		return false
+	if not occupied_cells_by_id.has(mechanism_id):
+		push_error("OccupancyRegistry: 原子移动源机关未登记：%s" % [mechanism_id])
+		return false
+	var cells: Array[Vector2i] = occupied_cells_by_id[mechanism_id]
+	if cells.size() != 1:
+		push_error("OccupancyRegistry: 原子移动仅支持单格机关，%s 占用 %d 格。" % [mechanism_id, cells.size()])
+		return false
+	if cells[0] != source_cell:
+		push_error("OccupancyRegistry: 源格不属于该机关：%s != %s。" % [source_cell, mechanism_id])
+		return false
+	if mechanism_at.get(source_cell, &"") != mechanism_id:
+		push_error("OccupancyRegistry: 源格正向索引与机关不一致：%s。" % [mechanism_id])
+		return false
+	if target_cell == source_cell:
+		push_error("OccupancyRegistry: 原子移动目标格与源格相同。")
+		return false
+	if mechanism_at.has(target_cell):
+		push_error("OccupancyRegistry: 目标格已被占用：%s。" % [target_cell])
+		return false
+	# 全部校验通过，一次性原子更新正反向索引。
+	mechanism_at.erase(source_cell)
+	mechanism_at[target_cell] = mechanism_id
+	cells[0] = target_cell
+	return true
+
+
 ## 清空全部机关占用。
 ## [br]同时重置 mechanism_at 和 occupied_cells_by_id，回到初始空状态。
 ## [br]重复调用安全，不会报错。

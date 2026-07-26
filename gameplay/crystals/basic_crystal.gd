@@ -13,6 +13,9 @@ extends Node2D
 
 @export var cell: Vector2i = Vector2i(7, 3)
 
+## 关卡作者显式配置的稳定水晶 ID；不从 Node.name 推导、不随机生成、不为空静默填充，cell 变化时保持不变。由 LevelObjectRegistry 再次校验。
+@export var crystal_id: StringName = &""
+
 var is_activated: bool = false
 
 @onready var _visual: ObjectVisualView = $VisualView
@@ -28,6 +31,11 @@ const STATE_LIT: StringName = &"lit"
 ## [br]边界条件：VisualView 子节点缺失或类型错误属于场景配置错误，应由 Godot 节点绑定直接暴露，而不是在脚本中静默忽略。
 func _ready() -> void:
 	_apply_state()
+
+
+## 返回显式配置的稳定 crystal_id；可能为空（&""），由 LevelObjectRegistry 拒绝并暴露，不由本脚本兜底填充。
+func get_crystal_id() -> StringName:
+	return crystal_id
 
 
 ## 点亮当前普通独立水晶。

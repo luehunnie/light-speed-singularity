@@ -3,11 +3,13 @@ extends Node2D
 ## 核心闭环原型关卡控制器（plan §4.2 / §5 / §6）。
 ## 职责：读取 fire_light / reset_level 输入，发起普通主发射源最小脉冲光线（Vector2i 逐格路径，无 Area2D/Tween/物理射线），
 ## 通过 OccupancyRegistry 解析单格镜面并改向、点亮普通独立水晶、保持关卡完成结果；实现最小镜面库存、拖拽放置/移动/回收与 SETUP 右键朝向配置。
-## 状态事实所有权：四态（SETUP/PULSE_ACTIVE/MOVE_WINDOW/COMPLETED）由 _run_state_controller 持有；核心持有 is_level_completed、
-## pulse_generation、runtime_moves_used；玩家机关映射 placed_tokens_by_id 与机关序号由 _placement_controller 唯一持有；玩家机关库存剩余由 _inventory_controller 持有。OccupancyRegistry 是格子占用唯一事实来源。
+## 状态事实所有权：四态（SETUP/PULSE_ACTIVE/MOVE_WINDOW/COMPLETED）由 _run_state_controller 持有；pulse_generation、runtime_moves_used、
+## 发射请求编排、异步脉冲结束与完整 R 重置顺序由 _level_runtime_controller 唯一持有；玩家机关映射 placed_tokens_by_id 与机关序号由 _placement_controller 唯一持有；
+## 玩家机关库存剩余由 _inventory_controller 持有；目标完成事实（水晶激活、完成判断、运行期重置）由 _objective_controller 唯一持有。OccupancyRegistry 是格子占用唯一事实来源。
+## 核心只保留接线、输入转发、右键镜面配置入口、节点工厂、UI 适配与启动自检入口；七项启动自检编排与摘要日志由 _startup_self_check_coordinator 整块负责。
 ## 正式运行权限：SETUP 允许完整布置且移动不计次；PULSE_ACTIVE/MOVE_WINDOW 允许拿取/放置/移动/回收但右键配置锁定、PULSE_ACTIVE 禁止 Space；
 ## 仅“已放置机关跨格直接移动”成功提交后消耗 runtime_move_limit 一次；COMPLETED 冻结全部交互，只允许 R。
-## R 是完整关卡重置：安全取消拖拽 → 递增 pulse_generation → 清光路/水晶/完成状态 → 逐个注销玩家机关占用并退回库存 → 清零 runtime_moves_used → 回 SETUP；不删除发射器/墙体/水晶/静态内容。
+## R 是完整关卡重置（由 _level_runtime_controller.reset_runtime 执行）：递增 pulse_generation 使旧异步失效 → 安全取消拖拽 → 清光路/水晶/完成状态 → 逐个注销玩家机关占用并退回库存 → 清零 runtime_moves_used → 回 SETUP；不删除发射器/墙体/水晶/静态内容。
 
 
 # 世界格尺寸唯一来源（preload 共享常量，不加 class_name）；64 世界格对应半格 32。
@@ -21,11 +23,8 @@ const _GridCoordinateRules: GDScript = preload(
 const MAX_PROPAGATION_STEPS: int = 128
 const PULSE_VISUAL_DURATION_SECONDS: float = 1.0
 const PROTOTYPE_TOKEN_TOTAL: int = 1
-const MIRROR_TOKEN_TYPE_ID: StringName = &"basic_single_cell_mirror"
 const INVALID_CELL: Vector2i = Vector2i(-999999, -999999)
 
-## 原型光路视觉黄色显示色；仅用于 LightSegmentView 占位块 color 与正式纹理 self_modulate 调制，不参与 RGB 玩法。
-const LIGHT_PATH_COLOR: Color = Color(1.0, 0.95, 0.2, 0.75)
 
 # 以下两项仅为 Inspector 初始配置；_ready 中据此构造 _fixed_emitter，运行期格子/方向只由 FixedEmitter 提供。
 @export var emitter_cell: Vector2i = Vector2i(1, 3)
@@ -49,24 +48,12 @@ const LIGHT_PATH_COLOR: Color = Color(1.0, 0.95, 0.2, 0.75)
 
 ## 轻量机关占用表：格子坐标 ↔ 机关 ID 双向索引，用于单格镜面放置/移动/回收与传播循环中的镜面节点解析。
 const _OccupancyRegistry: GDScript = preload("res://gameplay/placement/occupancy_registry.gd")
-const _SingleCellMirrorScript: GDScript = preload("res://gameplay/mechanisms/mirrors/single_cell_mirror.gd")
-# 七项启动自检模块；通过单项 SelfCheckRunner 执行，核心不再直接调用 run()，仍保留 Debug 硬断言边界。
-const _OccupancyRegistryCheck: GDScript = preload("res://gameplay/diagnostics/self_check/checks/occupancy_registry_check.gd")
-const _MirrorReflectionCheck: GDScript = preload("res://gameplay/diagnostics/self_check/checks/mirror_reflection_check.gd")
-const _PlayerMechanismIdSnapshotCheck: GDScript = preload("res://gameplay/diagnostics/self_check/checks/player_mechanism_id_snapshot_check.gd")
-const _RuntimeMoveCheck: GDScript = preload("res://gameplay/diagnostics/self_check/checks/runtime_move_check.gd")
-# 持有只读采样快照的网格坐标自检模块。
-const _GridCoordinateCheck: GDScript = preload("res://gameplay/diagnostics/self_check/checks/grid_coordinate_check.gd")
-const _RuntimeStateCheck: GDScript = preload("res://gameplay/diagnostics/self_check/checks/runtime_state_check.gd")
-# 库存一致性只读快照、共享纯规则与启动期自检；运行期断言与启动期自检共用同一采集函数与规则来源，A/B/C 规则不在核心保留副本。
+# 库存一致性只读快照与共享纯规则；运行期断言与启动自检共用同一采集函数与规则来源，A/B/C 规则不在核心保留副本。
 const _InventoryConsistencySnapshot: GDScript = preload(
 	"res://gameplay/placement/inventory_consistency_snapshot.gd"
 )
 const _InventoryConsistencyRules: GDScript = preload(
 	"res://gameplay/placement/rules/inventory_consistency_rules.gd"
-)
-const _InventoryConsistencyCheck: GDScript = preload(
-	"res://gameplay/diagnostics/self_check/checks/inventory_consistency_check.gd"
 )
 # 玩家机关库存事实所有者：核心持有的唯一实例，保存总量与剩余量，提供扣除/归还/重置与一致性判断；不持有 placed_tokens_by_id、不访问占用/UI/RunState。
 const _InventoryController: GDScript = preload(
@@ -76,83 +63,67 @@ const _InventoryController: GDScript = preload(
 const _PlacementController: GDScript = preload(
 	"res://gameplay/placement/placement_controller.gd"
 )
-# 诊断控制器：核心持有的唯一实例，协调七项启动自检；每次调用内部新建 SelfCheckRunner 并返回结果，不执行 assert，失败策略由核心决定。
-const _DiagnosticsController: GDScript = preload(
-	"res://gameplay/diagnostics/diagnostics_controller.gd"
-)
-# 启动摘要日志的等级与条目数据契约；核心只构造 DiagnosticLogEntry 并通过 write_entry_to_file 落盘，不直接 new RuntimeLogger。
-const _DiagnosticSeverity: GDScript = preload(
-	"res://gameplay/diagnostics/logging/diagnostic_severity.gd"
-)
-const _DiagnosticLogEntry: GDScript = preload(
-	"res://gameplay/diagnostics/logging/diagnostic_log_entry.gd"
+# 启动自检协调器：核心持有的唯一实例，整块负责七项启动自检编排、三层 Debug 硬断言与启动摘要日志；核心只采集场景数据并调用 run_all。
+const _StartupSelfCheckCoordinator: GDScript = preload(
+	"res://gameplay/diagnostics/startup_self_check_coordinator.gd"
 )
 const _SingleCellMirrorScene: PackedScene = preload("res://gameplay/mechanisms/mirrors/single_cell_mirror.tscn")
 const _InventorySlotViewScript: GDScript = preload("res://gameplay/ui/inventory_slot_view.gd")
-const _LightSegmentViewScript: GDScript = preload("res://gameplay/visuals/light_segments/light_segment_view.gd")
-const _LightSegmentViewScene: PackedScene = preload("res://gameplay/visuals/light_segments/light_segment_view.tscn")
-const _LightSegmentVisualProfile: GDScript = preload("res://gameplay/visuals/light_segments/light_segment_visual_profile.gd")
+# 普通光线路径视觉控制器：完整拥有光路视觉节点集合与四方向接线，核心只调用 show_step / clear_path。
+const _LightVisualController: GDScript = preload("res://gameplay/visuals/light_visual_controller.gd")
 # 运行交互共享类型契约（RunState / DragSource）。
 const _RuntimeInteractionTypes: GDScript = preload("res://gameplay/interaction/runtime_interaction_types.gd")
 # 运行期移动纯规则；正式玩法调用与 runtime_move 启动自检共用同一规则来源。
 const _RuntimeMoveRules: GDScript = preload("res://gameplay/placement/rules/runtime_move_rules.gd")
-# 运行状态纯规则；正式玩法查询与 post_pulse_state 启动自检共用同一规则来源。
-const _RuntimeStateRules: GDScript = preload("res://gameplay/interaction/runtime_state_rules.gd")
 # RunStateController：核心持有的唯一运行状态所有者，负责四态事实、最小合法转换与 state_changed 信号；不加入场景树、不设为 Autoload。
 const _RunStateController: GDScript = preload("res://gameplay/interaction/run_state_controller.gd")
-# 一次拖拽的临时事实唯一所有者：来源/机关 ID/原格/预览格/起始朝向；不持有 Node、Controller 或场景树引用，预览与正式节点句柄仍由核心保留。
-const _DragContext: GDScript = preload("res://gameplay/interaction/drag_context.gd")
+# 拖拽业务流程控制器：完整拥有一次拖拽的生命周期（拿取/预览/隐藏/提交/回收/取消/清理）；核心只转发指针位置、取消请求与场景适配 Callable。
+const _DragFlowController: GDScript = preload("res://gameplay/interaction/drag_flow_controller.gd")
 # 玩家输入分类器：把 InputEvent 分类为业务命令；不查询状态、不命中 UI、不转网格、不执行业务。
 const _PlayerInteractionController: GDScript = preload("res://gameplay/interaction/player_interaction_controller.gd")
 # 世界只读查询门面与光线层薄适配器；不加入场景树、不设为 Autoload。
 const _LevelWorldQuery: GDScript = preload("res://gameplay/world/level_world_query.gd")
 const _LightWorldQuery: GDScript = preload("res://gameplay/world/light_world_query.gd")
-# 普通光线机关光学适配器与结果协议；核心只调用 _RayMechanismAdapter.evaluate()，机关识别/镜面反射/未知机关/出射方向全部迁入适配器。
-const _RayMechanismAdapter: GDScript = preload("res://gameplay/light/ray_mechanism_adapter.gd")
-const _RayMechanismResult: GDScript = preload("res://gameplay/light/ray_mechanism_result.gd")
-# 普通光线执行模块与结果协议；核心只调用 _RayExecutionModule.execute()，逐格传播循环全部迁入模块，结果只保存事实。
-const _RayExecutionModule: GDScript = preload("res://gameplay/light/ray_execution_module.gd")
-const _RayExecutionResult: GDScript = preload("res://gameplay/light/ray_execution_result.gd")
+# 关卡稳定对象索引所有者（D3-C）：水晶按显式 crystal_id 与 cell 双向索引，LevelWorldQuery 据此查询水晶，不暴露可写字典。
+const _LevelObjectRegistry: GDScript = preload("res://gameplay/level/level_object_registry.gd")
+# 目标完成事实唯一所有者（D3-D）：按 cell 激活水晶、判断完成、运行期重置水晶；核心只读取 is_completed()/reset_runtime()，不保留第二套目标业务实现。
+const _ObjectiveController: GDScript = preload("res://gameplay/objectives/objective_controller.gd")
 # 固定发射器与发射请求数据；运行期格子和方向唯一所有者为 FixedEmitter，emitter_cell/emitter_direction 仅作 Inspector 初始配置。
 const _FixedEmitter: GDScript = preload("res://gameplay/mechanisms/emitters/fixed_emitter.gd")
-const _FireRequest: GDScript = preload("res://gameplay/light/fire_request.gd")
-# 默认光线路段视觉资源（四字段全空 → LightSegmentView 静默回退到黄色占位块）；以 Resource 类型 preload，set_profile 时再 as 为 profile 脚本类型，避免常量类型解析对全局类型缓存的依赖。
-const _DefaultLightSegmentProfile: Resource = preload("res://assets/visual_profiles/basic_light_segment_visuals.tres")
+# 正式运行期编排控制器（D3-E）：完整拥有 pulse_generation、runtime_moves_used、发射编排、异步脉冲结束与 R 重置顺序；核心只调 request_fire/reset_runtime 与运行期移动次数查询。
+const _LevelRuntimeController: GDScript = preload("res://gameplay/runtime/level_runtime_controller.gd")
 var occupancy: _OccupancyRegistry = _OccupancyRegistry.new()
-
-## 当前运行是否已经完成关卡；与光路视觉生命周期分离，可先于运行状态变为 true，运行状态在脉冲视觉结束后才进入 COMPLETED。
-var is_level_completed: bool = false
-
-## 当前脉冲版本号；每次开始脉冲或 R 重置递增，用于让旧异步等待回调失效，避免误清理新脉冲。
-var pulse_generation: int = 0
 
 ## 玩家机关库存事实所有者：运行期剩余数量唯一事实来源，扣除/归还/重置经此实例；拖拽开始时不提前扣数量，仅合法放置成功后才扣除。
 var _inventory_controller: _InventoryController = _InventoryController.new(PROTOTYPE_TOKEN_TOTAL)
 
-## 运行期已使用移动次数（R 重置清零）。remaining = max(limit - used, 0)；remaining=0 不禁止拖起（仍可取消/回收），只禁止提交到另一世界格。
-var runtime_moves_used: int = 0
-
 ## 玩家机关放置/移动/回收事务控制器；唯一持有 placed_tokens_by_id 与机关序号，_ready 中构造并注入依赖。核心只发事务请求并按结果清理拖拽。
 var _placement_controller: _PlacementController = null
 
-var _drag_context: _DragContext = _DragContext.new()
-## 拖拽预览节点句柄；仅作生命周期管理，不作为机关事实来源，事实由 _drag_context 持有。
-var _drag_preview_token: Variant = null
-## 被拖正式机关节点句柄；仅作生命周期管理，正式机关事实仍由 PlacementController 持有。
-var _dragged_placed_token: Variant = null
+## 拖拽业务流程控制器：核心持有的唯一实例，拥有一次拖拽的完整业务生命周期；核心只转发指针位置、取消请求与场景适配 Callable。
+var _drag_flow_controller: _DragFlowController = null
 
 ## 玩家输入分类器：把 _input 收到的 InputEvent 分类为业务命令，自身不执行任何业务副作用。
 var _player_interaction_controller: _PlayerInteractionController = _PlayerInteractionController.new()
 
-## 诊断控制器：核心持有的唯一实例，仅协调七项启动自检；不作为 Node、不设为 Autoload，运行期库存断言不经本 Controller。
-var _diagnostics_controller: _DiagnosticsController = _DiagnosticsController.new()
+## 启动自检协调器：核心持有的唯一实例，整块负责七项启动自检编排与摘要日志；不作为 Node、不设为 Autoload。
+var _startup_self_check_coordinator: _StartupSelfCheckCoordinator = _StartupSelfCheckCoordinator.new()
 
 ## 运行状态控制器：核心持有的唯一运行状态所有者，负责四态事实、最小合法转换与 state_changed 信号；核心不持有 current_run_state 副本。
-## COMPLETED 前取消拖拽必须在请求转换前由核心完成；pulse_generation 仍由核心保护异步回调。不作为 Node、不设为 Autoload。
+## COMPLETED 前取消拖拽与 pulse_generation 异步回调保护由 LevelRuntimeController 完成；核心不持有 pulse_generation。不作为 Node、不设为 Autoload。
 var _run_state_controller: _RunStateController = _RunStateController.new()
+
+## 普通光线路径视觉控制器：完整拥有光路视觉节点集合（逐格创建/记录/cell→世界定位/四方向接线/路径清理）；核心只调用 show_step 与 clear_path，不持有第二套视觉创建实现。
+var _light_visual_controller: _LightVisualController = null
 
 ## 世界只读查询门面：在所有真实依赖初始化后构造，持有容器引用而非复制（容器运行期只原地增删，从不整体重赋值）；只读，不修改世界事实。
 var _level_world_query: _LevelWorldQuery = null
+
+## 关卡稳定对象索引：_ready 中遍历 crystals 按显式 crystal_id 与 cell 注册，LevelWorldQuery 据此查询水晶；不暴露内部字典。
+var _level_object_registry: _LevelObjectRegistry = _LevelObjectRegistry.new()
+
+## 目标完成事实所有者：按 cell 激活水晶、判断完成、运行期重置；_ready 中在 Registry 填充后构造，核心只读取事实，不持有完成字段副本。
+var _objective_controller: _ObjectiveController = null
 
 ## 普通光线只读薄适配层：内部依赖 _level_world_query，只组合既有边界与墙体规则，不新增规则、不执行传播循环或副作用。
 var _light_world_query: _LightWorldQuery = null
@@ -160,11 +131,16 @@ var _light_world_query: _LightWorldQuery = null
 ## 固定发射器：运行期格子与方向的唯一所有者；_ready 中由 Inspector 初始配置构造一次，此后 fire_light 与 LevelWorldQuery 只读取本实例。
 var _fixed_emitter: _FixedEmitter = null
 
+## 正式运行期编排控制器：_ready 中构造并 add_child；核心只调 request_fire/reset_runtime 与运行期移动次数查询/扣除委托，不持有 pulse_generation 或 runtime_moves_used。
+var _level_runtime_controller: _LevelRuntimeController = null
+
 
 ## 初始化核心闭环原型关卡：刷新机关栏 UI；仅调试构建执行七项启动自检与摘要日志，发布构建跳过，避免把调试断言作为运行期必需流程。
 func _ready() -> void:
 	# 早期连接运行状态信号，避免错过首次状态变化；本回调只刷新机关栏 UI。
 	_run_state_controller.state_changed.connect(_on_run_state_changed)
+	# 光路视觉控制器先构造：注入 LightPathLayer 作为视觉父节点，视觉资源与颜色由控制器自持。
+	_light_visual_controller = _LightVisualController.new(light_path_layer)
 	# 放置事务控制器先于只读查询门面构造：LevelWorldQuery 需持有控制器映射引用，供光线层 cell→ID→节点解析。
 	_placement_controller = _PlacementController.new(
 		occupancy,
@@ -173,183 +149,88 @@ func _ready() -> void:
 	)
 	# 固定发射器先于只读查询门面构造：LevelWorldQuery 与 fire_light 的运行期格子只取自本实例，emitter_cell 仅在此处作为初始配置读入。
 	_fixed_emitter = _FixedEmitter.new(emitter_cell, emitter_direction)
-	# 在所有真实依赖（@onready crystals、occupancy、控制器映射与 @export 边界/墙体/发射器格）初始化后构造只读查询门面。
+	# 稳定对象索引：遍历 @onready crystals，按显式 crystal_id 与 cell 注册；任一失败 push_error 并 assert 暴露，不静默跳过。
+	for crystal: BasicCrystal in crystals:
+		assert(_level_object_registry.register_crystal(crystal.get_crystal_id(), crystal.cell, crystal),
+				"水晶注册失败：crystal_id=%s cell=%s" % [crystal.get_crystal_id(), crystal.cell])
+	# 目标完成事实所有者：在 Registry 填充后构造，唯一持有水晶激活/完成判断/运行期重置。
+	_objective_controller = _ObjectiveController.new(_level_object_registry)
+	# 在所有真实依赖初始化后构造只读查询门面；水晶查询走 Registry，机关节点走 PlacementController.get_placed_node 只读 Callable，不共享可写映射。
 	_level_world_query = _LevelWorldQuery.new(
 		map_bounds,
 		wall_cells,
 		_fixed_emitter.get_cell(),
-		crystals,
+		_level_object_registry,
 		occupancy,
-		_placement_controller.get_placed_tokens_by_id_reference()
+		Callable(_placement_controller, "get_placed_node")
 	)
 	_placement_controller.set_level_world_query(_level_world_query)
-	_light_world_query = _LightWorldQuery.new(_level_world_query, crystals)
+	_light_world_query = _LightWorldQuery.new(_level_world_query)
+	# 拖拽流程控制器在放置/库存/世界查询门面就绪后构造；场景适配 Callable 注入指针解析、预览创建、权限查询、扣次、UI 刷新与一致性断言。
+	_drag_flow_controller = _DragFlowController.new(
+		_placement_controller,
+		_inventory_controller,
+		_level_world_query,
+		Callable(self, "_resolve_drag_pointer"),
+		Callable(self, "_create_token_node"),
+		Callable(self, "_query_drag_permission"),
+		Callable(self, "_consume_runtime_move"),
+		Callable(self, "_refresh_drag_ui"),
+		Callable(self, "_assert_inventory_consistency")
+	)
+	# 正式运行期编排控制器：在放置/库存/世界查询/拖拽流程就绪后构造，注入全部依赖与高层 UI/一致性 Callable；add_child 跟随关卡场景以安全访问 SceneTreeTimer。
+	_level_runtime_controller = _LevelRuntimeController.new(
+		_run_state_controller,
+		_fixed_emitter,
+		_light_world_query,
+		_light_visual_controller,
+		_objective_controller,
+		_placement_controller,
+		_inventory_controller,
+		_drag_flow_controller,
+		MAX_PROPAGATION_STEPS,
+		PULSE_VISUAL_DURATION_SECONDS,
+		runtime_move_limit,
+		Callable(self, "_refresh_runtime_ui"),
+		Callable(self, "_set_complete_label_visible"),
+		Callable(self, "_assert_inventory_consistency")
+	)
+	add_child(_level_runtime_controller)
 	_update_inventory_ui()
 	_update_runtime_move_ui()
 	if OS.is_debug_build():
-		_run_occupancy_registry_self_check()
-		_run_grid_coordinate_self_check()
-		_run_single_cell_mirror_reflection_self_check()
-		_run_post_pulse_state_self_check()
-		_run_runtime_move_self_check()
-		_run_player_mechanism_id_snapshot_self_check()
-		_run_inventory_consistency_self_check()
-		# 只有第七项（库存一致性）成功后才写一条启动摘要日志；任一自检硬断言失败时执行不会到达此处。日志调用不得移出 Debug 守卫。
-		_write_startup_self_check_summary_log()
+		# 采集网格采样格（含 Registry 完整性前置断言）与库存一致性只读快照，交由协调器按固定顺序执行七项自检并写摘要日志。
+		var sample_cells: Array[Vector2i] = _collect_grid_coordinate_sample_cells()
+		var snapshot: _InventoryConsistencySnapshot = _collect_inventory_consistency_snapshot()
+		_startup_self_check_coordinator.run_all(sample_cells, snapshot, true, true)
 
 
-## 玩家机关 ID 快照、R 库存恢复计算与残留占用查询自检（_ready 第六项）；规则位于 PlayerMechanismResetRules，保留 Debug 硬断言边界。
-func _run_player_mechanism_id_snapshot_self_check() -> void:
-	var definition: SelfCheckCallable = SelfCheckCallable.new(
-			&"player_mechanism_id_snapshot",
-			"玩家机关 ID 快照、R 库存计算与残留引用自检",
-			_PlayerMechanismIdSnapshotCheck.run
-	)
-	_run_startup_self_check_via_controller(definition, &"startup_player_mechanism_id_snapshot")
-
-
-## 启动期单项自检执行入口：把 SelfCheckCallable 交由 DiagnosticsController 协调执行（Controller 不 assert，失败策略由核心决定）。
-## 保留三层 Debug 硬断言——执行级（run_result null 或 errors 非空）、结构级（validate() 非空）、检查级（is_success() 为 false），断言信息汇总 execution_id/errors/validate/每项 check 详情，不降级为 warning。仅用于启动期自检，运行期库存一致性由 _assert_inventory_consistency 直接断言。
-func _run_startup_self_check_via_controller(
-		definition: SelfCheckCallable,
-		execution_id: StringName
-) -> void:
-	assert(definition != null, "启动自检：definition 为 null，必须传入 SelfCheckCallable。")
-	var run_result: SelfCheckRunResult = _diagnostics_controller.run_self_check(
-		definition,
-		execution_id
-	)
-	# 执行级前置：Controller 必须返回非 null 结果。
-	assert(run_result != null, "启动自检：Controller 返回 null execution_id=%s。" % [execution_id])
-	var structure_problems: PackedStringArray = run_result.validate()
-	# 汇总断言信息：execution_id、errors、validate 错误、每项 check_id/summary/details。
-	var assert_lines: PackedStringArray = PackedStringArray()
-	assert_lines.append("execution_id=%s" % [execution_id])
-	assert_lines.append("errors=%s" % [run_result.errors])
-	assert_lines.append("validate=%s" % [structure_problems])
-	for index: int in range(run_result.results.size()):
-		var item: SelfCheckResult = run_result.results[index]
-		if item == null:
-			assert_lines.append("results[%d]=null" % [index])
-		else:
-			assert_lines.append("results[%d] check_id=%s summary=%s details=%s" % [index, item.check_id, item.summary, item.details])
-	var assert_message: String = "\n".join(assert_lines)
-	# 第一层：执行级错误（注册/协调失败）。
-	assert(run_result.errors.is_empty(), "启动自检：执行级错误（注册/协调失败）：\n%s" % [assert_message])
-	# 第二层：结果结构（validate() 字段问题）。
-	assert(structure_problems.is_empty(), "启动自检：结果结构无效：\n%s" % [assert_message])
-	# 第三层：检查未通过（任一 passed=false）。
-	assert(run_result.is_success(), "启动自检：检查未通过：\n%s" % [assert_message])
-
-
-## 在七项启动自检全部通过后写一条 INFO 启动摘要日志（DiagnosticLogEntry，经 DiagnosticsController.write_entry_to_file 落盘）。
-## 日志属 Diagnostics 而非玩法事务：写入失败只逐项 push_warning，不 assert、不中断主场景启动、不改变 RunState；同一次启动只写一条摘要，不逐项记录 PASS。
-func _write_startup_self_check_summary_log() -> void:
-	# 时间戳取 Unix 毫秒，满足 DiagnosticLogEntry 契约。
-	var timestamp_unix_msec: int = int(Time.get_unix_time_from_system() * 1000.0)
-	# 构造参数顺序严格匹配 DiagnosticLogEntry 签名（timestamp, severity, module, execution, message）。
-	var entry: _DiagnosticLogEntry = _DiagnosticLogEntry.new(
-		timestamp_unix_msec,
-		_DiagnosticSeverity.Level.INFO,
-		&"startup_self_check",
-		&"startup_all_self_checks",
-		"七项启动自检全部通过"
-	)
-	var write_problems: PackedStringArray = _diagnostics_controller.write_entry_to_file(entry)
-	for problem: String in write_problems:
-		push_warning("启动摘要日志写入失败：%s" % [problem])
-
-
-## OccupancyRegistry 启动期轻量自检（_ready 第一项）；构造 SelfCheckCallable 交由 _run_startup_self_check_via_controller，保留 Debug 硬断言边界。
-func _run_occupancy_registry_self_check() -> void:
-	var definition: SelfCheckCallable = SelfCheckCallable.new(
-			&"occupancy_registry",
-			"OccupancyRegistry 启动期轻量自检",
-			_OccupancyRegistryCheck.run
-	)
-	_run_startup_self_check_via_controller(definition, &"startup_occupancy_registry")
-
-
-## 64 像素逻辑格坐标换算自检（_ready 第二项）；按原顺序采集真实格子构造 GridCoordinateCheck，只把 Vector2i 传入 Diagnostics，不传真实对象，不改遍历顺序。
-func _run_grid_coordinate_self_check() -> void:
-	# 按原自检顺序采集真实格子；只收集 Vector2i，不把 Crystal/Node 等真实对象传入 Diagnostics。
-	var sample_cells: Array[Vector2i] = [Vector2i.ZERO, _fixed_emitter.get_cell()]
-	for crystal: BasicCrystal in crystals:
-		sample_cells.append(crystal.cell)
-	for wall_cell: Vector2i in wall_cells:
-		sample_cells.append(wall_cell)
-	sample_cells.append(Vector2i(map_bounds.end.x - 1, map_bounds.end.y - 1))
-
-	var check: _GridCoordinateCheck = _GridCoordinateCheck.new(sample_cells)
-	# 无参实例 Callable，不使用 bind/lambda/捕获。
-	var definition: SelfCheckCallable = SelfCheckCallable.new(
-			&"grid_coordinate",
-			"网格坐标规则自检",
-			Callable(check, "run")
-	)
-	_run_startup_self_check_via_controller(definition, &"startup_grid_coordinate")
-
-## 基础单格镜面八方向反射纯函数自检（_ready 第三项，位于网格坐标自检之后，不得前移）。
-func _run_single_cell_mirror_reflection_self_check() -> void:
-	var definition: SelfCheckCallable = SelfCheckCallable.new(
-			&"single_cell_mirror_reflection",
-			"基础单格镜面八方向反射纯函数自检",
-			_MirrorReflectionCheck.run
-	)
-	_run_startup_self_check_via_controller(definition, &"startup_single_cell_mirror_reflection")
-
-
-## 运行状态纯规则自检（_ready 第四项）；规则位于 RuntimeStateRules，检查失败也不修改或泄漏核心运行状态。
-func _run_post_pulse_state_self_check() -> void:
-	var definition: SelfCheckCallable = SelfCheckCallable.new(
-			&"runtime_state_rules",
-			"运行状态规则自检",
-			_RuntimeStateCheck.run
-	)
-	_run_startup_self_check_via_controller(definition, &"startup_runtime_state_rules")
-
-
-## 运行期移动次数纯函数自检（_ready 第五项）；规则位于 RuntimeMoveRules，本函数不参与实际移动判定。
-func _run_runtime_move_self_check() -> void:
-	var definition: SelfCheckCallable = SelfCheckCallable.new(
-			&"runtime_move_rules",
-			"运行期移动规则自检",
-			_RuntimeMoveCheck.run
-	)
-	_run_startup_self_check_via_controller(definition, &"startup_runtime_move_rules")
-
-
-## 处理关卡输入动作和鼠标拖拽事件：fire_light 在 SETUP/MOVE_WINDOW 且未拖拽时触发一次脉冲；reset_level 直接调用 reset_runtime() 完整重置；鼠标左键按运行权限驱动放置/移动/回收。
-## 拖拽中按 Space 安全忽略；拖拽中按 R 不依赖 _input 预取消，由 reset_runtime() 统一安全取消拖拽；PULSE_ACTIVE 期间布局变化只影响后续发射，不回溯当前脉冲。
+## 处理关卡输入动作和鼠标拖拽事件：fire_light 转发到 LevelRuntimeController.request_fire（拖拽中/PULSE_ACTIVE/COMPLETED 拒绝在控制器内）；reset_level 转发到 reset_runtime()；鼠标左键按运行权限驱动放置/移动/回收。
+## 拖拽中按 Space 由控制器拒绝；拖拽中按 R 不依赖 _input 预取消，由 reset_runtime() 统一安全取消拖拽；PULSE_ACTIVE 期间布局变化只影响后续发射，不回溯当前脉冲。
 func _input(event: InputEvent) -> void:
 	var command: _PlayerInteractionController.Command = _player_interaction_controller.translate(event)
 	match command.kind:
 		_PlayerInteractionController.Command.Kind.RESET:
 			reset_runtime()
 		_PlayerInteractionController.Command.Kind.FIRE:
-			# 拖拽中拒绝 Space：一次拖拽事务未完成时不得启动新脉冲。
-			if is_dragging():
-				if OS.is_debug_build():
-					print_debug("CoreLoopPrototype: 拖拽中忽略 Space 发射。")
-				return
 			fire_light()
 		_PlayerInteractionController.Command.Kind.PRIMARY_PRESS:
-			_try_begin_drag()
+			_drag_flow_controller.try_begin_drag(command.pointer_position)
 		_PlayerInteractionController.Command.Kind.PRIMARY_RELEASE:
 			if is_dragging():
-				_finish_drag_at_mouse()
+				_drag_flow_controller.finish_drag(command.pointer_position)
 		_PlayerInteractionController.Command.Kind.SECONDARY_PRESS:
 			_try_toggle_mirror_at_mouse()
 		_PlayerInteractionController.Command.Kind.POINTER_MOTION:
-			_update_drag_preview_from_mouse()
+			_drag_flow_controller.update_preview(command.pointer_position)
 		_PlayerInteractionController.Command.Kind.NONE:
 			pass
 
 
-## state_changed 回调：只刷新机关栏 UI；不在此取消拖拽或修改 is_level_completed/pulse_generation/水晶/光路/占用。COMPLETED 前取消拖拽由 _finish_current_pulse 在请求转换前完成。
+## state_changed 回调：只刷新机关栏 UI；不在此取消拖拽或修改 pulse_generation/水晶/光路/占用/完成事实。COMPLETED 前取消拖拽由 LevelRuntimeController 在请求转换前完成。
 func _on_run_state_changed(
-		previous_state: _RuntimeInteractionTypes.RunState,
-		new_state: _RuntimeInteractionTypes.RunState
+		_previous_state: _RuntimeInteractionTypes.RunState,
+		_new_state: _RuntimeInteractionTypes.RunState
 ) -> void:
 	_update_inventory_ui()
 
@@ -359,247 +240,34 @@ func _get_current_run_state() -> _RuntimeInteractionTypes.RunState:
 	return _run_state_controller.get_current_state()
 
 
-## 是否允许发射普通脉冲（SETUP/MOVE_WINDOW 可发射）。完成标签已显示但脉冲视觉未结束时状态仍为 PULSE_ACTIVE，重复 Space 仍被拒绝。
-func can_fire_light() -> bool:
-	return _run_state_controller.can_fire_light()
-
-
-## 粗粒度冻结门：非 COMPLETED 返回 true。不是拿取/移动/回收的唯一守卫——拿取/回收在所有非 COMPLETED 状态允许，拖起由 _can_begin_placed_drag 限制（与剩余次数分离），跨格提交由 _can_commit_placed_move 按剩余次数限制。
-func can_edit_layout() -> bool:
-	return _run_state_controller.can_edit_layout()
-
-
 ## 是否允许编辑内部配置（仅 SETUP）。本权限只用于主发射源方向、机关内部模式等内部配置，不代表布局编辑权限，不得用于控制拖拽放置/移动/回收。
 func can_edit_configuration() -> bool:
 	return _run_state_controller.can_edit_configuration()
 
 
-## 是否处于普通脉冲活动窗口（PULSE_ACTIVE）。通关目标可在 PULSE_ACTIVE 期间已成立，脉冲活动仍以运行状态为准。
-func is_current_pulse_active() -> bool:
-	return _run_state_controller.is_current_pulse_active()
-
-
-## 是否处于运行期移动状态（PULSE_ACTIVE 或 MOVE_WINDOW）。运行期移动次数只在这两态扣除，SETUP 不计次，COMPLETED 冻结全部布局交互。
-func is_runtime_move_state() -> bool:
-	return _run_state_controller.is_runtime_move_state()
-
-
-## 剩余运行期移动次数 max(limit - used, 0)；UI 与跨格提交权限只读取本结果，不在此处递增。
+## 剩余运行期移动次数 max(limit - used, 0)；委托 LevelRuntimeController，核心不持有 runtime_moves_used 副本。
 func get_runtime_moves_remaining() -> int:
-	return _RuntimeMoveRules.compute_runtime_moves_remaining(runtime_move_limit, runtime_moves_used)
+	return _level_runtime_controller.get_runtime_moves_remaining()
 
 
-## 是否仍有运行期跨格移动提交次数；返回 false 时不禁止拖起机关，玩家仍可松回原格取消或拖回机关栏回收。SETUP 移动不受该次数限制。
-func has_runtime_moves_remaining() -> bool:
-	return get_runtime_moves_remaining() > 0
-
-
-## 刷新运行期移动次数 UI（“运行期移动：剩余 / 上限”）；不修改 runtime_moves_used 或 runtime_move_limit。
+## 刷新运行期移动次数 UI（"运行期移动：剩余 / 上限"）；只读取控制器剩余次数与本地配置上限，不修改事实。
 func _update_runtime_move_ui() -> void:
-	runtime_move_label.text = "运行期移动：%d / %d" % [get_runtime_moves_remaining(), runtime_move_limit]
+	runtime_move_label.text = "运行期移动：%d / %d" % [_level_runtime_controller.get_runtime_moves_remaining(), runtime_move_limit]
 
 
-## 决定脉冲结束后目标状态：完成→COMPLETED，未完成→MOVE_WINDOW。只转发 level_completed，规则位于 RuntimeStateRules。
-func _get_post_pulse_state(level_completed: bool) -> _RuntimeInteractionTypes.RunState:
-	return _RuntimeStateRules.get_post_pulse_state(level_completed)
-
-
-## 发射入口：SETUP/MOVE_WINDOW 且未拖拽时清理上一轮光路视觉，调用 RayExecutionModule.execute() 无副作用计算路径，按结果顺序创建视觉并激活水晶，再启动约 1 秒脉冲视觉保持。
-## 副作用边界：begin_pulse() 进入 PULSE_ACTIVE 并递增 pulse_generation；完成状态先置位，运行状态等脉冲视觉结束后才进入 COMPLETED。方向非法中止；拖拽中/PULSE_ACTIVE/COMPLETED 忽略 Space。
+## 发射入口：转发到 LevelRuntimeController.request_fire；发射顺序、逐 step 视觉→水晶、异步脉冲结束与 generation 过期保护全部由控制器拥有，核心不保留第二套实现。
 func fire_light() -> void:
-	if is_dragging():
-		if OS.is_debug_build():
-			print_debug("CoreLoopPrototype: 拖拽中拒绝发射。")
-		return
-	if not can_fire_light():
-		if OS.is_debug_build():
-			print_debug("CoreLoopPrototype: 当前运行状态拒绝 Space 发射：%s。" % [_get_current_run_state()])
-		return
-
-	# 在与旧代码相同的时点构建发射请求；方向非法时 build_fire_request 返回 null，按旧行为 push_error 并退出（先于 _prepare_for_new_pulse 与 begin_pulse，顺序与旧 fire_light 完全一致）。
-	var fire_request: _FireRequest = _fixed_emitter.build_fire_request(MAX_PROPAGATION_STEPS)
-	if fire_request == null:
-		push_error("Invalid emitter direction: %s" % [_fixed_emitter.get_direction()])
-		return
-
-	_prepare_for_new_pulse()
-
-	# 必须确认状态成功进入 PULSE_ACTIVE 后才继续本次发射；begin_pulse 返回 false 时停止发射（Controller 已 push_error 拒绝原因）。
-	if not _run_state_controller.begin_pulse():
-		return
-	pulse_generation += 1
-	var current_pulse_generation: int = pulse_generation
-
-	# 传播计算在 RayExecutionModule 内无副作用完成，核心只应用结果；起点/方向/最大步数取自 FireRequest。
-	var execution_result: _RayExecutionResult = _RayExecutionModule.execute(
-		fire_request.get_start_cell(),
-		fire_request.get_direction(),
-		fire_request.get_max_steps(),
-		_light_world_query
-	)
-	if execution_result.reached_step_limit:
-		push_warning("Light propagation stopped by MAX_PROPAGATION_STEPS")
-
-	# 逐格按结果顺序应用副作用：同一格先创建光路视觉再尝试激活水晶，不先遍历全部视觉再遍历水晶。
-	_apply_ray_execution_result(execution_result)
-
-	# 通关判断立即完成；CompleteLabel 可立刻显示，但运行状态保持 PULSE_ACTIVE 到脉冲视觉结束。
-	update_completion_state()
-
-	_finish_pulse_after_delay(current_pulse_generation)
+	_level_runtime_controller.request_fire()
 
 
-## 应用一次光线执行结果的副作用：逐格按 steps 顺序，同一格先创建光路视觉再按 has_crystal 激活水晶。不重新计算路径、不修改占用或机关、不访问 RunState。
-func _apply_ray_execution_result(result: _RayExecutionResult) -> void:
-	for step in result.steps:
-		add_light_visual(step.cell, step.incoming_direction)
-		if step.has_crystal:
-			try_activate_crystal_at(step.cell)
-
-
-## 下一次脉冲前的光路视觉清理；只清除旧光路视觉，不改变水晶、机关、运行状态、完成状态或 pulse_generation。不承担 R 完整重置职责。
-func _prepare_for_new_pulse() -> void:
-	clear_light_path()
-
-
-## 等待脉冲视觉保持时间后尝试结束脉冲；若 R 重置或新脉冲已递增 pulse_generation，本回调视为过期直接返回，不清理或改变新脉冲状态。
-func _finish_pulse_after_delay(expected_generation: int) -> void:
-	await get_tree().create_timer(PULSE_VISUAL_DURATION_SECONDS).timeout
-	# 过期回调保护：旧脉冲等待结束后不得清理 R 后新发射的脉冲或改变新脉冲状态。
-	if expected_generation != pulse_generation:
-		return
-	if not is_current_pulse_active():
-		return
-	_finish_current_pulse(expected_generation)
-
-
-## 结束当前仍有效的脉冲：清除光路视觉，请求 Controller 切换到 MOVE_WINDOW 或 COMPLETED。
-## 不清除水晶、机关、库存或占用表，完成状态和 CompleteLabel 保持到 R。版本不匹配或无活动脉冲时直接返回；finish_pulse 失败时安全退出。
-## generation 与计时器仍由核心保护，不移入 Controller。
-func _finish_current_pulse(expected_generation: int) -> void:
-	# 过期回调保护：结束清理前再次确认这是当前有效脉冲。
-	if expected_generation != pulse_generation:
-		return
-	if not is_current_pulse_active():
-		return
-
-	# 脉冲结束：普通光路视觉消失，普通独立水晶继续保持点亮。
-	clear_light_path()
-
-	var next_state: _RuntimeInteractionTypes.RunState = _get_post_pulse_state(is_level_completed)
-
-	# COMPLETED 进入冻结前由核心取消当前拖拽，必须在请求状态转换前完成，避免冻结后鼠标松开仍提交移动/回收。
-	# 顺序：取消拖拽 → 更新状态 → 发 state_changed → 刷新机关栏 UI。转 MOVE_WINDOW 时已开始的合法拖拽可继续，提交时由 _commit_placed_drag_or_cancel() 重新校验。
-	if next_state == _RuntimeInteractionTypes.RunState.COMPLETED and is_dragging():
-		_cancel_current_drag()
-
-	# 请求 Controller 切换状态；失败通过现有错误边界暴露并安全退出。
-	if not _run_state_controller.finish_pulse(is_level_completed):
-		push_error("CoreLoopPrototype: RunStateController.finish_pulse 被拒绝，无法结束脉冲。")
-		return
-
-	# 完成结果保留：路径消失后，已经成立的关卡完成标签继续显示。
-	if _get_current_run_state() == _RuntimeInteractionTypes.RunState.COMPLETED:
-		complete_label.visible = true
-
-
-## R 完整重置：安全取消拖拽 → 递增 pulse_generation 使旧等待回调失效 → 清光路/水晶/完成状态 → 由 PlacementController 逐个清理玩家机关 → 库存按残留数 reconcile → 回 SETUP。
-## 不依赖 _input 预取消拖拽；拖动已放置机关时先恢复正式节点原格和可见性，再由控制器统一注销占用并删除节点。只清理玩家放置机关，不调用 occupancy.clear()，不删除发射器/墙体/水晶/静态内容。
-## 残留边界：若 OccupancyRegistry 残留且无法通过公共 unregister 确认清理，相关机关保留在场上且映射不移除；库存按残留数 reconcile，保持 remaining+placed_count==total，残留机关由 _assert_inventory_consistency 暴露异常。
+## R 完整重置入口：转发到 LevelRuntimeController.reset_runtime；重置顺序、旧异步失效与移动次数清零全部由控制器拥有。
 func reset_runtime() -> void:
-	# R 完整重置首先取消拖拽：库存预览只删预览；已放置机关先恢复旧格/旧位置/可见性，再由玩家机关清理流程统一删除。
-	if is_dragging():
-		_cancel_current_drag(false)
-
-	# 递增版本号使已挂起的旧等待回调全部失效，不能再清理或切换 R 后的新状态。
-	pulse_generation += 1
-	is_level_completed = false
-	runtime_moves_used = 0
-
-	clear_light_path()
-	_reset_independent_crystals()
-	complete_label.visible = false
-
-	# 玩家机关清理由 PlacementController 负责；部分失败时保留残留映射与占用，库存按残留数 reconcile，保持 remaining+placed_count==total。
-	var clear_result: _PlacementController.ClearPlacedResult = _placement_controller.clear_all_placed()
-	if clear_result.unresolved_count > 0:
-		push_error("CoreLoopPrototype: R重置玩家机关清理未完全成功，残留 %d 个机关，库存按残留数对齐。" % [clear_result.unresolved_count])
-
-	_update_inventory_ui()
-	# 状态回 SETUP 必须在玩家机关清理、库存恢复与 UI 刷新之后；reset_to_setup 幂等，已在 SETUP 时不发信号。
-	_run_state_controller.reset_to_setup()
-	_update_runtime_move_ui()
-
-	if OS.is_debug_build():
-		_assert_inventory_consistency()
-
-
-## 重置普通独立水晶为未点亮；只在 R 完整重置中调用（不由脉冲结束调用），普通独立水晶保持到 R 才恢复。
-func _reset_independent_crystals() -> void:
-	for crystal: BasicCrystal in crystals:
-		crystal.reset_runtime()
-
-
-## 清除当前光路视觉节点（对 LightPathLayer 子节点 queue_free，实际释放由 Godot 帧流程完成）；只清理视觉层，不修改水晶/完成状态/墙体/库存/占用。
-func clear_light_path() -> void:
-	for child: Node in light_path_layer.get_children():
-		child.queue_free()
+	_level_runtime_controller.reset_runtime()
 
 
 ## 查询指定格子被哪个机关占用（薄包装，转发 _level_world_query.get_mechanism_id_at）；未被占用返回空 StringName（&""），不报错。
 func get_mechanism_at(cell: Vector2i) -> StringName:
 	return _level_world_query.get_mechanism_id_at(cell)
-
-
-## 判断指定格子是否被任意机关占用（薄包装，转发 _level_world_query.has_mechanism_at）；空占用表时始终返回 false。
-func has_mechanism_at(cell: Vector2i) -> bool:
-	return _level_world_query.has_mechanism_at(cell)
-
-
-## 尝试点亮指定格子上的普通独立水晶；无匹配水晶时安全无效果。不处理颜色/形式/同时组/顺序组，普通独立水晶保持到 R 重置。
-func try_activate_crystal_at(cell: Vector2i) -> void:
-	for crystal: BasicCrystal in crystals:
-		if crystal.cell == cell:
-			crystal.activate()
-
-
-## 判断所有必需水晶是否已点亮；crystals 为空（未配置必需水晶）时输出错误并返回 false，防止误判通关。
-func all_required_crystals_activated() -> bool:
-	if crystals.is_empty():
-		push_error("CoreLoopPrototype: 当前关卡未配置任何必需水晶，不能判定为完成。")
-		return false
-
-	for crystal: BasicCrystal in crystals:
-		if not crystal.is_activated:
-			return false
-	return true
-
-
-## 根据当前水晶状态更新完成状态和完成标签：首次满足条件时置 is_level_completed=true 并显示 CompleteLabel，但运行状态仍保持 PULSE_ACTIVE 到脉冲视觉结束。完成状态和标签保持到 R。
-func update_completion_state() -> void:
-	if is_level_completed:
-		complete_label.visible = true
-		return
-
-	if all_required_crystals_activated():
-		is_level_completed = true
-		complete_label.visible = true
-	else:
-		complete_label.visible = false
-
-
-## 为指定格子添加一段光路视觉；direction 仅用于选择四方向纹理，不修改传播逻辑。
-## 镜面格只显示入射方向，反射出射方向从下一格开始；同一格允许多个 LightSegmentView 共存，不做去重或对象池；四方向纹理为空时静默回退到黄色占位块。
-func add_light_visual(cell: Vector2i, direction: Vector2i) -> void:
-	# 冻结算子顺序：实例化 → profile → 方向 → 颜色 → 定位 → add_child。set_* 在 add_child 前调用，此时 @onready 子节点未就绪，
-	# refresh_visual() 安全返回；字段已写入，add_child 触发 _ready() 时由 refresh_visual() 统一应用。
-	var view: _LightSegmentViewScript = _LightSegmentViewScene.instantiate()
-	view.set_profile(_DefaultLightSegmentProfile as _LightSegmentVisualProfile)
-	view.set_direction(direction)
-	view.set_light_color(LIGHT_PATH_COLOR)
-	# 根节点局部原点表示光路格中心，由 LightSegmentView 内部 offset 居中。
-	view.position = _GridCoordinateRules.cell_to_world(cell)
-	light_path_layer.add_child(view)
 
 
 ## 尝试右键切换鼠标所在已放置镜面的内部朝向；仅 SETUP 且未拖拽、鼠标位于世界已放置 SingleCellMirror 时调用 toggle_orientation()。拖拽中、InventoryBar 区域、未知机关和空格安全忽略。
@@ -628,271 +296,56 @@ func _try_toggle_mirror_at_mouse() -> void:
 	mirror.toggle_orientation()
 
 
-## 尝试根据鼠标位置开始一次拖拽。库存拿取在所有非 COMPLETED 状态允许；已放置机关拖起由 _can_begin_placed_drag 限制（与剩余次数分离），remaining=0 仍允许拖起以便回收/取消，跨格提交由 _commit_placed_drag_or_cancel 二次校验。
-## 整个 InventoryBar 阻止点击传递到世界机关，空白区域不换算世界格子/查询占用/启动拖拽；COMPLETED 冻结并拒绝一切新拖拽。
-func _try_begin_drag() -> void:
-	if is_dragging():
-		return
-	if not can_edit_layout():
-		return
-
-	var viewport_mouse_position: Vector2 = get_viewport().get_mouse_position()
-	if _is_mouse_over_prototype_slot(viewport_mouse_position):
-		# 库存拿取权限：所有非 COMPLETED 状态允许从机关栏拿取新机关（用户最终权限）。
-		if _inventory_controller.can_consume_one() and _RuntimeMoveRules.can_take_from_inventory_for_state(_get_current_run_state()):
-			_begin_inventory_drag()
-		elif OS.is_debug_build() and not _RuntimeMoveRules.can_take_from_inventory_for_state(_get_current_run_state()):
-			print_debug("CoreLoopPrototype: 当前运行状态禁止从机关栏拿取：%s。" % [_get_current_run_state()])
-		return
-	if _is_mouse_over_inventory_bar(viewport_mouse_position):
-		return
-
-	var target_cell: Vector2i = _GridCoordinateRules.world_to_cell(get_global_mouse_position())
-	var mechanism_id: StringName = get_mechanism_at(target_cell)
-	if mechanism_id == &"":
-		return
-	if not _placement_controller.has_placed(mechanism_id):
-		return
-	# 已放置机关拖起权限：所有非 COMPLETED 状态允许拖起（与跨格提交权限分离）。
-	# 剩余次数为 0 时仍允许拖起，以便回收或取消；跨格提交由 _commit_placed_drag_or_cancel 的二次校验拒绝。
-	# 失败时不创建预览、不隐藏正式机关、不改占用与库存。
-	if not _RuntimeMoveRules.can_begin_placed_drag(_get_current_run_state()):
-		if OS.is_debug_build():
-			print_debug("CoreLoopPrototype: 当前运行状态不允许拖起已放置机关：%s。" % [_get_current_run_state()])
-		return
-	_begin_placed_drag(mechanism_id, target_cell)
+## 解析指针命中场景供 DragFlowController 使用：是否位于机关栏、是否位于原型槽位、世界格坐标。
+## 世界格用 get_global_mouse_position() 换算（与原拖拽实现一致），UI 命中用传入的视口坐标。
+func _resolve_drag_pointer(viewport_position: Vector2) -> _DragFlowController.PointerScene:
+	var world_cell: Vector2i = _GridCoordinateRules.world_to_cell(get_global_mouse_position())
+	return _DragFlowController.PointerScene.new(
+		_is_mouse_over_inventory_bar(viewport_position),
+		_is_mouse_over_prototype_slot(viewport_position),
+		world_cell
+	)
 
 
-## 从机关栏开始一次基础单格镜面拖拽；创建默认 SLASH 朝向的预览节点，拖拽来源设为 INVENTORY。从库存拖拽但不提前扣数量，非法松手或松回机关栏时库存和占用都不变化。
-func _begin_inventory_drag() -> void:
-	var start_cell: Vector2i = _GridCoordinateRules.world_to_cell(get_global_mouse_position())
-	_drag_context.begin_inventory(MIRROR_TOKEN_TYPE_ID, start_cell, SingleCellMirror.MirrorOrientation.SLASH)
-	_dragged_placed_token = null
-	# 只有合法松手提交后才扣除库存；新拿出的镜面默认 SLASH。
-	_drag_preview_token = _create_token_node(StringName("preview_%s" % MIRROR_TOKEN_TYPE_ID), start_cell, true)
-	_update_drag_preview_from_mouse()
-
-
-## 从已放置机关开始一次拖拽移动；检查通过后隐藏正式视觉、创建预览并记录原始占用。返回 false 表示一致性检查失败，未进入拖拽、未创建预览、未隐藏节点。
-## 写入拖拽字段前必须先确认玩家机关映射存在该 ID、节点有效、mechanism_id 与 cell 与参数一致；任一失败输出错误并返回 false。拖拽期间保留旧逻辑占用，预览不写入 OccupancyRegistry，非法松手恢复正式节点。
-func _begin_placed_drag(mechanism_id: StringName, original_cell: Vector2i) -> bool:
-	# 写入拖拽字段前完成全部一致性检查，避免半写入或对失效节点解引用。
-	if not _placement_controller.has_placed(mechanism_id):
-		push_error("CoreLoopPrototype: 拖起失败，玩家机关映射缺少机关 %s。" % [mechanism_id])
-		return false
-	var token: Variant = _placement_controller.get_placed_node(mechanism_id)
-	if not is_instance_valid(token):
-		push_error("CoreLoopPrototype: 拖起失败，机关 %s 节点已失效。" % [mechanism_id])
-		return false
-	if token.mechanism_id != mechanism_id:
-		push_error("CoreLoopPrototype: 拖起失败，机关 ID 失配：参数=%s，节点=%s。" % [mechanism_id, token.mechanism_id])
-		return false
-	if token.cell != original_cell:
-		push_error("CoreLoopPrototype: 拖起失败，机关 %s cell 失配：参数=%s，节点=%s。" % [mechanism_id, original_cell, token.cell])
-		return false
-	# 起始朝向快照取自正式节点；已放置拖拽保留当前镜面朝向，库存拖拽另由 _begin_inventory_drag 设为 SLASH。
-	var orientation: SingleCellMirror.MirrorOrientation = SingleCellMirror.MirrorOrientation.SLASH
-	if token is SingleCellMirror:
-		orientation = (token as SingleCellMirror).orientation
-	_drag_context.begin_placed(mechanism_id, original_cell, original_cell, orientation)
-	_dragged_placed_token = token
-	# 拖拽期间保留旧逻辑占用，只隐藏正式视觉，松手后再原子更新；预览复制当前镜面朝向。
-	_dragged_placed_token.set_placed_visible(false)
-	_drag_preview_token = _create_token_node(mechanism_id, original_cell, true)
-	_copy_mirror_orientation_if_possible(_dragged_placed_token, _drag_preview_token)
-	_update_drag_preview_from_mouse()
-	return true
-
-
-## 根据鼠标位置更新拖拽预览：位于 InventoryBar 时只隐藏世界预览（不把 UI 坐标转成虚假地图格子），离开后恢复显示、吸附 cell_to_world 格中心，按空间合法性与松手提交权限刷新合法/非法颜色。
-## 隐藏预览不等于取消拖拽；预览颜色只是视觉反馈，不替代正式提交的二次校验。
-func _update_drag_preview_from_mouse() -> void:
-	if not _drag_context.is_active() or _drag_preview_token == null:
-		return
-
-	var viewport_mouse_position: Vector2 = get_viewport().get_mouse_position()
-	if _is_mouse_over_inventory_bar(viewport_mouse_position):
-		_drag_preview_token.set_drag_preview_visible(false)
-		return
-
-	_drag_preview_token.set_drag_preview_visible(true)
-	_drag_context.update_preview_cell(_GridCoordinateRules.world_to_cell(get_global_mouse_position()))
-	# 预览合法性同时反映空间合法性与当前是否允许松手提交；不替代正式提交的二次校验。
-	var spatially_valid: bool = _is_valid_prototype_placement_cell(_drag_context.preview_cell, _drag_context.mechanism_id)
-	var is_valid: bool = _RuntimeMoveRules.is_world_drop_preview_valid(
-		_drag_context.source,
+## 拖拽权限只读快照：当前运行状态与剩余运行期移动次数；运行期移动次数由 LevelRuntimeController 唯一持有，本函数只读取，不保存副本。
+func _query_drag_permission() -> _DragFlowController.DragPermission:
+	return _DragFlowController.DragPermission.new(
 		_get_current_run_state(),
-		get_runtime_moves_remaining(),
-		_drag_context.original_cell,
-		_drag_context.preview_cell,
-		spatially_valid
+		_level_runtime_controller.get_runtime_moves_remaining()
 	)
-	_drag_preview_token.set_cell(_drag_context.preview_cell)
-	_drag_preview_token.set_world_position(_GridCoordinateRules.cell_to_world(_drag_context.preview_cell))
-	_drag_preview_token.set_drag_preview(true, is_valid)
 
 
-## 在鼠标松开位置完成当前拖拽：根据来源和松手区域执行库存放置、已放置机关移动、拖回机关栏回收或取消。
-## 从库存释放回机关栏只取消；只有 PLACED 拖拽可回收，且回收在所有非 COMPLETED 状态允许。COMPLETED 中释放到机关栏改为安全取消，恢复原机关显示与原占用，不增库存、不扣次数。
-func _finish_drag_at_mouse() -> void:
-	var viewport_mouse_position: Vector2 = get_viewport().get_mouse_position()
-	var is_released_over_inventory: bool = _is_mouse_over_inventory_bar(viewport_mouse_position)
-
-	if _drag_context.is_inventory_source():
-		if is_released_over_inventory:
-			_cancel_current_drag()
-			return
-		_commit_inventory_drag_or_cancel()
-		return
-
-	if _drag_context.is_placed_source():
-		if is_released_over_inventory:
-			# 回收在所有非 COMPLETED 状态允许；COMPLETED 释放到机关栏改为安全取消，保留原占用与原位置，不增库存、不扣次数。
-			if _RuntimeMoveRules.can_recycle_placed_token_for_state(_get_current_run_state()):
-				_recycle_dragged_placed_token()
-			else:
-				if OS.is_debug_build():
-					print_debug("CoreLoopPrototype: 当前运行状态禁止回收，改为取消拖拽并恢复原机关：%s。" % [_get_current_run_state()])
-				_cancel_current_drag()
-			return
-		_commit_placed_drag_or_cancel()
+## 扣除一次运行期移动次数；委托 LevelRuntimeController.consume_runtime_move，核心不持有计数，DragFlowController 已通过 should_count 校验。
+func _consume_runtime_move() -> void:
+	_level_runtime_controller.consume_runtime_move()
 
 
-## 提交从库存开始的拖拽，或在非法位置取消：放置事务由 PlacementController 原子负责（格校验/库存/节点/占用/映射/扣库存与回滚）。
-## 提交前防御性重检 can_take_from_inventory_for_state：COMPLETED/未知状态取消拖拽，不扣库存、不创建正式机关。运行期首次放置不消耗 runtime_moves_used。
-func _commit_inventory_drag_or_cancel() -> void:
-	# 首次放置在所有非 COMPLETED 状态允许；COMPLETED/未知状态取消拖拽，不扣库存、不创建正式机关。
-	if not _RuntimeMoveRules.can_take_from_inventory_for_state(_get_current_run_state()):
-		if OS.is_debug_build():
-			print_debug("CoreLoopPrototype: 当前运行状态禁止首次放置，取消库存拖拽：%s。" % [_get_current_run_state()])
-		_cancel_current_drag()
-		return
-	# 原子放置事务：非法格/节点创建/占用登记/扣库存失败时控制器已逆序回滚，核心只需取消拖拽（不扣库存、不写占用、不留残影）。
-	# 类型/预览格/朝向均取自 _drag_context，库存拖拽朝向恒为 SLASH。
-	var result := _placement_controller.place_from_inventory(
-		_drag_context.token_type_id,
-		_drag_context.preview_cell,
-		_drag_context.original_orientation,
-	)
-	if not result.is_success():
-		_cancel_current_drag()
-		return
-	# 成功：库存已扣、占用与映射已成立；核心清除预览、重置拖拽、刷新 UI、断言一致性。
+## 刷新机关栏与运行期移动 UI（纯显示，不修改库存或次数事实）；供 DragFlowController 提交后回调。
+func _refresh_drag_ui() -> void:
 	_update_inventory_ui()
-	_clear_drag_preview_only()
-	_reset_drag_state()
-	_assert_inventory_consistency()
+	_update_runtime_move_ui()
 
 
-## 提交已放置机关移动，或在非法位置/原格松手时取消：移动事务由 PlacementController 原子负责（旧占用注销/新占用登记/节点 cell 更新与回滚）。
-## 原格松手视为取消，库存不变；新占用登记失败时控制器恢复旧占用与节点原格，核心再恢复可见性。
-## 提交前二次校验：节点有效、mechanism_id/from_cell 仍正确、状态与剩余次数仍允许提交；失败安全取消，不扣次数。
-## 运行期扣次：仅 PULSE_ACTIVE/MOVE_WINDOW 且跨格成功提交后扣一次 runtime_moves_used；SETUP、非法、原格、取消与回滚均不扣次。
-func _commit_placed_drag_or_cancel() -> void:
-	var token = _dragged_placed_token
-	var mechanism_id: StringName = _drag_context.mechanism_id
-	var from_cell: Vector2i = _drag_context.original_cell
-	var to_cell: Vector2i = _drag_context.preview_cell
-
-	# 提交前校验：节点有效、拖拽状态一致；失败安全取消，保留原占用，不扣次数。
-	if not is_instance_valid(token):
-		push_error("CoreLoopPrototype: 提交移动前拖拽节点已失效，取消拖拽。")
-		_cancel_current_drag()
-		return
-	# 拖拽期间正式节点只隐藏未移动，cell 应仍在 from_cell。
-	if token.mechanism_id != mechanism_id or token.cell != from_cell:
-		push_error("CoreLoopPrototype: 提交移动前拖拽节点状态不一致，取消拖拽。")
-		_cancel_current_drag()
-		return
-	# 状态与剩余次数权限（核心职责）；原格/非法格由控制器返回 NO_CHANGE/INVALID，核心据此取消，不扣次数。
-	if not _RuntimeMoveRules.can_commit_placed_move(_get_current_run_state(), get_runtime_moves_remaining(), from_cell, to_cell):
-		if OS.is_debug_build():
-			print_debug("CoreLoopPrototype: 提交前二次校验拒绝移动：%s remaining=%d %s->%s。" % [_get_current_run_state(), get_runtime_moves_remaining(), from_cell, to_cell])
-		_cancel_current_drag()
-		return
-
-	# 原子移动事务：控制器更新占用与节点 cell；世界位置与可见性由核心处理，orientation 不变。
-	var result := _placement_controller.move_placed(mechanism_id, to_cell)
-	if result.is_success():
-		token.set_world_position(_GridCoordinateRules.cell_to_world(to_cell))
-		token.set_placed_visible(true)
-		_clear_drag_preview_only()
-		_reset_drag_state()
-		_assert_inventory_consistency()
-		# 占用原子更新与节点提交都成功后才扣一次；SETUP 跨格移动不计次，非法/原格/取消/回滚不会到达本处。
-		if _RuntimeMoveRules.should_count_runtime_move(_get_current_run_state(), from_cell, to_cell):
-			runtime_moves_used += 1
-			_update_runtime_move_ui()
-		return
-	# NO_CHANGE/INVALID/FAILED：节点仍在原格，恢复可见性并取消拖拽，不扣次数。
-	_cancel_current_drag()
-
-
-## 回收当前从已放置机关拖拽的原型机关：回收事务由 PlacementController 原子负责（注销占用/删映射/销毁节点/库存归还）。
-## 只有 PLACED 拖拽可回收；内部含防御性 can_recycle_placed_token_for_state 检查，COMPLETED/未知状态安全取消并恢复原机关，不依赖外层单一守卫。运行期回收不消耗 runtime_moves_used；注销失败时控制器保留节点/映射/库存，核心恢复可见性并取消拖拽。
-func _recycle_dragged_placed_token() -> void:
-	if not _drag_context.is_placed_source() or _dragged_placed_token == null:
-		_cancel_current_drag()
-		return
-	# 防御性权限检查：COMPLETED/未知状态即使直接调用本函数也安全取消，不增库存。
-	if not _RuntimeMoveRules.can_recycle_placed_token_for_state(_get_current_run_state()):
-		if OS.is_debug_build():
-			print_debug("CoreLoopPrototype: 当前运行状态禁止回收，安全取消并恢复原机关：%s。" % [_get_current_run_state()])
-		_cancel_current_drag()
-		return
-
-	# 原子回收事务：成功则占用/映射/节点已清理、库存已归还；失败则节点/映射/库存保持，核心恢复可见性并取消拖拽。
-	var result := _placement_controller.recycle_placed(_drag_context.mechanism_id)
-	if not result.is_success():
-		push_error("CoreLoopPrototype: 回收事务失败，恢复原机关：%s（%s）。" % [_drag_context.mechanism_id, result.error_message])
-		_cancel_current_drag()
-		return
+## 刷新全部运行 UI（库存 + 运行期移动次数）；供 LevelRuntimeController 在脉冲结束与 R 重置后调用，不传入 UI 节点。
+func _refresh_runtime_ui() -> void:
 	_update_inventory_ui()
-	_clear_drag_preview_only()
-	_reset_drag_state()
-	_assert_inventory_consistency()
+	_update_runtime_move_ui()
 
 
-## 取消当前拖拽并恢复拖拽前状态：删除预览；已放置机关且节点有效则恢复原位置和可见性；随后清空拖拽状态字段。
-## should_assert_consistency：普通取消默认 true；R 完整重置传 false，把断言延后到玩家机关统一清理完成之后，避免中间态断言早于后续删除/注销。
-## 从库存取消不改变库存；已放置机关取消不改变 OccupancyRegistry（旧占用从未清除）。_dragged_placed_token 已失效时不再解引用，只清理预览与状态并在调试构建报告一致性异常，不静默重建映射或占用。
-func _cancel_current_drag(should_assert_consistency: bool = true) -> void:
-	if _drag_context.is_placed_source() and _dragged_placed_token != null:
-		if is_instance_valid(_dragged_placed_token):
-			# 拖拽期间保留旧逻辑占用，取消时只恢复正式视觉。
-			_dragged_placed_token.set_cell(_drag_context.original_cell)
-			_dragged_placed_token.set_world_position(_GridCoordinateRules.cell_to_world(_drag_context.original_cell))
-			_dragged_placed_token.set_placed_visible(true)
-		elif OS.is_debug_build():
-			# 失效节点不得再次解引用；仅报告一致性异常，不静默重建占用或映射。
-			push_error("CoreLoopPrototype: 取消拖拽时已放置机关节点已失效，未恢复视觉，请检查玩家机关映射与 OccupancyRegistry 一致性。")
-	_clear_drag_preview_only()
-	_reset_drag_state()
-	if should_assert_consistency:
-		_assert_inventory_consistency()
+## 显隐完成标签；供 LevelRuntimeController 在发射、脉冲结束与 R 重置时调用，不传入 UI 节点。
+## 参数命名为 should_be_visible，避免与 CanvasItem.is_visible() 同名遮蔽。
+func _set_complete_label_visible(should_be_visible: bool) -> void:
+	complete_label.visible = should_be_visible
 
 
-## 删除当前拖拽预览节点；预览为空时安全返回，不修改正式机关、库存或占用表。
-func _clear_drag_preview_only() -> void:
-	if _drag_preview_token != null:
-		_drag_preview_token.queue_free()
-		_drag_preview_token = null
-
-
-## 清空节点句柄与 DragContext 临时事实；只在预览删除和正式机关状态已处理后调用，避免丢失恢复所需的原始格子信息。
-func _reset_drag_state() -> void:
-	_drag_preview_token = null
-	_dragged_placed_token = null
-	_drag_context.clear()
-
-
-## 创建一个 SingleCellMirror 节点并加入 RuntimeObjects；世界坐标由 cell_to_world() 统一计算。不写库存、不写 OccupancyRegistry、不判断放置合法性；新建镜面默认 SLASH，拖动已有镜面由调用方复制原 orientation。
-func _create_token_node(mechanism_id: StringName, cell: Vector2i, is_preview: bool) -> Variant:
+## 创建拖拽预览节点（DragFlowController 的 create_preview_token 适配）：实例化 SingleCellMirror 并加入 RuntimeObjects，配置 ID/格/世界坐标与预览模式。
+## 不写库存、不写 OccupancyRegistry、不判断合法性；新建镜面默认 SLASH，拖动已有镜面由控制器复制原 orientation。
+func _create_token_node(mechanism_id: StringName, cell: Vector2i) -> Variant:
 	var token = _SingleCellMirrorScene.instantiate()
 	runtime_objects.add_child(token)
 	token.configure(mechanism_id, cell)
 	token.set_world_position(_GridCoordinateRules.cell_to_world(cell))
-	token.set_drag_preview(is_preview, true)
+	token.set_drag_preview(true, true)
 	return token
 
 
@@ -912,20 +365,9 @@ func _create_formal_token_node(mechanism_id: StringName, cell: Vector2i, orienta
 	return token
 
 
-## 在两个镜面节点间复制朝向配置（拖动已有镜面时让预览保留当前“/”或“\”）；任一节点不是镜面则安全忽略，避免未来未知机关拖拽崩溃。只复制内部配置，不写占用/库存/位置。
-func _copy_mirror_orientation_if_possible(source_token: Variant, target_token: Variant) -> void:
-	if not is_instance_valid(source_token) or not is_instance_valid(target_token):
-		return
-	if source_token is not SingleCellMirror or target_token is not SingleCellMirror:
-		return
-	var source_mirror: SingleCellMirror = source_token as SingleCellMirror
-	var target_mirror: SingleCellMirror = target_token as SingleCellMirror
-	target_mirror.set_orientation(source_mirror.orientation)
-
-
-## 是否存在拖拽操作（_drag_context.is_active()）；预览节点可能因异常被释放，仍只以 DragContext 来源作为状态事实。
+## 是否存在进行中的拖拽（转发到 DragFlowController）；预览节点可能因异常被释放，仍只以 DragContext 来源作为状态事实。
 func is_dragging() -> bool:
-	return _drag_context.is_active()
+	return _drag_flow_controller.is_dragging()
 
 
 ## 鼠标是否位于整个 InventoryBar 区域；用于回收判断，不要求精准拖到单个栏位。
@@ -936,23 +378,6 @@ func _is_mouse_over_inventory_bar(viewport_mouse_position: Vector2) -> bool:
 ## 鼠标是否位于 PrototypeTokenSlot 区域；只用于从库存拿取，数量为 0 时即使命中也不会开始拖拽。
 func _is_mouse_over_prototype_slot(viewport_mouse_position: Vector2) -> bool:
 	return prototype_token_slot.get_global_rect().has_point(viewport_mouse_position)
-
-
-## 原型机关是否可放到指定格子（薄包装，转发 _level_world_query.is_valid_placement_cell）；INVALID_CELL 永远非法，本函数保留该哨兵外层守卫，其余边界/静态/占用判定由查询对象组合。
-func _is_valid_prototype_placement_cell(cell: Vector2i, ignored_mechanism_id: StringName = &"") -> bool:
-	if cell == INVALID_CELL:
-		return false
-	return _level_world_query.is_valid_placement_cell(cell, ignored_mechanism_id)
-
-
-## 目标格是否被静态对象阻挡（薄包装，转发 _level_world_query.is_static_blocked_for_placement）；集中不可覆盖的静态对象规则。
-func _is_static_cell_blocked_for_placement(cell: Vector2i) -> bool:
-	return _level_world_query.is_static_blocked_for_placement(cell)
-
-
-## 目标格是否被其他机关占用（薄包装，转发 _level_world_query.is_occupied_by_other）；空占用返回 false，拖动已放置机关时原格自身占用可被忽略。
-func _is_cell_occupied_by_other(cell: Vector2i, ignored_mechanism_id: StringName) -> bool:
-	return _level_world_query.is_occupied_by_other(cell, ignored_mechanism_id)
 
 
 ## 刷新底部机关栏 UI：把库存剩余与是否允许拿取传给 InventorySlotView.refresh_slot()，由槽位组件统一负责剩余文本/占位符颜色/图标 self_modulate。UI 只显示库存事实，不自行修改库存。
@@ -967,6 +392,26 @@ func _update_inventory_ui() -> void:
 		remaining,
 		is_available
 	)
+
+
+## 采集网格坐标自检所需的真实采样格（_ready 第二项数据来源）。
+## 按原自检顺序采集真实格子；只收集 Vector2i，不把 Crystal/Node 等真实对象传入 Diagnostics。
+## Registry 完整性前置断言（数量、crystal_id 非空、cell 可反查原对象）保留在采集阶段，不迁入 Diagnostics，不新增第八项。
+func _collect_grid_coordinate_sample_cells() -> Array[Vector2i]:
+	var sample_cells: Array[Vector2i] = [Vector2i.ZERO, _fixed_emitter.get_cell()]
+	# Registry 完整性：数量==crystals（注册已拒绝重复 ID 与 cell，数量一致即唯一），每个 crystal_id 非空，cell 可反查原对象。
+	assert(_level_object_registry.get_crystal_count() == crystals.size(),
+			"Registry 水晶数量与 crystals 不一致：%d vs %d" % [_level_object_registry.get_crystal_count(), crystals.size()])
+	for crystal: BasicCrystal in crystals:
+		sample_cells.append(crystal.cell)
+		var crystal_id: StringName = crystal.get_crystal_id()
+		assert(crystal_id != &"", "存在空 crystal_id 的水晶。")
+		assert(_level_object_registry.get_crystal_at(crystal.cell) == crystal,
+				"cell 反查水晶不一致：cell=%s crystal_id=%s" % [crystal.cell, crystal_id])
+	for wall_cell: Vector2i in wall_cells:
+		sample_cells.append(wall_cell)
+	sample_cells.append(Vector2i(map_bounds.end.x - 1, map_bounds.end.y - 1))
+	return sample_cells
 
 
 ## 采集库存一致性只读纯数据快照：冻结库存标量、OccupancyRegistry 本体一致性标志与六组对齐的条目级事实。
@@ -1034,15 +479,3 @@ func _assert_inventory_consistency() -> void:
 	var failures: PackedStringArray = _InventoryConsistencyRules.collect_failures(snapshot)
 	assert(failures.is_empty(),
 			"库存一致性断言失败：\n%s" % ["\n".join(failures)])
-
-
-## 库存一致性启动期自检（_ready 第七项）；复用共享纯规则 InventoryConsistencyRules 与只读快照，采集快照构造 InventoryConsistencyCheck 包装为 SelfCheckCallable 交由 _run_startup_self_check_via_controller。启动采集前的 Node 生命周期保护仍在 _collect_inventory_consistency_snapshot 中。
-func _run_inventory_consistency_self_check() -> void:
-	var snapshot: _InventoryConsistencySnapshot = _collect_inventory_consistency_snapshot()
-	var check: _InventoryConsistencyCheck = _InventoryConsistencyCheck.new(snapshot)
-	var definition: SelfCheckCallable = SelfCheckCallable.new(
-			&"inventory_consistency",
-			"库存与玩家机关占用一致性自检",
-			Callable(check, "run")
-	)
-	_run_startup_self_check_via_controller(definition, &"startup_inventory_consistency")

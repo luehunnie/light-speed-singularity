@@ -1,7 +1,7 @@
 extends SceneTree
 
 ## PlacementController 定向自动测试：只通过公开接口观察放置/移动/回收/R 清理的事务结果与原子回滚。
-## 使用最小测试替身（继承 OccupancyRegistry 的桩、桩节点、桩工厂）伪造占用失败与节点创建失败，不修改正式 OccupancyRegistry。
+## 使用最小测试替身（继承 OccupancyRegistry 的桩、桩节点、桩工厂）伪造原子移动失败、占用失败与节点创建失败，不修改正式 OccupancyRegistry。
 ## 不创建正式场景、不注册 Autoload、不依赖第三方框架；由 Godot --script 运行，全部通过 quit(0)，任一失败 quit(1)。
 
 const _PlacementController: GDScript = preload(
@@ -15,6 +15,9 @@ const _InventoryController: GDScript = preload(
 )
 const _LevelWorldQuery: GDScript = preload(
 	"res://gameplay/world/level_world_query.gd"
+)
+const _LevelObjectRegistry: GDScript = preload(
+	"res://gameplay/level/level_object_registry.gd"
 )
 
 const _TOKEN_TYPE: StringName = &"basic_single_cell_mirror"
@@ -35,13 +38,16 @@ func _initialize() -> void:
 	_test_05_place_inventory_consume_failure_rollback()
 	_test_06_move_success()
 	_test_07_move_same_cell_no_change()
-	_test_08_move_new_cell_register_failure_restore()
-	_test_09_recycle_success()
-	_test_10_recycle_unregister_failure_keep()
-	_test_11_clear_all_success()
-	_test_12_clear_all_partial_failure()
-	_test_13_move_preserves_orientation()
-	_test_14_serial_ids_unique()
+	_test_08_move_atomic_failure_keep_old()
+	_test_09_move_target_occupied_invalid()
+	_test_10_recycle_success_no_reservation_residue()
+	_test_11_recycle_unregister_failure_cancel_reservation()
+	_test_12_recycle_reserve_failure_keep_all()
+	_test_13_recycle_commit_failure_after_destroy()
+	_test_14_clear_all_success()
+	_test_15_clear_all_partial_failure()
+	_test_16_move_preserves_orientation()
+	_test_17_serial_ids_unique()
 	_report()
 	quit(0 if _failures.is_empty() else 1)
 
@@ -64,6 +70,27 @@ class _FailUnregisterForIdRegistry extends "res://gameplay/placement/occupancy_r
 		if mechanism_id == fail_id:
 			return false
 		return super.unregister(mechanism_id)
+
+
+## 占用表桩：令 move_single_cell 直接返回 false，伪造原子占用迁移失败（不修改任何事实）。
+class _FailMoveRegistry extends "res://gameplay/placement/occupancy_registry.gd":
+	var fail_move: bool = false
+	func move_single_cell(mechanism_id: StringName, source_cell: Vector2i, target_cell: Vector2i) -> bool:
+		if fail_move:
+			return false
+		return super.move_single_cell(mechanism_id, source_cell, target_cell)
+
+
+## 库存桩：try_reserve_return_one 强制失败，用于伪造回收预留失败（库存已满或预留超容量）。
+class _FailReserveInventory extends "res://gameplay/placement/inventory_controller.gd":
+	func try_reserve_return_one() -> bool:
+		return false
+
+
+## 库存桩：commit_reserved_return 强制失败，用于伪造预留已锁定后提交归还失败（不变量破坏）。
+class _FailCommitReturnInventory extends "res://gameplay/placement/inventory_controller.gd":
+	func commit_reserved_return() -> bool:
+		return false
 
 
 ## 库存桩：can_consume_one 继承真实行为，try_consume_one 强制失败，用于伪造扣库存失败。
@@ -120,14 +147,14 @@ func _make_controller(
 	factory.tree = self
 	var pc: _PlacementController = _PlacementController.new(occupancy, inventory, Callable(factory, "create"))
 	var walls: Array[Vector2i] = []
-	var crystals: Array[BasicCrystal] = []
+	var registry: _LevelObjectRegistry = _LevelObjectRegistry.new()
 	var lwq: _LevelWorldQuery = _LevelWorldQuery.new(
 		_MAP_BOUNDS,
 		walls,
 		Vector2i(-1, -1),
-		crystals,
+		registry,
 		occupancy,
-		pc.get_placed_tokens_by_id_reference()
+		Callable(pc, "get_placed_node")
 	)
 	pc.set_level_world_query(lwq)
 	return pc
@@ -249,26 +276,46 @@ func _test_07_move_same_cell_no_change() -> void:
 	_check(NAME, occ.get_mechanism_at(Vector2i(1, 1)) == placed.mechanism_id, "占用应保持不变。")
 
 
-## 8. 新格登记失败：恢复旧占用、节点回原格。
-func _test_08_move_new_cell_register_failure_restore() -> void:
-	const NAME: String = "08_新格登记失败恢复"
-	var occ: _FailRegisterForCellRegistry = _FailRegisterForCellRegistry.new()
-	occ.fail_cell = Vector2i(3, 3)
+## 8. 原子占用迁移失败：节点保持原格、旧占用不丢失、不消耗移动次数；证明不存在“先注销后恢复”中间态。
+func _test_08_move_atomic_failure_keep_old() -> void:
+	const NAME: String = "08_原子移动失败保持原格"
+	var occ: _FailMoveRegistry = _FailMoveRegistry.new()
 	var inv: _InventoryController = _InventoryController.new(_TOTAL)
 	var pc: _PlacementController = _make_controller(occ, inv, _StubFactory.new())
 	var placed := pc.place_from_inventory(_TOKEN_TYPE, Vector2i(1, 1), 1)
 	var token: Variant = pc.get_placed_node(placed.mechanism_id)
+	occ.fail_move = true
 	var r := pc.move_placed(placed.mechanism_id, Vector2i(3, 3))
 	_check(NAME, r.status == _PlacementController.Status.FAILED, "期望 FAILED，实际 %s。" % [r.status])
-	_check(NAME, occ.get_mechanism_at(Vector2i(1, 1)) == placed.mechanism_id, "旧占用应已恢复。")
+	_check(NAME, r.error_message == "原子占用迁移失败", "期望错误为“原子占用迁移失败”，实际 %s。" % [r.error_message])
+	_check(NAME, r.consumes_runtime_move == false, "失败事务不应消耗运行期移动次数。")
+	_check(NAME, occ.get_mechanism_at(Vector2i(1, 1)) == placed.mechanism_id, "旧占用应保持，不出现注销后丢失。")
 	_check(NAME, occ.get_mechanism_at(Vector2i(3, 3)) == &"", "新占用不应成立。")
-	_check(NAME, token.cell == Vector2i(1, 1), "节点应回原格，实际 %s。" % [token.cell])
-	_check(NAME, inv.get_remaining() == _TOTAL - 1, "库存应不变。")
+	_check(NAME, token.cell == Vector2i(1, 1), "节点应保持原格，实际 %s。" % [token.cell])
+	_check(NAME, occ.is_consistent(), "占用表应保持一致。")
+	_check(NAME, inv.get_remaining() == _TOTAL - 1, "失败移动不应改变库存，实际 %d。" % [inv.get_remaining()])
 
 
-## 9. 回收成功：占用、映射移除、库存加一。
-func _test_09_recycle_success() -> void:
-	const NAME: String = "09_回收成功"
+## 9. 目标格已被其他机关占用：INVALID，节点保持原格、占用不变。
+func _test_09_move_target_occupied_invalid() -> void:
+	const NAME: String = "09_目标被占INVALID"
+	var occ: _OccupancyRegistry = _OccupancyRegistry.new()
+	var inv: _InventoryController = _InventoryController.new(_TOTAL)
+	var pc: _PlacementController = _make_controller(occ, inv, _StubFactory.new())
+	var placed := pc.place_from_inventory(_TOKEN_TYPE, Vector2i(1, 1), 1)
+	var token: Variant = pc.get_placed_node(placed.mechanism_id)
+	occ.register_single_cell(&"blocker", Vector2i(3, 3))
+	var r := pc.move_placed(placed.mechanism_id, Vector2i(3, 3))
+	_check(NAME, r.status == _PlacementController.Status.INVALID, "期望 INVALID，实际 %s。" % [r.status])
+	_check(NAME, r.consumes_runtime_move == false, "INVALID 不应消耗运行期移动次数。")
+	_check(NAME, occ.get_mechanism_at(Vector2i(1, 1)) == placed.mechanism_id, "原占用应保持。")
+	_check(NAME, occ.get_mechanism_at(Vector2i(3, 3)) == &"blocker", "阻挡机关占用应保持。")
+	_check(NAME, token.cell == Vector2i(1, 1), "节点应保持原格。")
+
+
+## 10. 回收成功：占用、映射移除、库存加一，且无残留归还预留。
+func _test_10_recycle_success_no_reservation_residue() -> void:
+	const NAME: String = "10_回收成功无预留残留"
 	var occ: _OccupancyRegistry = _OccupancyRegistry.new()
 	var inv: _InventoryController = _InventoryController.new(_TOTAL)
 	var pc: _PlacementController = _make_controller(occ, inv, _StubFactory.new())
@@ -279,11 +326,12 @@ func _test_09_recycle_success() -> void:
 	_check(NAME, not pc.has_placed(placed.mechanism_id), "映射应已移除。")
 	_check(NAME, pc.get_placed_count() == 0, "已放置数应为 0。")
 	_check(NAME, inv.get_remaining() == _TOTAL, "库存应恢复满，实际 %d。" % [inv.get_remaining()])
+	_check(NAME, inv.get_reserved_return_count() == 0, "成功回收后不应残留归还预留。")
 
 
-## 10. 回收注销失败：节点、映射、库存保持。
-func _test_10_recycle_unregister_failure_keep() -> void:
-	const NAME: String = "10_回收注销失败保持"
+## 11. 回收注销失败：取消预留，节点/映射/占用/库存全部保持。
+func _test_11_recycle_unregister_failure_cancel_reservation() -> void:
+	const NAME: String = "11_回收注销失败取消预留"
 	var occ: _FailUnregisterForIdRegistry = _FailUnregisterForIdRegistry.new()
 	var inv: _InventoryController = _InventoryController.new(_TOTAL)
 	var pc: _PlacementController = _make_controller(occ, inv, _StubFactory.new())
@@ -291,15 +339,55 @@ func _test_10_recycle_unregister_failure_keep() -> void:
 	occ.fail_id = placed.mechanism_id
 	var r := pc.recycle_placed(placed.mechanism_id)
 	_check(NAME, r.status == _PlacementController.Status.FAILED, "期望 FAILED，实际 %s。" % [r.status])
+	_check(NAME, r.error_message == "注销占用失败", "期望错误为“注销占用失败”，实际 %s。" % [r.error_message])
 	_check(NAME, pc.has_placed(placed.mechanism_id), "映射应保持。")
 	_check(NAME, occ.has_mechanism(placed.mechanism_id), "占用应保持。")
 	_check(NAME, pc.get_placed_node(placed.mechanism_id) != null, "节点应保持。")
 	_check(NAME, inv.get_remaining() == _TOTAL - 1, "库存应不变，实际 %d。" % [inv.get_remaining()])
+	_check(NAME, inv.get_reserved_return_count() == 0, "注销失败应取消预留，不残留。")
 
 
-## 11. clear_all 全部成功：placed_count=0、库存恢复满。
-func _test_11_clear_all_success() -> void:
-	const NAME: String = "11_clear_all成功"
+## 12. 回收预留失败：节点/映射/占用/库存完全保持，不销毁节点。
+func _test_12_recycle_reserve_failure_keep_all() -> void:
+	const NAME: String = "12_回收预留失败保持"
+	var occ: _OccupancyRegistry = _OccupancyRegistry.new()
+	var inv: _FailReserveInventory = _FailReserveInventory.new(_TOTAL)
+	var factory: _StubFactory = _StubFactory.new()
+	var pc: _PlacementController = _make_controller(occ, inv, factory)
+	var placed := pc.place_from_inventory(_TOKEN_TYPE, Vector2i(1, 1), 1)
+	var r := pc.recycle_placed(placed.mechanism_id)
+	_check(NAME, r.status == _PlacementController.Status.FAILED, "期望 FAILED，实际 %s。" % [r.status])
+	_check(NAME, r.error_message == "库存归还预留失败", "期望错误为“库存归还预留失败”，实际 %s。" % [r.error_message])
+	_check(NAME, pc.has_placed(placed.mechanism_id), "预留失败应保留映射。")
+	_check(NAME, occ.has_mechanism(placed.mechanism_id), "预留失败应保留占用。")
+	_check(NAME, pc.get_placed_node(placed.mechanism_id) != null, "预留失败应保留节点。")
+	_check(NAME, not factory.created_tokens[0].is_queued_for_deletion(), "预留失败不应销毁节点。")
+	_check(NAME, inv.get_remaining() == _TOTAL - 1, "库存应不变。")
+	_check(NAME, inv.get_reserved_return_count() == 0, "预留失败不应残留预留。")
+
+
+## 13. 回收提交归还失败（预留已锁定后的不变量破坏）：FAILED，映射已清节点已销毁、库存未增。
+func _test_13_recycle_commit_failure_after_destroy() -> void:
+	const NAME: String = "13_回收提交归还失败"
+	var occ: _OccupancyRegistry = _OccupancyRegistry.new()
+	var inv: _FailCommitReturnInventory = _FailCommitReturnInventory.new(_TOTAL)
+	var factory: _StubFactory = _StubFactory.new()
+	var pc: _PlacementController = _make_controller(occ, inv, factory)
+	var placed := pc.place_from_inventory(_TOKEN_TYPE, Vector2i(1, 1), 1)
+	_check(NAME, inv.get_remaining() == _TOTAL - 1, "前置：放置后剩余应为 %d。" % [_TOTAL - 1])
+	var r := pc.recycle_placed(placed.mechanism_id)
+	_check(NAME, r.status == _PlacementController.Status.FAILED, "期望 FAILED，实际 %s。" % [r.status])
+	_check(NAME, r.error_message == "库存归还提交失败", "期望错误为“库存归还提交失败”，实际 %s。" % [r.error_message])
+	_check(NAME, not pc.has_placed(placed.mechanism_id), "提交失败前映射已删除。")
+	_check(NAME, not occ.has_mechanism(placed.mechanism_id), "提交失败前占用已注销。")
+	_check(NAME, factory.created_tokens[0].is_queued_for_deletion(), "提交失败前节点已请求销毁。")
+	_check(NAME, inv.get_remaining() == _TOTAL - 1, "提交失败库存不应增加，实际 %d。" % [inv.get_remaining()])
+	_check(NAME, not inv.is_consistent_with_placed_count(pc.get_placed_count()), "remaining + placed != total 应由一致性断言暴露。")
+
+
+## 14. clear_all 全部成功：placed_count=0、库存恢复满、无残留预留。
+func _test_14_clear_all_success() -> void:
+	const NAME: String = "14_clear_all成功"
 	var occ: _OccupancyRegistry = _OccupancyRegistry.new()
 	var inv: _InventoryController = _InventoryController.new(_TOTAL)
 	var pc: _PlacementController = _make_controller(occ, inv, _StubFactory.new())
@@ -312,11 +400,12 @@ func _test_11_clear_all_success() -> void:
 	_check(NAME, pc.get_placed_count() == 0, "清理后已放置数应为 0。")
 	_check(NAME, occ.is_consistent(), "占用表应保持一致。")
 	_check(NAME, inv.get_remaining() == _TOTAL, "库存应恢复满，实际 %d。" % [inv.get_remaining()])
+	_check(NAME, inv.get_reserved_return_count() == 0, "清理后不应残留归还预留。")
 
 
-## 12. clear_all 部分失败：残留映射保留、unresolved_count 正确、库存与残留数一致。
-func _test_12_clear_all_partial_failure() -> void:
-	const NAME: String = "12_clear_all部分失败"
+## 15. clear_all 部分失败：残留映射保留、unresolved_count 正确、库存与残留数一致、无残留预留。
+func _test_15_clear_all_partial_failure() -> void:
+	const NAME: String = "15_clear_all部分失败"
 	var occ: _FailUnregisterForIdRegistry = _FailUnregisterForIdRegistry.new()
 	var inv: _InventoryController = _InventoryController.new(_TOTAL)
 	var pc: _PlacementController = _make_controller(occ, inv, _StubFactory.new())
@@ -329,13 +418,16 @@ func _test_12_clear_all_partial_failure() -> void:
 	_check(NAME, r.unresolved_ids.has(a.mechanism_id), "未清理 ID 应包含被锁定的机关。")
 	_check(NAME, not pc.has_placed(b.mechanism_id), "可清理机关映射应已移除。")
 	_check(NAME, pc.has_placed(a.mechanism_id), "未清理机关映射应保留。")
+	_check(NAME, occ.has_mechanism(a.mechanism_id), "未清理机关占用应保留。")
+	_check(NAME, pc.get_placed_node(a.mechanism_id) != null, "未清理机关节点应保留。")
 	_check(NAME, inv.get_remaining() == _TOTAL - 1, "库存应与残留数一致（total-1），实际 %d。" % [inv.get_remaining()])
 	_check(NAME, inv.is_consistent_with_placed_count(pc.get_placed_count()), "remaining + placed_count == total 应成立。")
+	_check(NAME, inv.get_reserved_return_count() == 0, "部分失败后不应残留归还预留。")
 
 
-## 13. orientation 在移动后保持。
-func _test_13_move_preserves_orientation() -> void:
-	const NAME: String = "13_移动后orientation保持"
+## 16. orientation 在移动后保持。
+func _test_16_move_preserves_orientation() -> void:
+	const NAME: String = "16_移动后orientation保持"
 	var occ: _OccupancyRegistry = _OccupancyRegistry.new()
 	var inv: _InventoryController = _InventoryController.new(_TOTAL)
 	var pc: _PlacementController = _make_controller(occ, inv, _StubFactory.new())
@@ -348,9 +440,9 @@ func _test_13_move_preserves_orientation() -> void:
 	_check(NAME, token.cell == Vector2i(4, 4), "节点应已移至目标格。")
 
 
-## 14. serial 生成的 ID 不重复。
-func _test_14_serial_ids_unique() -> void:
-	const NAME: String = "14_serial不重复"
+## 17. serial 生成的 ID 不重复。
+func _test_17_serial_ids_unique() -> void:
+	const NAME: String = "17_serial不重复"
 	var occ: _OccupancyRegistry = _OccupancyRegistry.new()
 	var inv: _InventoryController = _InventoryController.new(_TOTAL)
 	var pc: _PlacementController = _make_controller(occ, inv, _StubFactory.new())
@@ -378,7 +470,7 @@ func _check(name: String, ok: bool, detail: String) -> void:
 
 ## 输出测试摘要：测试组数、断言数、通过/失败与全部失败明细。
 func _report() -> void:
-	var group_count: int = 14
+	var group_count: int = 17
 	var passed_checks: int = _checks - _failures.size()
 	print("==== PlacementController 测试摘要 ====")
 	print("测试组数：%d" % group_count)

@@ -12,7 +12,7 @@ extends RefCounted
 ## 在当前系统中的位置：
 ## gameplay/interaction 下独立的 RefCounted 控制器，已接入 core_loop_prototype，是当前运行状态的唯一所有者。
 ## core_loop_prototype 不再持有 current_run_state，核心不直接写状态，而是通过 begin_pulse()、finish_pulse()、
-## reset_to_setup() 请求转换；核心继续协调拖拽、UI、完成事实、异步 pulse_generation 与完整 R 重置。
+## reset_to_setup() 请求转换；脉冲生成、异步脉冲结束与完整 R 运行编排由 LevelRuntimeController 负责，本类仅拥有四状态事实并执行合法状态转换。
 ## 四态枚举 RunState 的权威仍属于 RuntimeInteractionTypes，本类不定义第二份枚举；当前不引入 READY_TO_FIRE 或任何第五态。
 ##
 ## 主要依赖：
@@ -22,7 +22,7 @@ extends RefCounted
 ## 明确不负责：
 ## 输入、Space/R 监听、光传播、脉冲计时、pulse_generation、is_level_completed 维护、拖拽取消、UI 刷新、
 ## 库存、占用、水晶、Diagnostics、场景树、节点路径、文件读写。
-## R 的完整关卡清理由核心负责，本类只执行最终状态回归到 SETUP。
+## R 的完整运行期重置由 LevelRuntimeController 负责；RunStateController 只负责重置到 SETUP 的合法状态转换。
 ##
 ## 关键状态生命周期：
 ## 初始状态默认 SETUP；begin_pulse 将 SETUP/MOVE_WINDOW 推进到 PULSE_ACTIVE；
@@ -169,8 +169,9 @@ func finish_pulse(level_completed: bool) -> bool:
 ## [br]副作用：仅在当前不是 SETUP 时先更新 _current_state 再发出 state_changed；
 ## [br]已是 SETUP 时不改状态、不发信号（幂等）。
 ## [br]失败条件：不会失败；当前状态始终为合法 RunState。
-## [br]边界：只执行最终状态回归，不负责 R 的完整关卡清理（删除玩家机关、占用注销、库存恢复、
-## [br]移动次数清零、光路/水晶/完成状态重置均由核心负责）；幂等行为在本公开方法中显式处理，不走 _try_transition。
+## [br]边界：本类不执行完整 R 运行期重置；该编排（删除玩家机关、占用注销、库存恢复、运行期移动次数归零、
+## [br]光路/水晶/完成状态重置、ObjectiveController 重置与 UI 一致性刷新）由 LevelRuntimeController 负责。
+## [br]本类只负责 reset_to_setup() 的合法状态转换并发出 state_changed；幂等行为在本公开方法中显式处理，不走 _try_transition。
 func reset_to_setup() -> bool:
 	if _current_state == _RuntimeInteractionTypes.RunState.SETUP:
 		return true

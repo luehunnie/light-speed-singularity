@@ -3,9 +3,9 @@
 > 适用项目：光速奇点
 > 适用成员：陈俊贤、潘陈俣、张梓涵
 > 当前仓库：`light-speed-singularity`
-> 更新日期：2026 年 7 月 26 日
+> 更新日期：2026 年 7 月 27 日
 >
-> 说明：本文示例围绕当前阶段 02B `LevelWorldQuery` / `LightWorldQuery` 与只读世界边界。阶段 02A 运行状态迁出已在 `refactor/kud-run-state-controller` 完成；机关公共接口与最小模板顺延为 02C。完整统一光运行架构、FixedEmitter、光粒等仍为长期目标，不在当前立即任务示例中。
+> 说明：本文示例为长期命名参考库。D3 运行编排解耦冲刺在 `refactor/kud-runtime-orchestration` 基本完成（运行状态、世界查询、运行期编排、交互/放置/库存/目标/视觉/水晶身份/Diagnostics 编排均已迁出核心）。后续方向（`GridPlacedObject` 与方法 A、`LevelValidator`、`READY_TO_FIRE`、统一光运行架构、光粒等）仍为长期目标，不在当前立即任务示例中。
 
 ## 1. 分支管理原则
 
@@ -135,8 +135,8 @@ docs/zhang-mechanism-art-requirements
 > 状态说明（适用于 §6–§8 全部职责表示例）：
 > - 以下分支名属于长期或未来阶段参考命名库；
 > - 不代表当前下一批任务；
-> - 当前阶段推荐分支以 §13“02B LevelWorldQuery / LightWorldQuery”为准；
-> - 光粒、分光器、FixedEmitter、完整统一光运行架构当前均不在立即实施范围。
+> - 当前已完成的运行编排解耦在 `refactor/kud-runtime-orchestration`；
+> - 光粒、分光器、`GridPlacedObject`、`LevelValidator`、完整统一光运行架构当前均不在立即实施范围。
 
 ## 6.1 职责范围
 
@@ -462,7 +462,7 @@ test/zhang-mechanism-template-visual
 
 - `main` 为稳定主分支；
 - Diagnostics 已通过 PR #16 合并，对应任务分支已删除；
-- 阶段 02A 运行状态迁出在 `refactor/kud-run-state-controller` 完成（尚未合并 `main`）；
+- 运行状态迁出、世界查询、运行期编排等 D3 切片在 `refactor/kud-runtime-orchestration` 完成（工作区未提交，待用户合并 `main`）；
 - 新任务一律从最新 `main` 创建新分支。
 
 旧分支重命名步骤不再适用，不在此提供 `git branch -m` 等命令。如需对历史分支做整理，由用户人工执行；AI 不执行 Git 写操作。
@@ -480,7 +480,7 @@ git pull origin main
 
 陈俊贤示例：
 ```bash
-git switch -c refactor/kud-level-world-query
+git switch -c refactor/kud-grid-placed-object
 ```
 
 潘陈俣示例：
@@ -542,17 +542,18 @@ git push origin --delete feat/kud-mechanism-interface
 
 # 13. 推荐的下一批分支
 
-Diagnostics foundation 已合并入 `main`。阶段 02A 运行状态迁出已在 `refactor/kud-run-state-controller` 完成（`RunStateController` 接入 `core_loop_prototype`，四态不变，不含 `READY_TO_FIRE`）。当前下一阶段为 02B `LevelWorldQuery` / `LightWorldQuery` 与只读世界边界，建议陈俊贤从最新 `main` 创建：
+D3 运行编排解耦冲刺在 `refactor/kud-runtime-orchestration` 基本完成（运行状态、世界查询、运行期编排、交互/放置/库存/目标/视觉/水晶身份/Diagnostics 编排均已迁出核心，`core_loop_prototype.gd` 已降至约 480 物理行）。后续建议方向（待当前分支合并 `main` 后从最新 `main` 创建）：
 
 ```text
-refactor/kud-level-world-query
+refactor/kud-grid-placed-object
+refactor/kud-level-validator
 ```
 
-机关公共接口与最小模板顺延为 02C，相关分支（如 `feat/kud-mechanism-interface`、`refactor/kud-single-mirror-contract`、`feat/pan-single-mirror-rule-adapter`、`test/zhang-mechanism-template-visual`）在 02B 合并后再从最新 `main` 创建，不在当前立即任务示例中展开。
+机关公共接口与最小模板、`READY_TO_FIRE` 与开始运行按钮、统一 `EmissionRequest` / `LightRuntimeCoordinator` / 光粒等仍为长期目标，相关分支在对应方向启动时再从最新 `main` 创建，不在当前立即任务示例中展开。
 
-方向围绕：只读世界查询边界、传播模块与 TileMapLayer/占用表/目标节点的隔离；02C 再回到公共机关接口、现有单格镜契约接入、最小机关模板、玩法规则测试、视觉/Profile 与编辑器侧验证。
+方向围绕：`GridPlacedObject` 与方法 A 落地（方法 B 延后）、`LevelValidator` 只读校验、`READY_TO_FIRE` 运行状态门、统一光运行架构与光粒。
 
-不要把完整关卡制作、FixedEmitter、光粒或完整统一光运行架构写成当前立即任务。三个人都从最新的 `main` 创建，不要从彼此尚未完成的分支创建。
+不要把完整关卡制作、光粒或完整统一光运行架构写成当前立即任务。三个人都从最新的 `main` 创建，不要从彼此尚未完成的分支创建。
 
 # 14. 核心分工总结
 

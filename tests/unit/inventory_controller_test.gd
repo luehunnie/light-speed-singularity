@@ -24,6 +24,18 @@ func _initialize() -> void:
 	_test_08_consistent_with_placed_count()
 	_test_09_inconsistent_returns_false()
 	_test_10_mixed_consume_return_no_overflow()
+	_test_11_reserve_success_when_returnable()
+	_test_12_reserve_does_not_increase_remaining()
+	_test_13_commit_increases_remaining_once()
+	_test_14_commit_clears_reservation()
+	_test_15_cancel_keeps_remaining()
+	_test_16_cancel_clears_reservation()
+	_test_17_full_inventory_cannot_reserve()
+	_test_18_multiple_reserves_within_capacity()
+	_test_19_commit_without_reservation_fails()
+	_test_20_reset_to_total_clears_reservation()
+	_test_21_reconcile_clears_reservation()
+	_test_22_remaining_and_reservation_bounded()
 	_report()
 	quit(0 if _failures.is_empty() else 1)
 
@@ -139,6 +151,149 @@ func _test_10_mixed_consume_return_no_overflow() -> void:
 	_check(NAME, c.get_total() == 2, "total 不应改变。")
 
 
+## 11. 可归还时预留成功：扣除后剩余 < total，预留返回 true。
+func _test_11_reserve_success_when_returnable() -> void:
+	const NAME: String = "11_可归还时预留成功"
+	var c: _InventoryController = _InventoryController.new(3)
+	_check(NAME, c.try_consume_one() == true, "前置扣除期望 true。")
+	_check(NAME, c.try_reserve_return_one() == true, "可归还时预留期望 true。")
+	_check(NAME, c.get_reserved_return_count() == 1, "预留数期望 1，实际 %d。" % [c.get_reserved_return_count()])
+
+
+## 12. 预留不立即增加 remaining：预留成功后 remaining 仍为扣除后的值。
+func _test_12_reserve_does_not_increase_remaining() -> void:
+	const NAME: String = "12_预留不立即增加remaining"
+	var c: _InventoryController = _InventoryController.new(3)
+	_check(NAME, c.try_consume_one() == true, "前置扣除期望 true。")
+	_check(NAME, c.get_remaining() == 2, "扣除后 remaining 期望 2。")
+	_check(NAME, c.try_reserve_return_one() == true, "预留期望 true。")
+	_check(NAME, c.get_remaining() == 2, "预留后 remaining 应不变，实际 %d。" % [c.get_remaining()])
+
+
+## 13. commit 后 remaining 增加一次：预留提交后 remaining +1。
+func _test_13_commit_increases_remaining_once() -> void:
+	const NAME: String = "13_commit后remaining加一"
+	var c: _InventoryController = _InventoryController.new(3)
+	_check(NAME, c.try_consume_one() == true, "前置扣除期望 true。")
+	_check(NAME, c.try_reserve_return_one() == true, "预留期望 true。")
+	_check(NAME, c.commit_reserved_return() == true, "commit 期望 true。")
+	_check(NAME, c.get_remaining() == 3, "commit 后 remaining 期望 3，实际 %d。" % [c.get_remaining()])
+
+
+## 14. commit 后预留清零：提交成功后 reserved_return_count 归零。
+func _test_14_commit_clears_reservation() -> void:
+	const NAME: String = "14_commit后预留清零"
+	var c: _InventoryController = _InventoryController.new(3)
+	_check(NAME, c.try_consume_one() == true, "前置扣除期望 true。")
+	_check(NAME, c.try_reserve_return_one() == true, "预留期望 true。")
+	_check(NAME, c.commit_reserved_return() == true, "commit 期望 true。")
+	_check(NAME, c.get_reserved_return_count() == 0, "commit 后预留应清零，实际 %d。" % [c.get_reserved_return_count()])
+
+
+## 15. cancel 后 remaining 不变：取消预留不修改 remaining。
+func _test_15_cancel_keeps_remaining() -> void:
+	const NAME: String = "15_cancel后remaining不变"
+	var c: _InventoryController = _InventoryController.new(3)
+	_check(NAME, c.try_consume_one() == true, "前置扣除期望 true。")
+	_check(NAME, c.try_reserve_return_one() == true, "预留期望 true。")
+	_check(NAME, c.cancel_reserved_return() == true, "cancel 期望 true。")
+	_check(NAME, c.get_remaining() == 2, "cancel 后 remaining 应不变，实际 %d。" % [c.get_remaining()])
+
+
+## 16. cancel 后预留清零：取消预留后 reserved_return_count 归零。
+func _test_16_cancel_clears_reservation() -> void:
+	const NAME: String = "16_cancel后预留清零"
+	var c: _InventoryController = _InventoryController.new(3)
+	_check(NAME, c.try_consume_one() == true, "前置扣除期望 true。")
+	_check(NAME, c.try_reserve_return_one() == true, "预留期望 true。")
+	_check(NAME, c.cancel_reserved_return() == true, "cancel 期望 true。")
+	_check(NAME, c.get_reserved_return_count() == 0, "cancel 后预留应清零，实际 %d。" % [c.get_reserved_return_count()])
+
+
+## 17. 满库存不能预留：remaining == total 时预留失败。
+func _test_17_full_inventory_cannot_reserve() -> void:
+	const NAME: String = "17_满库存不能预留"
+	var c: _InventoryController = _InventoryController.new(3)
+	_check(NAME, c.get_remaining() == 3, "前置满库存。")
+	_check(NAME, c.try_reserve_return_one() == false, "满库存预留期望 false。")
+	_check(NAME, c.get_reserved_return_count() == 0, "失败后预留应仍为 0。")
+	_check(NAME, c.get_remaining() == 3, "失败后 remaining 应不变。")
+
+
+## 18. 多次预留不超过容量：可预留数等于 total - remaining，再多则失败。
+func _test_18_multiple_reserves_within_capacity() -> void:
+	const NAME: String = "18_多次预留不超容量"
+	var c: _InventoryController = _InventoryController.new(3)
+	_check(NAME, c.try_consume_one() == true, "扣除 1 期望 true。")
+	_check(NAME, c.try_consume_one() == true, "扣除 2 期望 true。")
+	_check(NAME, c.get_remaining() == 1, "扣除后 remaining 期望 1。")
+	_check(NAME, c.try_reserve_return_one() == true, "第 1 次预留期望 true。")
+	_check(NAME, c.try_reserve_return_one() == true, "第 2 次预留期望 true。")
+	_check(NAME, c.get_reserved_return_count() == 2, "预留数期望 2。")
+	_check(NAME, c.try_reserve_return_one() == false, "超出容量的第 3 次预留期望 false。")
+	_check(NAME, c.get_reserved_return_count() == 2, "失败后预留数应仍为 2。")
+
+
+## 19. 无预留时 commit 失败：不修改 remaining，不修改预留数。
+func _test_19_commit_without_reservation_fails() -> void:
+	const NAME: String = "19_无预留commit失败"
+	var c: _InventoryController = _InventoryController.new(3)
+	_check(NAME, c.try_consume_one() == true, "前置扣除期望 true。")
+	_check(NAME, c.get_reserved_return_count() == 0, "前置无预留。")
+	_check(NAME, c.commit_reserved_return() == false, "无预留 commit 期望 false。")
+	_check(NAME, c.get_remaining() == 2, "无预留 commit 不应改变 remaining，实际 %d。" % [c.get_remaining()])
+	_check(NAME, c.get_reserved_return_count() == 0, "无预留 commit 后预留应仍为 0。")
+
+
+## 20. reset_to_total 清理预留：遗留预留被清除，remaining 恢复满。
+func _test_20_reset_to_total_clears_reservation() -> void:
+	const NAME: String = "20_reset清理预留"
+	var c: _InventoryController = _InventoryController.new(3)
+	_check(NAME, c.try_consume_one() == true, "前置扣除期望 true。")
+	_check(NAME, c.try_reserve_return_one() == true, "前置预留期望 true。")
+	_check(NAME, c.get_reserved_return_count() == 1, "前置预留数期望 1。")
+	c.reset_to_total()
+	_check(NAME, c.get_remaining() == 3, "reset 后 remaining 期望 3。")
+	_check(NAME, c.get_reserved_return_count() == 0, "reset 后预留应清零，实际 %d。" % [c.get_reserved_return_count()])
+
+
+## 21. reconcile_with_placed_count 清理预留：遗留预留被清除，remaining 按残留数对齐。
+func _test_21_reconcile_clears_reservation() -> void:
+	const NAME: String = "21_reconcile清理预留"
+	var c: _InventoryController = _InventoryController.new(3)
+	_check(NAME, c.try_consume_one() == true, "前置扣除期望 true。")
+	_check(NAME, c.try_reserve_return_one() == true, "前置预留期望 true。")
+	_check(NAME, c.get_reserved_return_count() == 1, "前置预留数期望 1。")
+	_check(NAME, c.reconcile_with_placed_count(1) == true, "reconcile placed=1 期望 true。")
+	_check(NAME, c.get_remaining() == 2, "reconcile 后 remaining 期望 2。")
+	_check(NAME, c.get_reserved_return_count() == 0, "reconcile 后预留应清零，实际 %d。" % [c.get_reserved_return_count()])
+
+
+## 22. remaining 与 reservation 始终不越界：remaining 夹在 [0, total]，预留非负且不超 total。
+func _test_22_remaining_and_reservation_bounded() -> void:
+	const NAME: String = "22_remaining与reservation不越界"
+	var c: _InventoryController = _InventoryController.new(3)
+	# 扣到 0 后多次预留仍受 total 上限钳制。
+	_check(NAME, c.try_consume_one() == true, "扣除 1 期望 true。")
+	_check(NAME, c.try_consume_one() == true, "扣除 2 期望 true。")
+	_check(NAME, c.try_consume_one() == true, "扣除 3 期望 true。")
+	_check(NAME, c.get_remaining() == 0, "remaining 期望 0。")
+	_check(NAME, c.try_reserve_return_one() == true, "第 1 次预留期望 true。")
+	_check(NAME, c.try_reserve_return_one() == true, "第 2 次预留期望 true。")
+	_check(NAME, c.try_reserve_return_one() == true, "第 3 次预留期望 true。")
+	_check(NAME, c.try_reserve_return_one() == false, "第 4 次预留期望 false（不超 total）。")
+	_check(NAME, c.get_reserved_return_count() == 3, "预留数应等于 total，实际 %d。" % [c.get_reserved_return_count()])
+	# 全部提交后 remaining 不超过 total，预留归零。
+	_check(NAME, c.commit_reserved_return() == true, "commit 1 期望 true。")
+	_check(NAME, c.commit_reserved_return() == true, "commit 2 期望 true。")
+	_check(NAME, c.commit_reserved_return() == true, "commit 3 期望 true。")
+	_check(NAME, c.get_remaining() == 3, "全部提交后 remaining 期望 total，实际 %d。" % [c.get_remaining()])
+	_check(NAME, c.get_reserved_return_count() == 0, "全部提交后预留应清零。")
+	# 无预留 cancel 安全返回 false，不修改数据。
+	_check(NAME, c.cancel_reserved_return() == false, "无预留 cancel 期望 false。")
+	_check(NAME, c.get_remaining() == 3, "无预留 cancel 后 remaining 应不变。")
+
+
 ## 单项断言：累计计数，失败时追加“[组名] 原因”到失败列表。
 func _check(name: String, ok: bool, detail: String) -> void:
 	_checks += 1
@@ -148,7 +303,7 @@ func _check(name: String, ok: bool, detail: String) -> void:
 
 ## 输出测试摘要：测试组数、断言数、通过/失败与全部失败明细。
 func _report() -> void:
-	var group_count: int = 10
+	var group_count: int = 22
 	var passed_checks: int = _checks - _failures.size()
 	print("==== InventoryController 测试摘要 ====")
 	print("测试组数：%d" % group_count)
