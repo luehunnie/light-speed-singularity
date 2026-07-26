@@ -122,18 +122,17 @@ const _RuntimeMoveRules: GDScript = preload("res://gameplay/placement/rules/runt
 # 批次 4B-F2 抽离的运行状态纯规则共享模块；正式玩法查询与 post_pulse_state 启动自检共用同一规则来源。
 # 用 preload 路径引用以避开 MCP run_project 不重建全局类型缓存的问题，新 class_name 缓存可能尚未刷新，必须通过本常量调用。
 const _RuntimeStateRules: GDScript = preload("res://gameplay/interaction/runtime_state_rules.gd")
+# 阶段 02A 批次 3A：运行状态控制器 RunStateController。核心持有的唯一运行状态所有者，负责四态事实、最小合法转换与 state_changed 信号。
+# 用 preload 路径引用以避开 MCP run_project 不重建全局 class_name 缓存的问题；与 _DiagnosticsController 一致以 const 作静态类型注解，不加入场景树、不 add_child、不设为 Autoload。
+const _RunStateController: GDScript = preload("res://gameplay/interaction/run_state_controller.gd")
 # 默认光线路段视觉资源（四字段全空 → 运行时由 LightSegmentView 静默回退到黄色占位块）。
 # 以 Resource 类型 preload，调用 set_profile 时再 as 为 profile 脚本类型，避免常量类型解析对全局类型缓存的依赖。
 const _DefaultLightSegmentProfile: Resource = preload("res://assets/visual_profiles/basic_light_segment_visuals.tres")
 var occupancy: _OccupancyRegistry = _OccupancyRegistry.new()
 
-## 当前显式运行状态，是运行阶段的唯一事实来源。
-## 配置锁定与脉冲活动状态都由它推导；完成目标事实由 is_level_completed 独立保存。
-var current_run_state: _RuntimeInteractionTypes.RunState = _RuntimeInteractionTypes.RunState.SETUP
-
 ## 当前运行是否已经完成关卡。
 ## 与光路视觉生命周期分离；普通独立水晶和完成结果都保持到 R 重置。
-## 命中时可先于 current_run_state 变为 true，current_run_state 会在脉冲视觉结束后进入 COMPLETED。
+## 命中时可先于运行状态变为 true，运行状态会在脉冲视觉结束后由 RunStateController 进入 COMPLETED。
 var is_level_completed: bool = false
 
 ## 当前脉冲版本号。
@@ -166,6 +165,13 @@ var _dragged_placed_token: Variant = null
 ## 不作为 Node、不 add_child、不设为 Autoload、不传入 core_loop；本批不调用其 Logger 或 Snapshot 接口。
 var _diagnostics_controller: _DiagnosticsController = _DiagnosticsController.new()
 
+## 运行状态控制器（阶段 02A 批次 3A）：核心持有的唯一运行状态所有者。
+## 四态事实、最小合法转换与 state_changed 信号全部由它负责；核心不再持有 current_run_state 事实字段，也不保留同步/缓存副本。
+## 核心仍负责业务副作用（取消拖拽、pulse_generation、is_level_completed、光路/水晶/占用清理、库存、UI 刷新、R 完整重置）。
+## state_changed 在 Controller 状态字段更新后发出；COMPLETED 前取消拖拽必须在请求转换前由核心完成；generation 仍由核心保护异步回调。
+## 当前不包含 READY_TO_FIRE 或任何第五态。不作为 Node、不 add_child、不设为 Autoload。
+var _run_state_controller: _RunStateController = _RunStateController.new()
+
 
 ## 初始化核心闭环原型关卡。
 ## [br]本函数无参数、无返回值。
@@ -173,6 +179,9 @@ var _diagnostics_controller: _DiagnosticsController = _DiagnosticsController.new
 ## 自检结束后真实占用表、运行状态、布局编辑权限、水晶、玩家布局、镜面朝向和完成标签不被改变。
 ## [br]边界条件：发布构建不执行自检，避免把调试断言作为运行期必需流程。
 func _ready() -> void:
+	# 早期连接运行状态信号：在任何可能依赖状态 UI 的初始化之前连接，避免错过首次状态变化。
+	# 当前场景只执行一次 _ready()；state_changed 在 Controller 状态字段更新后发出，本回调只刷新机关栏 UI。
+	_run_state_controller.state_changed.connect(_on_run_state_changed)
 	_update_inventory_ui()
 	_update_runtime_move_ui()
 	if OS.is_debug_build():
@@ -358,12 +367,12 @@ func _run_single_cell_mirror_reflection_self_check() -> void:
 ## [br]检查逻辑已迁至独立模块 RuntimeStateCheck（gameplay/diagnostics/self_check/checks/runtime_state_check.gd），
 ## 正式规则位于 RuntimeStateRules（gameplay/interaction/runtime_state_rules.gd）。
 ## [br]批次 4B-F3 起本函数通过单项 SelfCheckRunner 执行该检查：构造 SelfCheckCallable 并交由 _run_startup_self_check_via_controller 注册、运行与校验，
-## 不再直接调用 RuntimeStateCheck.run()，也不再在核心脚本内保留测试案例或直接改写 current_run_state 进行自检。
+## 不再直接调用 RuntimeStateCheck.run()，也不再在核心脚本内保留测试案例或直接改写核心运行状态进行自检。
 ## [br]本函数只通过 Runner 保持 Debug 失败语义：注册失败、Runner 结构错误或 SelfCheckResult.passed == false 时由 _run_startup_self_check_via_controller 立即 assert，
 ## 保留原 Debug 硬断言边界，不降级为 warning。
 ## [br]测试案例位于 RuntimeStateCheck（22 项：2 项脉冲结束目标状态 + 四个 RunState × 五条纯权限规则）；
 ## [br]正式规则位于 RuntimeStateRules；本函数只通过 Runner 保留 Debug 硬断言，不修改真实运行状态。
-## [br]边界条件：保持原启动顺序，本函数仍位于 _ready 中第四项；新实现相较旧实现改善为即使检查失败也不会修改或泄漏 current_run_state，
+## [br]边界条件：保持原启动顺序，本函数仍位于 _ready 中第四项；新实现相较旧实现改善为即使检查失败也不会修改或泄漏核心运行状态，
 ## 不再需要保存/恢复 original_state/original_level_completed/original_pulse_generation，不触发 UI、拖拽或状态事务；不参与业务状态修改，不写文件，不写日志。
 func _run_post_pulse_state_self_check() -> void:
 	var definition: SelfCheckCallable = SelfCheckCallable.new(
@@ -414,49 +423,71 @@ func _input(event: InputEvent) -> void:
 		_update_drag_preview_from_mouse()
 
 
+## 运行状态变化信号处理（阶段 02A 批次 3A）。
+## [br]职责：RunStateController 是唯一运行状态所有者，状态字段更新后发出 state_changed；本回调只负责状态变化后的核心协调副作用——刷新机关栏 UI。
+## [br]参数：previous_state 为切换前运行状态；new_state 为切换后运行状态（均由 Controller 在更新字段后传入）。
+## [br]无返回值；副作用：只调用 _update_inventory_ui()。
+## [br]边界：不在此取消拖拽、不修改 is_level_completed、不修改 pulse_generation、不清理水晶/光路/占用、不执行完整重置、不再次切换状态。
+## [br]COMPLETED 前取消拖拽由 _finish_current_pulse 在请求转换前完成，不放在本回调中。
+func _on_run_state_changed(
+		previous_state: _RuntimeInteractionTypes.RunState,
+		new_state: _RuntimeInteractionTypes.RunState
+) -> void:
+	_update_inventory_ui()
+
+
+## 查询当前运行状态（阶段 02A 批次 3A）。
+## [br]本函数无参数。
+## [br]返回 Controller 持有的当前 RunState；核心不再持有 current_run_state 事实字段。
+## [br]本函数无副作用；只转发 _run_state_controller.get_current_state()，用于需要把状态值传给 RuntimeMoveRules 等玩法规则层的调用点。
+## [br]边界：纯读取，不切换状态、不发信号；不把 Controller 实例传入玩法规则层。
+func _get_current_run_state() -> _RuntimeInteractionTypes.RunState:
+	return _run_state_controller.get_current_state()
+
+
 ## 查询当前是否允许发射普通脉冲。
 ## [br]本函数无参数。
 ## [br]返回 true 表示 SETUP 或 MOVE_WINDOW 可以发射；返回 false 表示 PULSE_ACTIVE 或 COMPLETED 必须拒绝 Space。
 ## [br]本函数无副作用；边界条件：完成标签已显示但脉冲尚未视觉结束时，状态仍是 PULSE_ACTIVE，因此重复 Space 仍被拒绝。
-## [br]正式规则位于 RuntimeStateRules（批次 4B-F2）；本包装函数只提供当前实例的 current_run_state，不在此函数内执行状态切换。
+## [br]正式规则位于 RuntimeStateRules（批次 4B-F2）；本薄包装保持函数名，内部转发 RunStateController，不在此函数内执行状态切换。
 func can_fire_light() -> bool:
-	return _RuntimeStateRules.can_fire_light(current_run_state)
+	return _run_state_controller.can_fire_light()
 
 
 ## 查询当前是否处于非冻结状态（粗粒度冻结门）。
 ## [br]本函数无参数。
 ## [br]返回 true 表示当前不是 COMPLETED（关卡未冻结）；返回 false 表示 COMPLETED 已冻结整个关卡交互。
 ## [br]本函数无副作用；边界条件：本函数只是粗粒度冻结门（非 COMPLETED 返回 true），不是拿取、移动、回收的唯一守卫。拿取/回收在所有非 COMPLETED 状态允许（_can_take_from_inventory_for_state / _can_recycle_placed_token_for_state），拖起已放置机关由 _can_begin_placed_drag 限制（所有非 COMPLETED 状态允许，与剩余次数分离），跨格提交由 _can_commit_placed_move 按剩余次数限制（SETUP 不限，PULSE_ACTIVE/MOVE_WINDOW 需 remaining>0）。PULSE_ACTIVE 中的布局变化只影响后续再次发射，不回溯当前脉冲。
-## [br]正式规则位于 RuntimeStateRules（批次 4B-F2）；本包装函数只提供当前实例的 current_run_state，不在此函数内执行状态切换。
+## [br]正式规则位于 RuntimeStateRules（批次 4B-F2）；本薄包装保持函数名，内部转发 RunStateController，不在此函数内执行状态切换。
 func can_edit_layout() -> bool:
-	return _RuntimeStateRules.can_edit_layout(current_run_state)
+	return _run_state_controller.can_edit_layout()
 
 
 ## 查询当前是否允许人工编辑内部配置。
 ## [br]本函数无参数。
 ## [br]返回 true 仅表示当前处于 SETUP；其他状态全部返回 false。
 ## [br]本函数无副作用；边界条件：本权限只用于主发射源方向、机关内部模式等内部配置，不代表布局编辑权限，不得用于控制拖拽放置、移动或回收。
-## [br]正式规则位于 RuntimeStateRules（批次 4B-F2）；本包装函数只提供当前实例的 current_run_state，不在此函数内执行状态切换。
+## [br]正式规则位于 RuntimeStateRules（批次 4B-F2）；本薄包装保持函数名，内部转发 RunStateController，不在此函数内执行状态切换。
 func can_edit_configuration() -> bool:
-	return _RuntimeStateRules.can_edit_configuration(current_run_state)
+	return _run_state_controller.can_edit_configuration()
 
 
 ## 查询当前是否处于普通脉冲活动窗口。
 ## [br]本函数无参数。
-## [br]返回 true 表示 current_run_state 为 PULSE_ACTIVE；其他状态返回 false。
+## [br]返回 true 表示当前运行状态为 PULSE_ACTIVE；其他状态返回 false。
 ## [br]本函数无副作用；边界条件：通关目标可在 PULSE_ACTIVE 期间已成立，脉冲活动仍以运行状态为准。
-## [br]正式规则位于 RuntimeStateRules（批次 4B-F2，接口名 is_pulse_active）；本包装函数只提供当前实例的 current_run_state，不在此函数内执行状态切换。
+## [br]正式规则位于 RuntimeStateRules（批次 4B-F2，接口名 is_pulse_active）；本薄包装保持函数名，内部转发 RunStateController，不在此函数内执行状态切换。
 func is_current_pulse_active() -> bool:
-	return _RuntimeStateRules.is_pulse_active(current_run_state)
+	return _run_state_controller.is_current_pulse_active()
 
 
 ## 查询当前是否处于运行期移动状态。
 ## [br]本函数无参数。
 ## [br]返回 true 表示当前处于 PULSE_ACTIVE 或 MOVE_WINDOW；SETUP 与 COMPLETED 返回 false。
 ## [br]本函数无副作用；边界条件：运行期移动次数只在 PULSE_ACTIVE 和 MOVE_WINDOW 中扣除，SETUP 移动不计次，COMPLETED 冻结全部布局交互。
-## [br]正式规则位于 RuntimeStateRules（批次 4B-F2）；本包装函数只提供当前实例的 current_run_state，不在此函数内执行状态切换。
+## [br]正式规则位于 RuntimeStateRules（批次 4B-F2）；本薄包装保持函数名，内部转发 RunStateController，不在此函数内执行状态切换。
 func is_runtime_move_state() -> bool:
-	return _RuntimeStateRules.is_runtime_move_state(current_run_state)
+	return _run_state_controller.is_runtime_move_state()
 
 
 ## 查询当前剩余运行期移动次数。
@@ -484,24 +515,6 @@ func _update_runtime_move_ui() -> void:
 	runtime_move_label.text = "运行期移动：%d / %d" % [get_runtime_moves_remaining(), runtime_move_limit]
 
 
-## 集中切换当前最小运行状态。
-## [br]new_state 是目标 RunState。
-## [br]无返回值；副作用是更新 current_run_state，并在进入 COMPLETED 前取消未完成拖拽，随后刷新机关栏 UI。
-## [br]状态变化：只改变 current_run_state；配置锁定、布局编辑权限和脉冲活动都由状态查询函数推导，is_level_completed 由目标完成流程单独维护。
-## [br]边界条件：必须允许 PULSE_ACTIVE 且 is_level_completed 为 true 的中间状态，表示通关条件已成立但脉冲视觉尚未结束；COMPLETED 会冻结全部玩家布局交互，因此若脉冲结束瞬间仍在拖拽，先安全取消该拖拽，避免冻结后提交布局变化。PULSE_ACTIVE 转入 MOVE_WINDOW 时已开始的合法已放置机关拖拽可继续，但正式提交时仍按 MOVE_WINDOW 与当前剩余次数由 _commit_placed_drag_or_cancel() 重新校验。
-func _set_run_state(new_state: _RuntimeInteractionTypes.RunState) -> void:
-	if new_state < _RuntimeInteractionTypes.RunState.SETUP or new_state > _RuntimeInteractionTypes.RunState.COMPLETED:
-		push_error("CoreLoopPrototype: 非法运行状态：%s" % [new_state])
-		return
-
-	if new_state == _RuntimeInteractionTypes.RunState.COMPLETED and is_dragging():
-		# COMPLETED 是唯一冻结全部布局交互的状态；进入冻结前取消未完成拖拽，防止冻结后鼠标松开仍提交移动或回收。
-		_cancel_current_drag()
-
-	current_run_state = new_state
-	_update_inventory_ui()
-
-
 ## 决定有效普通脉冲结束后应进入的目标状态。
 ## [br]level_completed 表示脉冲结算后关卡完成条件是否已经成立。
 ## [br]返回 COMPLETED 表示已完成，返回 MOVE_WINDOW 表示未完成且可等待未来移动或再次发射。
@@ -516,8 +529,8 @@ func _get_post_pulse_state(level_completed: bool) -> _RuntimeInteractionTypes.Ru
 ## [br]本函数无参数、无返回值。
 ## [br]副作用：SETUP 或 MOVE_WINDOW 且未拖拽时，清理上一轮光路视觉，按发射瞬间的当前布局计算完整路径，
 ## 光进入镜面格后先显示路径和点亮同格水晶，再通过 OccupancyRegistry 找到 SingleCellMirror 并使用其 orientation 更新传播方向，随后启动约 1 秒的光路视觉保持流程。
-## [br]状态变化：开始时通过 _set_run_state(_RuntimeInteractionTypes.RunState.PULSE_ACTIVE) 进入脉冲活动并递增 pulse_generation；
-## 若全部必需水晶被本次脉冲满足，update_completion_state() 会先设置 is_level_completed，current_run_state 等脉冲视觉结束后再进入 COMPLETED。
+## [br]状态变化：开始时通过 _run_state_controller.begin_pulse() 进入脉冲活动并递增 pulse_generation；
+## 若全部必需水晶被本次脉冲满足，update_completion_state() 会先设置 is_level_completed，运行状态等脉冲视觉结束后再由 Controller 进入 COMPLETED。
 ## [br]失败条件：方向非法时报告错误并不创建脉冲；拖拽中、PULSE_ACTIVE 或 COMPLETED 中忽略 Space；镜面反射返回 Vector2i.ZERO 时安全停止传播。
 ## [br]边界条件：遇到地图边界、墙体或 MAX_PROPAGATION_STEPS 上限时停止传播；未知机关本轮保持无光学效果且不得崩溃。PULSE_ACTIVE 期间玩家可拿取/放置/回收，且可按剩余次数移动已放置机关，但不会重新计算或回溯修改这一次已经完成逻辑计算的光路结果。
 func fire_light() -> void:
@@ -527,7 +540,7 @@ func fire_light() -> void:
 		return
 	if not can_fire_light():
 		if OS.is_debug_build():
-			print_debug("CoreLoopPrototype: 当前运行状态拒绝 Space 发射：%s。" % [current_run_state])
+			print_debug("CoreLoopPrototype: 当前运行状态拒绝 Space 发射：%s。" % [_get_current_run_state()])
 		return
 
 	var direction: Vector2i = emitter_direction
@@ -537,8 +550,11 @@ func fire_light() -> void:
 
 	_prepare_for_new_pulse()
 
-	# 脉冲开始：PULSE_ACTIVE 同时表示配置已锁定且存在活动脉冲。
-	_set_run_state(_RuntimeInteractionTypes.RunState.PULSE_ACTIVE)
+	# 脉冲开始：请求 Controller 进入 PULSE_ACTIVE，同时表示配置已锁定且存在活动脉冲。
+	# 必须确认状态成功进入 PULSE_ACTIVE 后才继续本次发射流程；begin_pulse 意外返回 false 时停止本次发射，不继续传播。
+	# Controller 已通过 push_error 报告拒绝原因，此处不再重复输出第二条无意义错误。
+	if not _run_state_controller.begin_pulse():
+		return
 	pulse_generation += 1
 	var current_pulse_generation: int = pulse_generation
 
@@ -581,7 +597,7 @@ func fire_light() -> void:
 	if steps >= MAX_PROPAGATION_STEPS:
 		push_warning("Light propagation stopped by MAX_PROPAGATION_STEPS")
 
-	# 通关判断立即完成；CompleteLabel 可立刻显示，但 current_run_state 保持 PULSE_ACTIVE 到脉冲视觉结束。
+	# 通关判断立即完成；CompleteLabel 可立刻显示，但运行状态保持 PULSE_ACTIVE 到脉冲视觉结束。
 	update_completion_state()
 
 	_finish_pulse_after_delay(current_pulse_generation)
@@ -590,7 +606,7 @@ func fire_light() -> void:
 ## 执行下一次脉冲前的光路视觉清理。
 ## [br]本函数无参数、无返回值。
 ## [br]副作用：清除旧光路视觉，不改变已经点亮的普通独立水晶或已放置原型机关。
-## [br]状态变化：不改变 current_run_state、is_level_completed、CompleteLabel、库存、占用表或 pulse_generation。
+## [br]状态变化：不改变运行状态、is_level_completed、CompleteLabel、库存、占用表或 pulse_generation。
 ## [br]边界条件：只作为 Space 发射前的轻量清理，不承担 R 的完整运行重置职责。
 func _prepare_for_new_pulse() -> void:
 	clear_light_path()
@@ -613,11 +629,11 @@ func _finish_pulse_after_delay(expected_generation: int) -> void:
 
 ## 结束当前仍有效的普通脉冲。
 ## [br]expected_generation 是调用方确认的脉冲版本号。
-## [br]无返回值；副作用：清除当前光路视觉，并根据完成结果把状态切换到 MOVE_WINDOW 或 COMPLETED。
-## [br]状态变化：通过 _set_run_state() 将 PULSE_ACTIVE 转为 _get_post_pulse_state(is_level_completed) 的结果；
+## [br]无返回值；副作用：清除当前光路视觉，并根据完成结果请求 Controller 把状态切换到 MOVE_WINDOW 或 COMPLETED。
+## [br]状态变化：通过 _run_state_controller.finish_pulse(is_level_completed) 将 PULSE_ACTIVE 转为目标状态；
 ## 不清除普通独立水晶、原型机关、库存或占用表，完成状态和 CompleteLabel 都保持到 R 重置。
-## [br]失败条件：版本不匹配或当前无活动脉冲时直接返回，避免重复结束或旧回调误清理。
-## [br]边界条件：不处理同时组、顺序组、移动次数或完整 RunStateController。
+## [br]失败条件：版本不匹配或当前无活动脉冲时直接返回，避免重复结束或旧回调误清理；finish_pulse 返回 false 时通过现有错误边界暴露并安全退出。
+## [br]边界条件：不处理同时组、顺序组、移动次数或完整 RunStateController；等待、计时器与 generation 仍由核心保护，不移入 Controller。
 func _finish_current_pulse(expected_generation: int) -> void:
 	# 过期回调保护：结束清理前再次确认这是当前有效脉冲。
 	if expected_generation != pulse_generation:
@@ -630,17 +646,27 @@ func _finish_current_pulse(expected_generation: int) -> void:
 
 	# 脉冲结束后的目标状态：完成则进入 COMPLETED，否则进入 MOVE_WINDOW。
 	var next_state: _RuntimeInteractionTypes.RunState = _get_post_pulse_state(is_level_completed)
-	_set_run_state(next_state)
+
+	# COMPLETED 是唯一冻结全部布局交互的状态；进入冻结前由核心取消当前拖拽，必须在请求状态转换前完成，
+	# 避免冻结后鼠标松开仍提交移动或回收。取消拖拽不放在状态信号回调中，保证顺序为：取消拖拽 → 更新状态 → 发 state_changed → 刷新机关栏 UI。
+	# PULSE_ACTIVE 转入 MOVE_WINDOW 时已开始的合法已放置机关拖拽可继续，正式提交时仍按 MOVE_WINDOW 与剩余次数由 _commit_placed_drag_or_cancel() 重新校验。
+	if next_state == _RuntimeInteractionTypes.RunState.COMPLETED and is_dragging():
+		_cancel_current_drag()
+
+	# 请求 Controller 切换状态；失败通过现有错误边界暴露并安全退出，不再通过旧 _set_run_state() 切换，不继续后续完成标签处理。
+	if not _run_state_controller.finish_pulse(is_level_completed):
+		push_error("CoreLoopPrototype: RunStateController.finish_pulse 被拒绝，无法结束脉冲。")
+		return
 
 	# 完成结果保留：路径消失后，已经成立的关卡完成标签继续显示。
-	if current_run_state == _RuntimeInteractionTypes.RunState.COMPLETED:
+	if _get_current_run_state() == _RuntimeInteractionTypes.RunState.COMPLETED:
 		complete_label.visible = true
 
 
 ## 重置本次原型关卡到完整初始运行状态。
 ## [br]本函数无参数、无返回值。
 ## [br]副作用：最先安全取消当前拖拽；随后递增 pulse_generation 使旧脉冲等待回调失效；清除当前光路视觉、普通独立水晶点亮状态、完成状态和完成标签；逐个注销并删除可确认清理的玩家 PlaceableToken；按未能清理的玩家机关数量恢复机关栏库存；刷新机关栏与运行期移动 UI。
-## [br]状态变化：is_level_completed 设为 false，runtime_moves_used 清零，current_run_state 通过 _set_run_state(_RuntimeInteractionTypes.RunState.SETUP) 返回 SETUP；正常情况下 placed_tokens_by_id 清空且 prototype_token_remaining 恢复为 PROTOTYPE_TOKEN_TOTAL。
+## [br]状态变化：is_level_completed 设为 false，runtime_moves_used 清零，运行状态通过 _run_state_controller.reset_to_setup() 返回 SETUP；正常情况下 placed_tokens_by_id 清空且 prototype_token_remaining 恢复为 PROTOTYPE_TOKEN_TOTAL。
 ## [br]边界条件：reset_runtime() 是 R 和脚本直接调用的唯一完整重置入口，不依赖 _input 预先取消拖拽；拖动已放置机关时先恢复正式节点原格和可见性，再统一注销占用并删除节点，避免隐藏节点遗留；只清理玩家放置机关，不调用 occupancy.clear()，不删除发射器、墙体、水晶或未来静态/预置机关。正常情况下 R 将全部玩家机关退回库存；若检测到 OccupancyRegistry 残留且无法通过公共 unregister 接口确认清理，相关机关会保留在场上且不会重复退回库存，以避免制造重复机关。
 func reset_runtime() -> void:
 	# R完整重置首先取消拖拽：库存预览只删除预览；已放置机关先恢复旧格、旧世界位置和可见性，随后再由玩家机关清理流程统一删除。
@@ -660,7 +686,10 @@ func reset_runtime() -> void:
 	if not all_player_tokens_returned:
 		push_error("CoreLoopPrototype: R重置玩家机关清理未完全成功，部分机关已保留在场上且未退回库存。")
 
-	_set_run_state(_RuntimeInteractionTypes.RunState.SETUP)
+	# 状态回到 SETUP 必须位于完整重置的收尾阶段：在玩家机关清理、库存恢复与 UI 刷新之后才请求 Controller 回归 SETUP。
+	# reset_to_setup 幂等：已在 SETUP 时不发信号；非 SETUP 时先更新状态再发 state_changed，由 _on_run_state_changed 刷新机关栏 UI。
+	# 机关栏 UI 不依赖该信号唯一触发——_return_all_player_placed_tokens_to_inventory 内部已先行调用 _update_inventory_ui()。
+	_run_state_controller.reset_to_setup()
 	_update_runtime_move_ui()
 
 	if OS.is_debug_build():
@@ -671,7 +700,7 @@ func reset_runtime() -> void:
 ## [br]本函数无参数；输入事实来自 placed_tokens_by_id 中登记的玩家 PlaceableToken 映射。
 ## [br]返回 true 表示全部玩家机关均确认完成占用注销、节点删除和映射移除；返回 false 表示至少一个玩家机关因为 OccupancyRegistry 仍残留引用而未被清理和退回库存。
 ## [br]副作用：复制玩家 mechanism_id 快照，按 ID 逐个调用 occupancy.unregister() 注销玩家机关占用；成功注销或确认 registry 已无残留引用时，安全 queue_free() 对应玩家机关节点并移除 placed_tokens_by_id 记录；最终按仍留在 placed_tokens_by_id 中的未清理数量计算 prototype_token_remaining，并刷新机关栏 UI。
-## [br]状态变化：只修改可确认清理的玩家机关映射、玩家机关节点、玩家机关 OccupancyRegistry 占用和库存数量；不修改发射器、墙体、水晶、LightPathLayer、current_run_state、runtime_moves_used、pulse_generation 或完成状态。
+## [br]状态变化：只修改可确认清理的玩家机关映射、玩家机关节点、玩家机关 OccupancyRegistry 占用和库存数量；不修改发射器、墙体、水晶、LightPathLayer、运行状态、runtime_moves_used、pulse_generation 或完成状态。
 ## [br]异常处理：unregister 返回 false 且 registry 已无该 ID 任一方向引用时，说明占用可能已提前缺失，调试构建输出 warning 后继续删除节点和回库；unregister 返回 false 且 registry 仍有该 ID 任一方向残留引用时，失败关闭：输出错误、保留节点、保留 placed_tokens_by_id 记录、不退回库存，并继续处理其他玩家机关。节点失效但占用已清理时输出错误、移除映射并恢复对应库存；节点失效且占用仍残留时不试图 queue_free，也不回库，保留异常事实供一致性断言暴露。
 ## [br]边界条件：必须先使用 ID 快照，因为遍历 Dictionary 时直接 erase 会改变迭代中的集合，可能导致漏删或未定义行为；不得调用 occupancy.clear()，不得强制修改 OccupancyRegistry 内部索引修复异常，因为未来 OccupancyRegistry 可能包含关卡预置机关或静态机关占用，完整 R 只允许清理 placed_tokens_by_id 登记的玩家放置机关。
 func _return_all_player_placed_tokens_to_inventory() -> bool:
@@ -831,7 +860,7 @@ func all_required_crystals_activated() -> bool:
 ## 根据当前水晶状态更新关卡完成状态和完成标签。
 ## [br]本函数无参数、无返回值。
 ## [br]副作用：当全部必需水晶在当前脉冲中已激活时立即显示 CompleteLabel。
-## [br]状态变化：首次满足条件时将 is_level_completed 设为 true；current_run_state 仍保持 PULSE_ACTIVE，直到脉冲视觉结束后进入 COMPLETED。
+## [br]状态变化：首次满足条件时将 is_level_completed 设为 true；运行状态仍保持 PULSE_ACTIVE，直到脉冲视觉结束后进入 COMPLETED。
 ## [br]边界条件：普通独立水晶和通关结果都保持到 R；只有 R 重置会清除完成状态和隐藏标签。
 func update_completion_state() -> void:
 	if is_level_completed:
@@ -897,7 +926,7 @@ func _try_toggle_mirror_at_mouse() -> void:
 		return
 	if not can_edit_configuration():
 		if OS.is_debug_build():
-			print_debug("CoreLoopPrototype: 当前运行状态锁定内部配置，忽略镜面右键切换：%s。" % [current_run_state])
+			print_debug("CoreLoopPrototype: 当前运行状态锁定内部配置，忽略镜面右键切换：%s。" % [_get_current_run_state()])
 		return
 
 	var target_cell: Vector2i = _GridCoordinateRules.world_to_cell(get_global_mouse_position())
@@ -927,10 +956,10 @@ func _try_begin_drag() -> void:
 	var viewport_mouse_position: Vector2 = get_viewport().get_mouse_position()
 	if _is_mouse_over_prototype_slot(viewport_mouse_position):
 		# 库存拿取权限：所有非 COMPLETED 状态允许从机关栏拿取新机关（用户最终权限）。
-		if prototype_token_remaining > 0 and _RuntimeMoveRules.can_take_from_inventory_for_state(current_run_state):
+		if prototype_token_remaining > 0 and _RuntimeMoveRules.can_take_from_inventory_for_state(_get_current_run_state()):
 			_begin_inventory_drag()
-		elif OS.is_debug_build() and not _RuntimeMoveRules.can_take_from_inventory_for_state(current_run_state):
-			print_debug("CoreLoopPrototype: 当前运行状态禁止从机关栏拿取：%s。" % [current_run_state])
+		elif OS.is_debug_build() and not _RuntimeMoveRules.can_take_from_inventory_for_state(_get_current_run_state()):
+			print_debug("CoreLoopPrototype: 当前运行状态禁止从机关栏拿取：%s。" % [_get_current_run_state()])
 		return
 	if _is_mouse_over_inventory_bar(viewport_mouse_position):
 		return
@@ -944,9 +973,9 @@ func _try_begin_drag() -> void:
 	# 已放置机关拖起权限：所有非 COMPLETED 状态允许拖起（与跨格提交权限分离）。
 	# 剩余次数为 0 时仍允许拖起，以便回收或取消；跨格提交由 _commit_placed_drag_or_cancel 的二次校验拒绝。
 	# 失败时不创建预览、不隐藏正式机关、不改占用与库存。
-	if not _RuntimeMoveRules.can_begin_placed_drag(current_run_state):
+	if not _RuntimeMoveRules.can_begin_placed_drag(_get_current_run_state()):
 		if OS.is_debug_build():
-			print_debug("CoreLoopPrototype: 当前运行状态不允许拖起已放置机关：%s。" % [current_run_state])
+			print_debug("CoreLoopPrototype: 当前运行状态不允许拖起已放置机关：%s。" % [_get_current_run_state()])
 		return
 	_begin_placed_drag(mechanism_id, target_cell)
 
@@ -1019,7 +1048,7 @@ func _update_drag_preview_from_mouse() -> void:
 	var spatially_valid: bool = _is_valid_prototype_placement_cell(_drag_preview_cell, _drag_mechanism_id)
 	var is_valid: bool = _RuntimeMoveRules.is_world_drop_preview_valid(
 		_drag_source,
-		current_run_state,
+		_get_current_run_state(),
 		get_runtime_moves_remaining(),
 		_drag_original_cell,
 		_drag_preview_cell,
@@ -1048,11 +1077,11 @@ func _finish_drag_at_mouse() -> void:
 	if _drag_source == _RuntimeInteractionTypes.DragSource.PLACED:
 		if is_released_over_inventory:
 			# 回收在所有非 COMPLETED 状态允许（用户最终权限）；COMPLETED 释放到机关栏改为安全取消，保留原占用与原位置，不增库存、不扣次数。
-			if _RuntimeMoveRules.can_recycle_placed_token_for_state(current_run_state):
+			if _RuntimeMoveRules.can_recycle_placed_token_for_state(_get_current_run_state()):
 				_recycle_dragged_placed_token()
 			else:
 				if OS.is_debug_build():
-					print_debug("CoreLoopPrototype: 当前运行状态禁止回收，改为取消拖拽并恢复原机关：%s。" % [current_run_state])
+					print_debug("CoreLoopPrototype: 当前运行状态禁止回收，改为取消拖拽并恢复原机关：%s。" % [_get_current_run_state()])
 				_cancel_current_drag()
 			return
 		_commit_placed_drag_or_cancel()
@@ -1064,9 +1093,9 @@ func _finish_drag_at_mouse() -> void:
 ## [br]边界条件：松到非法格时取消拖拽，库存仍为 1 且 OccupancyRegistry 不变化；提交失败时也按取消处理。正式首次放置前再次检查 _can_take_from_inventory_for_state：拖拽中 Space 会被忽略、R 会取消，但本处仍防御性校验，若当前为 COMPLETED（或未知状态）则取消拖拽，不扣库存、不创建正式机关、不登记占用、不改 placed_tokens_by_id。运行期首次放置不消耗 runtime_moves_used，只影响下一次发射。
 func _commit_inventory_drag_or_cancel() -> void:
 	# 提交前防御性状态校验：首次放置在所有非 COMPLETED 状态允许；COMPLETED/未知状态取消拖拽，不扣库存、不创建正式机关。
-	if not _RuntimeMoveRules.can_take_from_inventory_for_state(current_run_state):
+	if not _RuntimeMoveRules.can_take_from_inventory_for_state(_get_current_run_state()):
 		if OS.is_debug_build():
-			print_debug("CoreLoopPrototype: 当前运行状态禁止首次放置，取消库存拖拽：%s。" % [current_run_state])
+			print_debug("CoreLoopPrototype: 当前运行状态禁止首次放置，取消库存拖拽：%s。" % [_get_current_run_state()])
 		_cancel_current_drag()
 		return
 	if not _is_valid_prototype_placement_cell(_drag_preview_cell, &""):
@@ -1126,9 +1155,9 @@ func _commit_placed_drag_or_cancel() -> void:
 	if not _is_valid_prototype_placement_cell(to_cell, mechanism_id):
 		_cancel_current_drag()
 		return
-	if not _RuntimeMoveRules.can_commit_placed_move(current_run_state, get_runtime_moves_remaining(), from_cell, to_cell):
+	if not _RuntimeMoveRules.can_commit_placed_move(_get_current_run_state(), get_runtime_moves_remaining(), from_cell, to_cell):
 		if OS.is_debug_build():
-			print_debug("CoreLoopPrototype: 提交前二次校验拒绝移动：%s remaining=%d %s->%s。" % [current_run_state, get_runtime_moves_remaining(), from_cell, to_cell])
+			print_debug("CoreLoopPrototype: 提交前二次校验拒绝移动：%s remaining=%d %s->%s。" % [_get_current_run_state(), get_runtime_moves_remaining(), from_cell, to_cell])
 		_cancel_current_drag()
 		return
 
@@ -1157,7 +1186,7 @@ func _commit_placed_drag_or_cancel() -> void:
 	_assert_inventory_consistency()
 	# 运行期移动扣次：占用原子更新与节点提交都已成功后才扣除一次；同一次成功移动只扣一次。
 	# SETUP 跨格移动不计次；非法、原格、取消、回滚与新占用登记失败均不会到达本处。
-	if _RuntimeMoveRules.should_count_runtime_move(current_run_state, from_cell, to_cell):
+	if _RuntimeMoveRules.should_count_runtime_move(_get_current_run_state(), from_cell, to_cell):
 		runtime_moves_used += 1
 		_update_runtime_move_ui()
 
@@ -1171,9 +1200,9 @@ func _recycle_dragged_placed_token() -> void:
 		_cancel_current_drag()
 		return
 	# 防御性权限检查：回收在所有非 COMPLETED 状态允许；COMPLETED/未知状态即使直接调用本函数也安全取消，不增库存。
-	if not _RuntimeMoveRules.can_recycle_placed_token_for_state(current_run_state):
+	if not _RuntimeMoveRules.can_recycle_placed_token_for_state(_get_current_run_state()):
 		if OS.is_debug_build():
-			print_debug("CoreLoopPrototype: 当前运行状态禁止回收，安全取消并恢复原机关：%s。" % [current_run_state])
+			print_debug("CoreLoopPrototype: 当前运行状态禁止回收，安全取消并恢复原机关：%s。" % [_get_current_run_state()])
 		_cancel_current_drag()
 		return
 
@@ -1348,7 +1377,7 @@ func _update_inventory_ui() -> void:
 	# 拿取可用性：库存大于 0 且当前运行状态允许从机关栏拿取（非 COMPLETED）。
 	var is_available: bool = (
 		prototype_token_remaining > 0
-		and _RuntimeMoveRules.can_take_from_inventory_for_state(current_run_state)
+		and _RuntimeMoveRules.can_take_from_inventory_for_state(_get_current_run_state())
 	)
 	prototype_token_slot.refresh_slot(
 		prototype_token_remaining,

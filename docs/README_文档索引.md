@@ -64,9 +64,10 @@
 ## 5. 当前下一开发方向
 
 - Diagnostics foundation 已完成并合并 `main`；
-- 当前下一阶段是“机关公共接口与最小模板”；
-- 本阶段先完成 Diagnostics 收尾和文档同步；
-- 尚未开始 GridPlacedObject、READY_TO_FIRE、开始运行按钮、FixedEmitter、光线拆分或光粒。
+- 阶段 02A：运行状态所有权已迁出核心，`RunStateController`（`gameplay/interaction/run_state_controller.gd`，`RefCounted`）已实现并接入 `core_loop_prototype`，当前仍为四态，不含 `READY_TO_FIRE`，也不代表完整核心解耦完成；
+- 当前下一阶段是 02B `LevelWorldQuery` / `LightWorldQuery` 与只读世界边界；
+- 机关公共接口与最小模板顺延为 02C；
+- 尚未开始 `GridPlacedObject`、`READY_TO_FIRE`、开始运行按钮、`FixedEmitter`、光线拆分或光粒。
 
 ---
 

@@ -5,7 +5,7 @@
 > 当前仓库：`light-speed-singularity`
 > 更新日期：2026 年 7 月 26 日
 >
-> 说明：本文示例围绕当前阶段“机关公共接口与最小模板”。完整统一光运行架构、FixedEmitter、光粒等仍为长期目标，不在当前立即任务示例中。
+> 说明：本文示例围绕当前阶段 02B `LevelWorldQuery` / `LightWorldQuery` 与只读世界边界。阶段 02A 运行状态迁出已在 `refactor/kud-run-state-controller` 完成；机关公共接口与最小模板顺延为 02C。完整统一光运行架构、FixedEmitter、光粒等仍为长期目标，不在当前立即任务示例中。
 
 ## 1. 分支管理原则
 
@@ -135,7 +135,7 @@ docs/zhang-mechanism-art-requirements
 > 状态说明（适用于 §6–§8 全部职责表示例）：
 > - 以下分支名属于长期或未来阶段参考命名库；
 > - 不代表当前下一批任务；
-> - 当前阶段推荐分支以 §13“机关公共接口与最小模板”为准；
+> - 当前阶段推荐分支以 §13“02B LevelWorldQuery / LightWorldQuery”为准；
 > - 光粒、分光器、FixedEmitter、完整统一光运行架构当前均不在立即实施范围。
 
 ## 6.1 职责范围
@@ -460,8 +460,9 @@ test/zhang-mechanism-template-visual
 
 历史曾存在旧分支示例（如 `feat/prototype-light-loop`），现已失效。当前仓库状态：
 
-- 本地与远程只剩 `main`；
+- `main` 为稳定主分支；
 - Diagnostics 已通过 PR #16 合并，对应任务分支已删除；
+- 阶段 02A 运行状态迁出在 `refactor/kud-run-state-controller` 完成（尚未合并 `main`）；
 - 新任务一律从最新 `main` 创建新分支。
 
 旧分支重命名步骤不再适用，不在此提供 `git branch -m` 等命令。如需对历史分支做整理，由用户人工执行；AI 不执行 Git 写操作。
@@ -479,7 +480,7 @@ git pull origin main
 
 陈俊贤示例：
 ```bash
-git switch -c feat/kud-mechanism-interface
+git switch -c refactor/kud-level-world-query
 ```
 
 潘陈俣示例：
@@ -541,28 +542,15 @@ git push origin --delete feat/kud-mechanism-interface
 
 # 13. 推荐的下一批分支
 
-Diagnostics foundation 已合并入 `main`。当前下一阶段为“机关公共接口与最小模板”，推荐三人分别从最新 `main` 创建：
+Diagnostics foundation 已合并入 `main`。阶段 02A 运行状态迁出已在 `refactor/kud-run-state-controller` 完成（`RunStateController` 接入 `core_loop_prototype`，四态不变，不含 `READY_TO_FIRE`）。当前下一阶段为 02B `LevelWorldQuery` / `LightWorldQuery` 与只读世界边界，建议陈俊贤从最新 `main` 创建：
 
-陈俊贤：
 ```text
-feat/kud-mechanism-interface
-refactor/kud-single-mirror-contract
-feat/kud-mechanism-template
+refactor/kud-level-world-query
 ```
 
-潘陈俣：
-```text
-feat/pan-single-mirror-rule-adapter
-test/pan-mechanism-contract-cases
-```
+机关公共接口与最小模板顺延为 02C，相关分支（如 `feat/kud-mechanism-interface`、`refactor/kud-single-mirror-contract`、`feat/pan-single-mirror-rule-adapter`、`test/zhang-mechanism-template-visual`）在 02B 合并后再从最新 `main` 创建，不在当前立即任务示例中展开。
 
-张梓涵：
-```text
-test/zhang-mechanism-template-visual
-docs/zhang-mechanism-art-requirements
-```
-
-方向围绕：公共机关接口、现有单格镜契约接入、最小机关模板、玩法规则测试、视觉/Profile 与编辑器侧验证。
+方向围绕：只读世界查询边界、传播模块与 TileMapLayer/占用表/目标节点的隔离；02C 再回到公共机关接口、现有单格镜契约接入、最小机关模板、玩法规则测试、视觉/Profile 与编辑器侧验证。
 
 不要把完整关卡制作、FixedEmitter、光粒或完整统一光运行架构写成当前立即任务。三个人都从最新的 `main` 创建，不要从彼此尚未完成的分支创建。
 
