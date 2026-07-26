@@ -22,7 +22,7 @@ extends Node2D
 
 
 # 用 preload 引用光线路段视觉资源脚本，作为 visual_profile 与方法参数的静态类型。
-const _LightSegmentVisualProfile: GDScript = preload("res://gameplay/visuals/light_segment_visual_profile.gd")
+const _LightSegmentVisualProfile: GDScript = preload("res://gameplay/visuals/light_segments/light_segment_visual_profile.gd")
 
 ## 该光线路段的视觉资源集合。可为空；为空或对应方向纹理为空时回退到黄色占位块。
 @export var visual_profile: _LightSegmentVisualProfile

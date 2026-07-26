@@ -1,6 +1,6 @@
 [gd_scene format=3 uid="uid://blsegview0001"]
 
-[ext_resource type="Script" path="res://gameplay/visuals/light_segment_view.gd" id="1_view"]
+[ext_resource type="Script" path="res://gameplay/visuals/light_segments/light_segment_view.gd" id="1_view"]
 
 [node name="LightSegmentView" type="Node2D"]
 script = ExtResource("1_view")

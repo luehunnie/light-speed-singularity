@@ -1,6 +1,6 @@
 [gd_scene load_steps=2 format=3 uid="uid://dbjvvisualview0"]
 
-[ext_resource type="Script" path="res://gameplay/visuals/object_visual_view.gd" id="1_view"]
+[ext_resource type="Script" path="res://gameplay/visuals/object_visuals/object_visual_view.gd" id="1_view"]
 
 [node name="ObjectVisualView" type="Node2D"]
 script = ExtResource("1_view")

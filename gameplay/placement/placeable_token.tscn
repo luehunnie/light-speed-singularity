@@ -1,7 +1,7 @@
 [gd_scene load_steps=3 format=3 uid="uid://dwpm8a3c8m74n"]
 
 [ext_resource type="Script" path="res://gameplay/placement/placeable_token.gd" id="1_token"]
-[ext_resource type="PackedScene" uid="uid://dbjvvisualview0" path="res://gameplay/visuals/object_visual_view.tscn" id="2_view"]
+[ext_resource type="PackedScene" uid="uid://dbjvvisualview0" path="res://gameplay/visuals/object_visuals/object_visual_view.tscn" id="2_view"]
 
 [node name="PlaceableToken" type="Node2D"]
 script = ExtResource("1_token")
