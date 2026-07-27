@@ -1,3 +1,6 @@
+# @tool：使本数据资源可在编辑器中实例化与调用，供 @tool 视图在编辑器内直接解析纹理。
+# 仅数据资源，不承担视图显示或玩法行为；现有 state_id→default_state_id→null 回退边界不变。
+@tool
 class_name ObjectVisualProfile
 extends Resource
 
