@@ -551,7 +551,7 @@ refactor/kud-level-validator
 
 机关公共接口与最小模板、`READY_TO_FIRE` 与开始运行按钮、统一 `EmissionRequest` / `LightRuntimeCoordinator` / 光粒等仍为长期目标，相关分支在对应方向启动时再从最新 `main` 创建，不在当前立即任务示例中展开。
 
-方向围绕：`GridPlacedObject` 与方法 A 落地（方法 B 延后）、`LevelValidator` 只读校验、`READY_TO_FIRE` 运行状态门、统一光运行架构与光粒。
+方向围绕：`GridPlacedObject` 与方法 A、方法 B 落地（本阶段 MUST 同时完成方法 A 和方法 B，方法 B 不再延期）、`LevelValidator` 只读校验、`READY_TO_FIRE` 运行状态门、统一光运行架构与光粒。
 
 不要把完整关卡制作、光粒或完整统一光运行架构写成当前立即任务。三个人都从最新的 `main` 创建，不要从彼此尚未完成的分支创建。
 
