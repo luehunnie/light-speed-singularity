@@ -1,3 +1,4 @@
+@tool
 class_name ObjectVisualView
 extends Node2D
 
@@ -26,7 +27,7 @@ extends Node2D
 ## - visual_profile 为空属于合法状态：不崩溃、Artwork 纹理置空、只输出一次受控警告（§9.5 / §23.1）。
 ## - 查询结果为空时 Artwork.texture 置为 null，不保留上一个状态的旧纹理（§6.3）。
 ## - 本组件不修改 visual_profile，不根据文件名推断状态，不 preload 任何 PNG（§6.5–§6.8）。
-## - 不使用 @tool：编辑器内 Inspector 改动不会即时同步到节点视觉，运行期刷新由公共方法触发（eng-review D5）。
+## - @tool 安全：可被 @tool 配置节点在 _ready 前后随时驱动；setter 早于 _ready 时只保存状态不访问子节点，_ready 后统一刷新（D3C-0.5）。
 
 
 ## 显示模式：决定 refresh_visual() 从 profile 取世界纹理还是拖拽纹理。
@@ -57,17 +58,21 @@ enum FeedbackState {
 @export var initial_state_id: StringName = &"default"
 
 
+# 四个固定视觉子节点：_ready() 前保持 null，由 _ready() 用 get_node_or_null 统一缓存。
+# setter 可早于 _ready 调用：此时只保存配置状态、不访问子节点，避免编辑器中空引用。
 # 阴影 ColorRect 子节点，纯色阴影，本组件不动态修改其颜色。
-@onready var _shadow: ColorRect = $Shadow
+var _shadow: ColorRect = null
 # 美术 TextureRect 子节点，承载正式或拖拽纹理。
-@onready var _artwork: TextureRect = $Artwork
+var _artwork: TextureRect = null
 # 反馈覆盖 ColorRect 子节点，只负责合法 / 非法放置反馈；默认隐藏。
-@onready var _feedback_overlay: ColorRect = $FeedbackOverlay
+var _feedback_overlay: ColorRect = null
 # 调试标记容器 Node2D 子节点，供后续镜面方向线等调试视觉使用；本批保持可见但内容为空。
-@onready var _debug_mark: Node2D = $DebugMark
+var _debug_mark: Node2D = null
 
 # 当前内容状态 ID，由 set_content_state() 修改，是纹理选取的第一条轴。
 var _content_state_id: StringName = &"default"
+# 标记 _ready 前是否已显式设置过内容状态；为真时 _ready 不再用 initial_state_id 覆盖，保留早到 setter 的状态。
+var _content_state_overridden: bool = false
 # 当前显示模式，由 set_display_mode() 修改，是纹理选取的第二条轴。
 var _display_mode: DisplayMode = DisplayMode.WORLD
 # 当前反馈状态，由 set_feedback() 修改，独立于纹理，只影响覆盖层与 Artwork 调制。
@@ -90,22 +95,27 @@ const _DISABLED_MODULATE: Color = Color(0.45, 0.45, 0.45, 0.6)
 const _DEFAULT_ARTWORK_MODULATE: Color = Color.WHITE
 
 
-## 初始化内容状态、显示模式与反馈，并刷新一次视觉。
+## 缓存视觉子节点、应用初始内容状态并刷新一次视觉。
 ## [br]本函数无参数、无返回值。
-## [br]副作用：写入 _content_state_id / _display_mode / _feedback_state 为初始值，调用 refresh_visual()。
+## [br]副作用：用 get_node_or_null 缓存四个子节点；仅在 _ready 前未显式设置内容状态时写入 _content_state_id = initial_state_id（显示模式与反馈状态不重置，保留早到 setter 值）；调用 refresh_visual()。
 ## [br]边界条件：visual_profile 为空时场景仍可正常加载，refresh_visual() 会安全置空纹理并只警告一次；
 ## [br]不在 _ready() 中扫描文件、加载具体 PNG 或读取玩法状态与输入；
 ## [br]Artwork 等子节点缺失属于场景结构错误，由下方断言明确暴露而非静默忽略。
 func _ready() -> void:
+	# 统一缓存四个固定子节点：@tool 下编辑器与运行时同一 _ready 入口，缓存后子节点方可安全访问。
+	_shadow = get_node_or_null("Shadow")
+	_artwork = get_node_or_null("Artwork")
+	_feedback_overlay = get_node_or_null("FeedbackOverlay")
+	_debug_mark = get_node_or_null("DebugMark")
 	# 场景结构断言：四个固定子节点必须存在，缺失即场景配置错误，立即在 debug 下暴露。
 	assert(_shadow != null, "ObjectVisualView: 场景缺少 Shadow 子节点。")
 	assert(_artwork != null, "ObjectVisualView: 场景缺少 Artwork 子节点。")
 	assert(_feedback_overlay != null, "ObjectVisualView: 场景缺少 FeedbackOverlay 子节点。")
 	assert(_debug_mark != null, "ObjectVisualView: 场景缺少 DebugMark 子节点。")
-
-	_content_state_id = initial_state_id
-	_display_mode = DisplayMode.WORLD
-	_feedback_state = FeedbackState.NONE
+	# 仅在 _ready 前未显式设置内容状态时采用 initial_state_id；早到 setter 的状态保留。
+	# 显示模式与反馈状态不在此重置，_ready 前的 setter 值自然延续到统一刷新。
+	if not _content_state_overridden:
+		_content_state_id = initial_state_id
 	refresh_visual()
 
 
@@ -129,6 +139,7 @@ func set_profile(next_profile: ObjectVisualProfile) -> void:
 ## [br]不校验 state_id 是否存在（由 profile 查询回退处理）。
 func set_content_state(state_id: StringName) -> void:
 	_content_state_id = state_id
+	_content_state_overridden = true
 	refresh_visual()
 
 
@@ -188,6 +199,9 @@ func set_visual_visible(next_visible: bool) -> void:
 ## [br]边界条件：visual_profile 为空时纹理置 null 并只警告一次；查询结果为空时不保留旧纹理；
 ## [br]本函数不修改 visual_profile，不在每帧调用（仅由状态变化或 set_profile 触发）。
 func refresh_visual() -> void:
+	# 子节点未就绪（_ready 前或场景结构异常）时只保存状态、安全返回，不触碰子节点。
+	if _artwork == null:
+		return
 	var texture: Texture2D = _resolve_texture()
 	# 查询为空时直接置 null，不保留上一个状态的旧纹理。
 	_artwork.texture = texture
@@ -205,9 +219,19 @@ func refresh_visual() -> void:
 func _resolve_texture() -> Texture2D:
 	if visual_profile == null:
 		return null
+	# 编辑器中 profile 脚本若非 @tool，其实例为占位、方法不可调用（Godot 限制）；
+	# 此时安全跳过纹理取用，反馈覆盖层仍正常刷新；运行时与脚本就绪后正常取纹理，不吞掉运行时刷新。
+	if Engine.is_editor_hint() and not _is_profile_callable():
+		return null
 	if _display_mode == DisplayMode.DRAG_PREVIEW:
 		return visual_profile.get_drag_texture(_content_state_id)
 	return visual_profile.get_world_texture(_content_state_id)
+
+
+## 判断 visual_profile 的脚本在当前上下文是否可调用（非 @tool 脚本在编辑器中不可实例化、方法为占位）。
+func _is_profile_callable() -> bool:
+	var profile_script: Script = visual_profile.get_script()
+	return profile_script != null and profile_script.can_instantiate()
 
 
 ## 按当前反馈状态设置 Artwork 调制与 FeedbackOverlay 覆盖层。
@@ -216,6 +240,9 @@ func _resolve_texture() -> Texture2D:
 ## [br]边界条件：VALID / INVALID 不直接染色 Artwork，而是通过半透明覆盖层表达；DISABLED 隐藏覆盖层并对 Artwork 灰调；
 ## [br]NONE 恢复 Artwork 原色并隐藏覆盖层；本函数不改变纹理、内容状态、显示模式或反馈状态本身。
 func _apply_feedback_visual() -> void:
+	# 子节点未就绪时只保存反馈状态、安全返回；_ready 后由 refresh_visual 统一重放。
+	if _artwork == null or _feedback_overlay == null:
+		return
 	match _feedback_state:
 		FeedbackState.VALID:
 			_artwork.self_modulate = _DEFAULT_ARTWORK_MODULATE
