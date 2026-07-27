@@ -66,7 +66,7 @@
 - Diagnostics foundation 已完成并合并 `main`；
 - D3 运行编排解耦冲刺已在 `refactor/kud-runtime-orchestration` 基本完成：运行状态、世界查询、运行期编排、交互/放置/库存/目标/视觉/水晶身份/Diagnostics 编排均已迁出核心，`core_loop_prototype.gd` 已降至约 480 物理行；当前仍为四态，不含 `READY_TO_FIRE`；
 - 已实现模块：`RunStateController`、`LevelRuntimeController`、`LevelWorldQuery`、`LightWorldQuery`、`RayExecutionModule`、`RayMechanismAdapter`、`FireRequest`、`LightVisualController`、`FixedEmitter`、`LevelObjectRegistry`、`ObjectiveController`、`InventoryController`、`PlacementController`、`DragFlowController`、`DragContext`、`PlayerInteractionController`、`StartupSelfCheckCoordinator`；
-- 尚未开始 `GridPlacedObject`（方法 A 为正式采用方向，代码未实现；方法 B 本阶段 MUST 实现，当前未实现，不再延期）、`LevelValidator`、统一 `EmissionRequest`/`LightRuntimeCoordinator`/光粒、`READY_TO_FIRE`、开始运行按钮、真实 `RuntimeSnapshot` 采样。
+- 尚未开始 `GridPlacedObject` 位置契约重构（D3A，当前 D1 旧 cell→position，待重构：position 为场景编辑事实，cell 由 position 派生）、Godot 原生 64 格拖动吸附（不另建吸附插件）、`EmitterConfigNode`（D3B）、`EmissionPreview` 与真实光线接线（D3C）、两正式插件（D7A 美术配置插件 / D7B 关卡工具插件）、`LevelValidator`、统一 `EmissionRequest`/`LightRuntimeCoordinator`/光粒、`READY_TO_FIRE`、开始运行按钮、真实 `RuntimeSnapshot` 采样。
 
 ---
 

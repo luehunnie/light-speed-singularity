@@ -5,7 +5,7 @@
 > 当前仓库：`light-speed-singularity`
 > 更新日期：2026 年 7 月 27 日
 >
-> 说明：本文示例为长期命名参考库。D3 运行编排解耦冲刺在 `refactor/kud-runtime-orchestration` 基本完成（运行状态、世界查询、运行期编排、交互/放置/库存/目标/视觉/水晶身份/Diagnostics 编排均已迁出核心）。后续方向（`GridPlacedObject` 与方法 A、`LevelValidator`、`READY_TO_FIRE`、统一光运行架构、光粒等）仍为长期目标，不在当前立即任务示例中。
+> 说明：本文示例为长期命名参考库。D3 运行编排解耦冲刺在 `refactor/kud-runtime-orchestration` 基本完成（运行状态、世界查询、运行期编排、交互/放置/库存/目标/视觉/水晶身份/Diagnostics 编排均已迁出核心）。后续方向（`GridPlacedObject` 位置契约重构（D3A）、`LevelValidator`、`READY_TO_FIRE`、统一光运行架构、光粒等）仍为长期目标，不在当前立即任务示例中。
 
 ## 1. 分支管理原则
 
@@ -136,7 +136,7 @@ docs/zhang-mechanism-art-requirements
 > - 以下分支名属于长期或未来阶段参考命名库；
 > - 不代表当前下一批任务；
 > - 当前已完成的运行编排解耦在 `refactor/kud-runtime-orchestration`；
-> - 光粒、分光器、`GridPlacedObject`、`LevelValidator`、完整统一光运行架构当前均不在立即实施范围。
+> - 光粒、分光器、`GridPlacedObject` 位置契约重构（D3A）、`LevelValidator`、完整统一光运行架构当前均不在立即实施范围。
 
 ## 6.1 职责范围
 
@@ -551,7 +551,7 @@ refactor/kud-level-validator
 
 机关公共接口与最小模板、`READY_TO_FIRE` 与开始运行按钮、统一 `EmissionRequest` / `LightRuntimeCoordinator` / 光粒等仍为长期目标，相关分支在对应方向启动时再从最新 `main` 创建，不在当前立即任务示例中展开。
 
-方向围绕：`GridPlacedObject` 与方法 A、方法 B 落地（本阶段 MUST 同时完成方法 A 和方法 B，方法 B 不再延期）、`LevelValidator` 只读校验、`READY_TO_FIRE` 运行状态门、统一光运行架构与光粒。
+方向围绕：`GridPlacedObject` 位置契约重构（D3A）与 D3A–D8 阶段、`LevelValidator` 只读校验、`READY_TO_FIRE` 运行状态门、统一光运行架构与光粒。
 
 不要把完整关卡制作、光粒或完整统一光运行架构写成当前立即任务。三个人都从最新的 `main` 创建，不要从彼此尚未完成的分支创建。
 

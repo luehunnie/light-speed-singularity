@@ -5,7 +5,7 @@
 > 适用角色：美术与关卡制作人员
 > 适用环境：Godot 4.6.1 Standard
 > 项目路径：`E:\godot_project\light-speed-singularity`
-> 文档定位：本指南同时包含**当前可操作流程**和**未来目标流程**。当前只能按已实现的视觉接口操作；未实现的目标流程（`GridPlacedObject`、方法 A 代码、方法 B、完整 `LevelObjectRegistry` 扫描、`LevelValidator`、完整关卡模板、`FixedEmitter` 编辑流程与视觉 Profile、`READY_TO_FIRE`、开始运行按钮、光粒编辑）**不得作为张梓涵当前的验收前置条件**。
+> 文档定位：本指南同时包含**当前可操作流程**和**未来目标流程**。当前只能按已实现的视觉接口操作；未实现的目标流程（`GridPlacedObject` 位置契约重构（D3A，待重构）、`EmitterConfigNode`、`EmissionPreview`、两正式插件 `Light Speed Art Profile Editor` / `Light Speed Level Tools`（D7A/D7B）、`LevelValidator`（D6）、完整关卡模板、`FixedEmitter` 编辑流程与视觉 Profile、`READY_TO_FIRE`、开始运行按钮、光粒编辑）**不得作为张梓涵当前的验收前置条件**。
 
 ---
 
@@ -14,7 +14,7 @@
 本指南区分两类内容：
 
 - **当前可用**：基于已实现视觉接口（`VisualStateTexture`、`ObjectVisualProfile`、`ObjectVisualView`、`InventorySlotView`、`LightSegmentVisualProfile`、`LightSegmentView`）和现有原型场景的流程，张梓涵现在就可以执行；
-- **目标 / 未实现**：`GridPlacedObject`、方法 A 代码（方法 A 为正式采用方向，`@tool` setter 尚未实现）、方法 B、完整 `LevelObjectRegistry` 扫描、`LevelValidator`、完整正式关卡模板、`FixedEmitter` 编辑流程与视觉 Profile、`READY_TO_FIRE`、开始运行按钮、光粒编辑与验收等，属于未来目标，当前不具备可依赖的代码或字段。
+- **目标 / 未实现**：`GridPlacedObject` 位置契约重构（D3A，待重构；当前仍为 D1 旧 cell→position）、`EmitterConfigNode`、`EmissionPreview`、两正式插件 `Light Speed Art Profile Editor` / `Light Speed Level Tools`（D7A/D7B）、`LevelValidator`（D6）、完整正式关卡模板、`FixedEmitter` 编辑流程与视觉 Profile、`READY_TO_FIRE`、开始运行按钮、光粒编辑与验收等，属于未来目标，当前不具备可依赖的代码或字段。
 
 契约存在不等于代码已经实现。已实现视觉接口的路径、`class_name`、基类和公开方法以真实代码为准（详见《永久视觉与关卡编辑接口设计 v1.1》§7–§10、§14.4）。
 
@@ -29,13 +29,12 @@
 | 64×64、Nearest、透明背景、锚点检查 | 当前可用 | 素材规范 |
 | 光线四类片段视觉 | 当前可用 | `LightSegmentVisualProfile` 四方向纹理 |
 | 编辑器问题反馈 | 当前可用 | 按本文 §31 格式反馈 |
-| `GridPlacedObject` | 目标 / 未实现 | 统一固定对象基础 |
-| 方法 A：Inspector 改 `cell` 同步位置 | 正式采用方向 / 代码未实现 | `@tool` setter 尚未落地，当前不会自动同步 |
-| 方法 B：2D 拖动吸附并回写 `cell` | 本阶段 MUST 实现 / 当前未实现 | 方法 B 不再延期，本阶段必须落地；落地前当前仍不会自动吸附或回写 |
+| `GridPlacedObject` 位置契约（D3A） | 待重构 | 当前为 D1 旧 cell→position；D3A 目标：`position` 为场景编辑事实、`cell` 由 `world_to_cell` 派生、`set_cell` 用 `cell_to_world`。未落地前不得依赖自动同步 |
+| 编辑器 64 格吸附 | 当前可用（Godot 原生） | 节点拖动、复制、64×64 网格吸附、position Undo/Redo 均由 Godot 原生负责；不制作正式移动吸附插件 |
 | `LevelObjectRegistry`（完整扫描） | 部分实现 | 水晶按 `crystal_id` 与 cell 双向索引已实现；扫描/多类型对象注册仍为目标，不能作为当前保存必跑步骤 |
 | `LevelValidator` | 目标 / 未实现 | 不能作为当前验收必跑步骤 |
 | 完整正式关卡模板 | 目标 / 未实现 | 仅存在核心原型场景 |
-| `FixedEmitter` 编辑流程与视觉 Profile | 部分实现 | 运行期 cell/direction 与 `FireRequest` 已实现；`fixed_emitter.tscn`/视觉 Profile/`light_form` 仍为目标 |
+| `FixedEmitter` 编辑流程与视觉 Profile | 部分实现 | 运行期 cell/direction 与 `FireRequest` 已实现；`fixed_emitter.tscn`/视觉 Profile/`light_form` 仍为目标。目标上由 `EmitterConfigNode` 作为发射器关卡配置唯一来源（场景位置、默认发射形态、光线八方向/光粒四方向默认方向、Visual Profile、编辑器预览开关），结构 `RuntimeObjects/Emitter/{EmitterVisual, EmissionPreview}`。`CoreLoopPrototype.emitter_cell`/`emitter_direction` 仍在使用，接入 `EmitterConfigNode` 后退出 |
 | `READY_TO_FIRE` | 目标 / 未实现 | 不在当前验收项 |
 | 开始运行按钮 | 目标 / 未实现 | 不在当前验收项 |
 | 光粒编辑与验收 | 目标 / 未实现 | 不在当前验收项 |
@@ -77,10 +76,9 @@
 复制完整关卡模板
 → 绘制 TileMapLayer
 → 拖入固定对象场景
-→ 移动或复制对象
-→ 对象自动吸附到 64×64 网格（方法 A / 方法 B）
+→ 移动或复制对象（Godot 原生 64 格吸附：拖动/复制/Undo/Redo 由 Godot 原生负责）
 → 在 Inspector 中完成配置
-→ 运行关卡校验（LevelValidator）
+→ 运行关卡校验（LevelValidator，D6）
 → 人工测试
 → 保存并提交
 ```
@@ -91,7 +89,7 @@
 
 # 2. 最终编辑方式总览
 
-> 本节描述的是**目标编辑方式**。其中 `TileMapLayer` 分层、对象自动吸附、关卡加载校验等部分当前未实现，仅 `TileMapLayer` 基础绘制与已实现视觉接口可当前使用。
+> 本节描述的是**目标编辑方式**。其中 `TileMapLayer` 分层、关卡加载校验等部分当前未实现，仅 `TileMapLayer` 基础绘制与已实现视觉接口可当前使用。节点拖动、复制、64×64 网格吸附、position Undo/Redo 由 Godot 原生负责；项目不制作正式移动吸附插件。
 
 项目中的内容分为两类。
 
@@ -133,14 +131,14 @@ DecorationLayer
 
 这些对象目标上统一支持：
 
-- 拖动；
-- 复制；
-- 64格自动吸附（方法 B，本阶段 MUST 实现 / 当前未实现，不再延期）；
+- 拖动（Godot 原生）；
+- 复制（Godot 原生）；
+- 64 格吸附（Godot 原生，不制作移动吸附插件）；
 - Inspector 配置；
-- 关卡加载校验（`LevelValidator`，目标 / 未实现）；
+- 关卡加载校验（`LevelValidator`，D6，目标 / 未实现）；
 - 视觉 Profile 替换（当前可用）。
 
-当前仅有视觉 Profile 替换与原型场景内的基础操作可用，自动吸附与关卡校验不得列为当前必测项。
+当前仅有视觉 Profile 替换与原型场景内的基础操作可用；Godot 原生 64 格吸附可用于节点拖动/复制，但 `GridPlacedObject` 位置契约（D3A）尚未重构、`LevelValidator`（D6）未落地，关卡校验不得列为当前必测项。
 
 ---
 
@@ -169,41 +167,39 @@ Y = 32 + 64 × cell.y
 | `(0, 1)` | `(32, 96)` |
 | `(3, 2)` | `(224, 160)` |
 
-## 3.2 唯一位置事实（目标契约）
+## 3.2 GridPlacedObject 位置契约（D3A 重构，待重构）
 
-> **状态：目标 / 未实现。** `GridPlacedObject` 当前未实现，下述 `cell` 唯一事实与方法 A / 方法 B 均为目标契约，当前不具备可依赖的代码。
+> **状态：待重构（D3A）。** 当前仍为 D1 旧 cell→position 实现；D3A 目标契约如下，落地前不得依赖自动同步。
 
 每个固定对象目标上具有：
 
 ```text
-cell: Vector2i
+position : Vector2   # 场景编辑事实
+cell     : Vector2i  # 由 position 派生
 ```
 
-目标规则：
+D3A 目标规则：
 
-- `cell` 是唯一逻辑位置；
-- 世界坐标只负责显示；
-- **方法 A（目标 / 未实现）**：Inspector 修改 `cell` 后对象自动移动；
-- **方法 B（本阶段 MUST 实现 / 当前未实现，不再延期）**：拖动对象后自动计算最近格、吸附并回写 `cell`；
+- `position` 是场景编辑事实，由 Godot 原生编辑（拖动/复制/Undo/Redo）；
+- `cell` 由 `position` 经 `world_to_cell` 派生，不再是独立输入；
+- `set_cell` 内部通过 `cell_to_world` 写回 `position`；
 - 不手动维护第二套逻辑坐标。
 
-当前 `GridPlacedObject` 与方法 A / 方法 B 均未实现，张梓涵不得依赖 Inspector 自动同步或拖动自动吸附。
+当前 D1 旧实现仍把 `cell` 作为输入同步 `position`，D3A 未落地前张梓涵不得依赖 Inspector 改 `cell` 自动同步或拖动自动回写。
 
-## 3.3 编辑器吸附（目标流程，本阶段 MUST 实现，当前未实现）
+## 3.3 编辑器吸附（Godot 原生）
 
-> **状态：本阶段 MUST 实现 / 当前未实现，不再延期。** 对应方法 B，落地前当前不会自动吸附或回写 `cell`。
+> **状态：当前可用（Godot 原生）。** 节点拖动、复制、64×64 网格吸附、position Undo/Redo 由 Godot 原生负责；项目不制作正式移动吸附插件。
 
-目标操作方式：
+操作方式：
 
 ```text
-在2D视图拖动对象
-→ GridPlacedObject检测位置变化
-→ 换算最近逻辑格
-→ 自动吸附
-→ 更新cell
+在 2D 视图拖动/复制对象（Godot 原生吸附到 64×64 网格）
+→ position 由 Godot 原生记录并可 Undo/Redo
+→ 运行时 cell 由 world_to_cell 从 position 派生（D3A 落地后）
 ```
 
-即使编辑器顶部的移动吸附被关闭，项目自己的网格对象也**目标上**必须保证最终位置合法。当前该流程未实现，手动移动对象后需要由原型控制器或后续实现校正，张梓涵不得把自动吸附列为当前可用操作。
+Godot 编辑器顶部的移动吸附开关只影响 Godot 原生吸附行为；项目不再制作独立移动吸附插件。
 
 ---
 
@@ -430,7 +426,7 @@ backslash_texture
 
 # 10. 发射器美术和配置
 
-> **状态：部分实现。** `FixedEmitter` 运行期 cell/direction 与 `FireRequest` 已实现（`gameplay/mechanisms/emitters/fixed_emitter.gd`，由核心 `_ready` 据 Inspector 初始配置构造）；`fixed_emitter.tscn`、发射器视觉 Profile、`light_form` 与光线/光粒两套外观仍为目标，**不放在当前必测清单**。本节为未来美术需求。
+> **状态：部分实现。** `FixedEmitter` 运行期 cell/direction 与 `FireRequest` 已实现（`gameplay/mechanisms/emitters/fixed_emitter.gd`，由核心 `_ready` 据 Inspector 初始配置构造）；`fixed_emitter.tscn`、发射器视觉 Profile、`light_form` 与光线/光粒两套外观仍为目标，**不放在当前必测清单**。目标上由 `EmitterConfigNode` 作为发射器关卡配置唯一来源（场景位置、默认发射形态、光线八方向默认方向、光粒四方向默认方向、Visual Profile、编辑器预览开关），目标结构 `RuntimeObjects/Emitter/{EmitterVisual, EmissionPreview}`；`EmissionPreview` 跟随 Emitter 移动和方向变化，仅编辑器预览，不参与玩法判定，不复制完整传播算法。`LightPathLayer` 独立、固定原点，只承载运行时真实光路。`CoreLoopPrototype.emitter_cell`/`emitter_direction` 仍在使用，接入 `EmitterConfigNode` 后退出。本节为未来美术需求。
 
 固定发射器目标上包含：
 
@@ -535,17 +531,16 @@ LegalAreaLayer
 
 # 13. 固定对象的移动
 
-> **状态：目标流程，本阶段 MUST 实现 / 当前未实现，不再延期。** 依赖方法 B（拖动后吸附并回写 `cell`）与 `GridPlacedObject`，当前均未实现。张梓涵当前不得把下列操作列为可用流程。
+> **状态：当前可用（Godot 原生）+ 目标契约待重构。** 节点拖动、复制、64×64 网格吸附、position Undo/Redo 由 Godot 原生负责；不制作移动吸附插件。`GridPlacedObject` 位置契约（D3A，position 为事实、cell 派生）待重构，当前仍为 D1 旧实现，运行时 `cell` 不保证自动从 `position` 派生。
 
 目标操作：
 
 1. 在场景树选中发射器、水晶或预置机关根节点；
 2. 在 2D 视图拖动；
-3. 松开；
-4. 对象自动吸附；
-5. 检查 Inspector 的 `cell`；
-6. 保存；
-7. 运行校验。
+3. 松开（Godot 原生 64 格吸附）；
+4. 检查 Inspector 的 `position` 与 `cell`；
+5. 保存；
+6. 运行校验（D6 落地后）。
 
 禁止：
 
@@ -560,19 +555,18 @@ LegalAreaLayer
 
 # 14. 固定对象的复制
 
-> **状态：目标流程，当前部分依赖未实现能力。** 复制后的自动吸附与“运行时注册器检查”依赖方法 B 与 `LevelObjectRegistry` 完整扫描 / `LevelValidator`，当前均未实现（`LevelObjectRegistry` 仅实现水晶双向索引）。张梓涵当前可复制对象节点，但不得依赖自动吸附或注册器校验。
+> **状态：当前可用（Godot 原生）+ 目标校验未实现。** 复制与 64 格吸附由 Godot 原生负责；运行时注册器校验依赖 `LevelObjectRegistry` 完整扫描 / `LevelValidator`（D6），当前均未实现（`LevelObjectRegistry` 仅实现水晶双向索引）。张梓涵当前可复制对象节点，但不得依赖注册器校验。复制生成稳定 ID 由 `Light Speed Level Tools`（D7B）目标提供。
 
 目标操作：
 
 1. 在场景树选中对象根节点；
 2. 使用 `Ctrl + D`；
 3. 重命名副本；
-4. 拖动到目标格；
-5. 确认自动吸附；
-6. 检查 `cell`；
-7. 检查方向、形态和目标配置；
-8. 保存；
-9. 运行关卡校验。
+4. 拖动到目标格（Godot 原生 64 格吸附）；
+5. 检查 `position` 与 `cell`；
+6. 检查方向、形态和目标配置；
+7. 保存；
+8. 运行关卡校验（D6 落地后）。
 
 复制后检查：
 
@@ -586,7 +580,7 @@ LegalAreaLayer
 - 顺序编号；
 - 其他 Inspector 参数。
 
-运行时注册器会检查（目标 / 未实现，`LevelObjectRegistry` + `LevelValidator` 落地后生效）：
+运行时注册器会检查（目标 / 未实现，`LevelObjectRegistry` + `LevelValidator`（D6）落地后生效）：
 
 - 越界；
 - 重复占用；
@@ -803,7 +797,7 @@ mixed_level_01.tscn
 
 # 22. 标准关卡制作流程
 
-> **状态：目标流程。** 其中复制完整关卡模板、放置 `FixedEmitter`、运行 `LevelValidator` 等步骤当前未实现。张梓涵当前只能在已有原型场景内进行美术替换与基础验证；以下为目标流程，待对应接口落地后方可执行。
+> **状态：目标流程。** 其中复制完整关卡模板、放置 `FixedEmitter`/`EmitterConfigNode`、运行 `LevelValidator`（D6）等步骤当前未实现。节点拖动/复制/64 格吸附由 Godot 原生负责。张梓涵当前只能在已有原型场景内进行美术替换与基础验证；以下为目标流程，待对应阶段（D3A→D3B→D3C→D4→D5→D6→D7A→D7B→D7C→D8）落地后方可执行。
 
 ```text
 确定章节和机制
@@ -898,7 +892,7 @@ mixed_level_01.tscn
 
 # 25. 美术替换检查清单
 
-> 本清单中“发射器图片基础方向一致”“光线和光粒外观不同”两项依赖 `FixedEmitter` 正式接口，当前未实现，属目标项；其余 64×64、Nearest、透明背景、锚点、世界/UI 图标分离、Profile 状态 ID、镜面 `/\\`、光线路段四方向、拖拽图、机关栏图标、R 后视觉恢复等为当前可用项。
+> 本清单中“发射器图片基础方向一致”“光线和光粒外观不同”两项依赖 `EmitterConfigNode`/`FixedEmitter` 正式接口（D3A 及之后），当前未实现，属目标项；其余 64×64、Nearest、透明背景、锚点、世界/UI 图标分离、Profile 状态 ID、镜面 `/\\`、光线路段四方向、拖拽图、机关栏图标、R 后视觉恢复等为当前可用项。
 
 - [ ] 素材放在正确目录；
 - [ ] 文件名规范；
@@ -962,7 +956,7 @@ mixed_level_01.tscn
 
 ## 运行（目标 / 未实现，不在当前验收项）
 
-> 以下项目依赖 `READY_TO_FIRE`、开始运行按钮与 `FixedEmitter` 正式接口，当前均未实现，**不作为张梓涵当前验收项**。
+> 以下项目依赖 `READY_TO_FIRE`、开始运行按钮与 `EmitterConfigNode`/`FixedEmitter` 正式接口，当前均未实现，**不作为张梓涵当前验收项**。
 
 - [ ] 初始 Space 无效；
 - [ ] 点击“开始运行”；
@@ -1099,8 +1093,8 @@ Debugger错误
 场景：levels/prototypes/graybox/graybox_particle_001.tscn
 对象：ParticleAccelerator
 操作：复制后拖动到(5,3)
-预期：吸附并将cell更新为(5,3)
-实际：视觉正确，但cell仍为(4,3)
+预期：Godot 原生吸附到 64 格，cell 由 position 派生为(5,3)
+实际：视觉正确，但 cell 仍为(4,3)
 是否可重复：每次都能复现
 ```
 
@@ -1108,7 +1102,7 @@ Debugger错误
 
 # 32. 最终完成标准
 
-> 本节描述的是接口完成后的**目标最终标准**，其中自动吸附、关卡校验、FixedEmitter 配置、三章节正式关卡制作等当前未实现。张梓涵当前可执行的部分仅限已实现视觉接口的美术替换与原型场景验证。
+> 本节描述的是接口完成后的**目标最终标准**，其中 `GridPlacedObject` 位置契约（D3A）重构、`LevelValidator`（D6）关卡校验、`EmitterConfigNode`/`FixedEmitter` 配置、三章节正式关卡制作等当前未实现。节点拖动/复制/64 格吸附由 Godot 原生负责。张梓涵当前可执行的部分仅限已实现视觉接口的美术替换与原型场景验证。
 
 最终编辑方式目标上必须达到：
 
@@ -1117,13 +1111,12 @@ Debugger错误
 → 可以导入和替换美术
 → 可以配置视觉Profile
 → 可以绘制地图、墙体和合法区域
-→ 可以拖动、复制和配置固定对象
-→ 对象自动吸附64格
+→ 可以拖动、复制和配置固定对象（Godot 原生 64 格吸附）
 → 可以配置库存、目标和运行期移动
 → 可以制作机关原型和组合原型
 → 可以制作三章节灰盒和正式关卡
-→ 可以运行校验和人工测试
+→ 可以运行校验（D6 LevelValidator）和人工测试
 → 可以独立提交关卡与美术任务
 ```
 
-本指南描述的是项目完成编辑器接口后的正式工作流。开发过程中若最终 Inspector 字段名或少量目录名发生调整，应同步更新本指南，但不得改变“GUI编辑、Cell唯一事实、自动吸附、Profile替换、关卡校验、无须修改核心脚本”这组固定原则。
+本指南描述的是项目完成编辑器接口后的正式工作流。开发过程中若最终 Inspector 字段名或少量目录名发生调整，应同步更新本指南，但不得改变“GUI 编辑、`GridPlacedObject` 位置契约（position 为事实、cell 派生，D3A）、Godot 原生 64 格吸附、Profile 替换、关卡校验（D6）、无须修改核心脚本”这组固定原则。运行时代码不依赖 `addons/`，两正式插件（D7A `Light Speed Art Profile Editor`、D7B `Light Speed Level Tools`）关闭后游戏正常运行。
