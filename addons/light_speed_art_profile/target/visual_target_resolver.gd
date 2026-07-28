@@ -2,52 +2,88 @@
 class_name LightSpeedArtProfileVisualTargetResolver
 extends RefCounted
 
-## 正式视觉目标解析器。
-## 职责：把编辑器当前选中节点解析为正式 ObjectVisualView。
-## 输入输出：输入 Node 或 null，返回 ObjectVisualView 或 null。
-## 副作用：无；不增删节点、不修改位置、不写 Profile。
-## 边界：只检查自身与直属子节点；EmissionPreview 永不作为正式视觉返回。
+## 正式视觉目标通用解析器（D4.5-A2）。
+## 职责：把编辑器当前选中节点解析为只读 VisualTargetResult，覆盖组件边界定位、深层视觉收集与嵌套隔离。
+## 输入输出：输入 Node 或 null，返回 VisualTargetResult（永不返回 null 表达“多目标”）。
+## 副作用：无；不增删节点、不修改位置、不写 Profile、不读取节点名称作为身份。
+## 边界：组件边界为最近 GridPlacedObject 祖先（含自身）；遇到嵌套 GridPlacedObject 记录并停止其子树；
+##       EmissionPreview 永不入 targets；直接选视觉节点只返回该节点，不扩大到同组件其他视觉；
+##       不存在 EmitterConfigNode / Mirror / Crystal 等逐类型分支。
 
 
-## 解析单个选中节点对应的正式视觉节点。
-## selected 可为 null；返回唯一 ObjectVisualView，歧义或不支持时返回 null。
-func resolve(selected: Node) -> ObjectVisualView:
+# 结果对象脚本：preload 引用，避开新 class_name 全局缓存未重建时的类型解析问题。
+const _Result: GDScript = preload(
+	"res://addons/light_speed_art_profile/target/visual_target_result.gd"
+)
+
+
+## 解析单个选中节点对应的正式视觉目标集合。
+## selected 可为 null；返回只读 VisualTargetResult，多目标时返回 MULTIPLE_TARGETS 而非 null。
+func resolve(selected: Node) -> RefCounted:
+	# 1. null 或已释放：无选择。
 	if selected == null or not is_instance_valid(selected):
-		return null
+		return _Result.for_no_selection()
+	# 2. 直接选择 EmissionPreview：自动定位所属组件正式视觉集合，Preview 自身永不入 targets。
 	if selected is EmissionPreview:
-		return null
+		return _resolve_from_preview(selected)
+	# 3. 直接选择 ObjectVisualView：用户已明确指定编辑目标，只返回自身。
 	if selected is ObjectVisualView:
-		return selected
-	if selected is EmitterConfigNode:
-		return _resolve_emitter_visual(selected as EmitterConfigNode)
-	return _resolve_single_direct_visual(selected)
+		var visual: ObjectVisualView = selected as ObjectVisualView
+		var ancestor: Node = _find_nearest_component(visual)
+		return _Result.for_direct_visual(visual, visual, ancestor if ancestor != null else visual)
+	# 4. 选择组件根或组件内部普通节点：向上找最近 GridPlacedObject 作为组件边界。
+	var component_root: Node = _find_nearest_component(selected)
+	if component_root == null:
+		return _Result.for_unsupported(selected, "no_component_boundary")
+	return _collect_from_component(selected, component_root)
 
 
-## 解析发射器配置节点的正式视觉。
-## 输入 EmitterConfigNode；返回直属 ObjectVisualView 或 null，明确跳过 EmissionPreview。
-func _resolve_emitter_visual(emitter: EmitterConfigNode) -> ObjectVisualView:
-	var direct_visuals: Array[ObjectVisualView] = _collect_direct_visuals(emitter)
-	if direct_visuals.size() != 1:
-		return null
-	return direct_visuals[0]
+## 直接选择 EmissionPreview 的解析：定位最近 GridPlacedObject 组件根并收集其正式视觉。
+## preview 为 EmissionPreview；返回组件集合结果；组件根缺失时返回 UNSUPPORTED。
+# Preview 自身不是 ObjectVisualView，收集器天然排除，无需额外过滤。
+func _resolve_from_preview(preview: Node) -> RefCounted:
+	var component_root: Node = _find_nearest_component(preview)
+	if component_root == null:
+		return _Result.for_unsupported(preview, "no_component_boundary")
+	return _collect_from_component(preview, component_root)
 
 
-## 解析普通关卡对象的唯一直属正式视觉。
-## 输入任意 Node；返回唯一直属 ObjectVisualView，多个或没有均返回 null。
-func _resolve_single_direct_visual(parent: Node) -> ObjectVisualView:
-	var direct_visuals: Array[ObjectVisualView] = _collect_direct_visuals(parent)
-	if direct_visuals.size() != 1:
-		return null
-	return direct_visuals[0]
+## 从组件根向下递归收集 ObjectVisualView，构造组件集合结果。
+## selected 为触发节点；component_root 为最近 GridPlacedObject；返回只读结果。
+func _collect_from_component(selected: Node, component_root: Node) -> RefCounted:
+	var targets: Array = []
+	var ignored_nodes: Array = []
+	_collect_visuals(component_root, true, targets, ignored_nodes)
+	return _Result.for_component(selected, component_root, targets, ignored_nodes)
 
 
-## 收集直属正式视觉子节点。
-## 输入父节点；输出直属 ObjectVisualView 数组；不递归、不返回 EmissionPreview。
-func _collect_direct_visuals(parent: Node) -> Array[ObjectVisualView]:
-	var direct_visuals: Array[ObjectVisualView] = []
-	for child: Node in parent.get_children():
-		if child is EmissionPreview:
-			continue
-		if child is ObjectVisualView:
-			direct_visuals.append(child)
-	return direct_visuals
+## 深度优先递归收集 ObjectVisualView；遇到嵌套 GridPlacedObject 记录并停止其子树。
+## node 为当前节点；is_root 标识当前节点是否为组件根（组件根本身不作为嵌套组件跳过）；
+## targets / ignored_nodes 由调用方持有并就地追加；顺序为稳定场景树深度优先，不按 Node.name 排序。
+func _collect_visuals(
+		node: Node,
+		is_root: bool,
+		targets: Array,
+		ignored_nodes: Array
+) -> void:
+	# 非根节点遇到 GridPlacedObject：记录为被忽略的嵌套子组件根，不进入其子树。
+	if not is_root and node is GridPlacedObject:
+		ignored_nodes.append(node)
+		return
+	# 收集正式视觉节点；EmissionPreview 非 ObjectVisualView，天然不入集合。
+	if node is ObjectVisualView:
+		targets.append(node)
+	# 继续向子节点递归，允许视觉位于任意子层级。
+	for child: Node in node.get_children():
+		_collect_visuals(child, false, targets, ignored_nodes)
+
+
+## 从 node 向上（含自身）寻找最近的 GridPlacedObject 祖先。
+## node 为起点；返回最近 GridPlacedObject 或 null；不跨到更外层组件，不依赖节点名称。
+func _find_nearest_component(node: Node) -> Node:
+	var current: Node = node
+	while current != null:
+		if current is GridPlacedObject:
+			return current
+		current = current.get_parent()
+	return null
