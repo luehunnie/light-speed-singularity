@@ -19,6 +19,9 @@ const _ModelScript: GDScript = preload(
 var _catalog: RefCounted = _CatalogScript.new()
 var _model: RefCounted = _ModelScript.new()
 
+# 选中条目或其可见性变化时发出，供 Dock 刷新应用按钮启用条件；无参数。
+signal selection_changed
+
 var _tree: Tree = null
 var _search: LineEdit = null
 var _result_list: ItemList = null
@@ -57,6 +60,13 @@ func _ensure_ui() -> void:
 	var title := Label.new()
 	title.text = "美术资产浏览器"
 	vbox.add_child(title)
+
+	# 单击语义说明：明确单击只选择和预览，不会立即修改视觉配置；真正替换需在上方点击“应用到当前状态”。
+	var click_hint := Label.new()
+	click_hint.text = "单击素材仅选择和预览，不会立即修改视觉配置。"
+	click_hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	click_hint.add_theme_color_override("font_color", Color(0.6, 0.6, 0.6))
+	vbox.add_child(click_hint)
 
 	# 顶栏：刷新按钮 + 搜索框
 	var topbar := HBoxContainer.new()
@@ -172,6 +182,35 @@ func _on_result_selected(index: int) -> void:
 		return
 	_model.select_entry(path)
 	_update_preview()
+	selection_changed.emit()
+
+
+## 返回当前选中条目；无选择或所选条目不在当前过滤视图内时返回 null。
+## 返回单个只读 Entry 引用，非内部数组引用；调用方不得修改其字段。
+## 边界：切换目录 / 搜索导致所选条目不在当前过滤视图内，或刷新导致条目失效时，均返回 null。
+func get_selected_entry() -> RefCounted:
+	var entry = _model.get_selected_entry()
+	if entry == null:
+		return null
+	# 选中条目不在当前过滤视图内视为失效：切换目录或搜索后不可见即返回 null。
+	for e in _model.get_filtered_entries():
+		if e.resource_path == entry.resource_path:
+			return entry
+	return null
+
+
+## 按资源路径程序化选中条目；自动切到该条目所在目录使其在过滤视图内可见。
+## resource_path 为 res:// 路径；返回 bool，成功为 true。无磁盘副作用，不修改 Entry。
+func select_entry_by_path(resource_path: String) -> bool:
+	if not _model.select_entry(resource_path):
+		return false
+	var entry = _model.get_selected_entry()
+	if entry == null:
+		return false
+	_model.set_directory(entry.relative_directory)
+	_refresh_result_list()
+	_update_preview()
+	return true
 
 
 ## 执行一次只读扫描，更新 Model、目录树、结果列表与状态。
@@ -266,6 +305,7 @@ func _refresh_result_list() -> void:
 	if entries.is_empty():
 		_result_hint.visible = true
 		_update_preview()
+		selection_changed.emit()
 		return
 	_result_hint.visible = false
 	var selected_path: String = _model.get_selected_resource_path()
@@ -281,6 +321,8 @@ func _refresh_result_list() -> void:
 	if select_index >= 0:
 		_result_list.select(select_index)
 	_update_preview()
+	# 过滤结果变化可能使选中条目移入/移出当前视图，通知 Dock 重算应用按钮。
+	selection_changed.emit()
 
 
 ## 按 Model 当前选中条目更新右侧大图预览。

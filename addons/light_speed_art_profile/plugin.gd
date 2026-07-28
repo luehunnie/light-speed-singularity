@@ -20,6 +20,9 @@ func _enter_tree() -> void:
 	_cleanup()
 	_dock = _DOCK_SCENE.instantiate() as Control
 	add_control_to_dock(DOCK_SLOT_RIGHT_UL, _dock)
+	# 明确依赖注入：把真实 EditorUndoRedoManager 经 Dock 交给操作子面板，
+	# 子面板不在运行期自行查找编辑器单例，避免 UndoRedo 管理器类型与调用形式不一致。
+	_dock.set_editor_undo_redo(get_undo_redo())
 	_selection = get_editor_interface().get_selection()
 	_selection_changed_callable = Callable(self, "_on_selection_changed")
 	if _selection != null and not _selection.selection_changed.is_connected(_selection_changed_callable):
@@ -54,6 +57,8 @@ func _cleanup() -> void:
 	_selection_changed_callable = Callable()
 	if _dock != null:
 		if is_instance_valid(_dock):
+			# 退出前清空子面板持有的 UndoRedo 引用，重新启用时由 _enter_tree 重新注入。
+			_dock.set_editor_undo_redo(null)
 			remove_control_from_docks(_dock)
 			_dock.queue_free()
 		_dock = null
