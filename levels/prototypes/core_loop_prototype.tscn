@@ -38,12 +38,11 @@ visual_profile = ExtResource("9_emitter_profile")
 script = ExtResource("8_preview")
 
 [node name="Crystal" type="Node2D" parent="RuntimeObjects" unique_id=1716045995]
+position = Vector2(224, 96)
 script = ExtResource("1_crystal")
-cell = Vector2i(3, 1)
 crystal_id = &"crystal_001"
 
 [node name="VisualView" parent="RuntimeObjects/Crystal" unique_id=1732959339 instance=ExtResource("3_view")]
-position = Vector2(224, 96)
 visual_profile = ExtResource("4_profile")
 initial_state_id = &"unlit"
 
