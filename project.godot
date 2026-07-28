@@ -15,6 +15,10 @@ run/main_scene="res://levels/prototypes/core_loop_prototype.tscn"
 config/features=PackedStringArray("4.6", "Forward Plus")
 config/icon="res://icon.svg"
 
+[editor_plugins]
+
+enabled=PackedStringArray("res://addons/light_speed_art_profile/plugin.cfg")
+
 [input]
 
 fire_light={
