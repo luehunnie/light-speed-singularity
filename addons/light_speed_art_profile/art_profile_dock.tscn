@@ -1,0 +1,6 @@
+[gd_scene load_steps=2 format=3]
+
+[ext_resource type="Script" path="res://addons/light_speed_art_profile/art_profile_dock.gd" id="1_dock"]
+
+[node name="ArtProfileDock" type="VBoxContainer"]
+script = ExtResource("1_dock")
