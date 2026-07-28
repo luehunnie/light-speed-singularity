@@ -26,9 +26,6 @@ const PROTOTYPE_TOKEN_TOTAL: int = 1
 const INVALID_CELL: Vector2i = Vector2i(-999999, -999999)
 
 
-# 以下两项仅为 Inspector 初始配置；_ready 中据此构造 _fixed_emitter，运行期格子/方向只由 FixedEmitter 提供。
-@export var emitter_cell: Vector2i = Vector2i(1, 3)
-@export var emitter_direction: Vector2i = Vector2i.RIGHT
 @export var map_bounds: Rect2i = Rect2i(0, 0, 16, 16)
 @export var wall_cells: Array[Vector2i] = [Vector2i(5, 3)]
 
@@ -45,6 +42,9 @@ const INVALID_CELL: Vector2i = Vector2i(-999999, -999999)
 @onready var prototype_token_slot: _InventorySlotViewScript = $CanvasLayer/InventoryBar/MarginContainer/HBoxContainer/PrototypeTokenSlot
 @onready var runtime_move_label: Label = $CanvasLayer/RuntimeMoveLabel
 @onready var crystals: Array[BasicCrystal] = [$RuntimeObjects/Crystal]
+## 发射器关卡配置节点（固定角色路径 RuntimeObjects/Emitter，仅预制场景内部接线，不作为稳定 emitter_id）。
+## 运行时启动读取一次其 position 与 ray_default_direction 构造 FixedEmitter，不监听运行期节点移动或配置变化。
+@onready var _emitter_config: _EmitterConfigNode = get_node_or_null("RuntimeObjects/Emitter") as _EmitterConfigNode
 
 ## 轻量机关占用表：格子坐标 ↔ 机关 ID 双向索引，用于单格镜面放置/移动/回收与传播循环中的镜面节点解析。
 const _OccupancyRegistry: GDScript = preload("res://gameplay/placement/occupancy_registry.gd")
@@ -88,8 +88,10 @@ const _LightWorldQuery: GDScript = preload("res://gameplay/world/light_world_que
 const _LevelObjectRegistry: GDScript = preload("res://gameplay/level/level_object_registry.gd")
 # 目标完成事实唯一所有者（D3-D）：按 cell 激活水晶、判断完成、运行期重置水晶；核心只读取 is_completed()/reset_runtime()，不保留第二套目标业务实现。
 const _ObjectiveController: GDScript = preload("res://gameplay/objectives/objective_controller.gd")
-# 固定发射器与发射请求数据；运行期格子和方向唯一所有者为 FixedEmitter，emitter_cell/emitter_direction 仅作 Inspector 初始配置。
+# 固定发射器与发射请求数据；运行期格子和方向唯一所有者为 FixedEmitter，由 EmitterConfigNode 启动快照构造。
 const _FixedEmitter: GDScript = preload("res://gameplay/mechanisms/emitters/fixed_emitter.gd")
+# 发射器关卡配置节点：承载唯一持久化位置事实 position 与光线方向事实 ray_default_direction。
+const _EmitterConfigNode: GDScript = preload("res://gameplay/mechanisms/emitters/emitter_config_node.gd")
 # 正式运行期编排控制器（D3-E）：完整拥有 pulse_generation、runtime_moves_used、发射编排、异步脉冲结束与 R 重置顺序；核心只调 request_fire/reset_runtime 与运行期移动次数查询。
 const _LevelRuntimeController: GDScript = preload("res://gameplay/runtime/level_runtime_controller.gd")
 var occupancy: _OccupancyRegistry = _OccupancyRegistry.new()
@@ -128,7 +130,7 @@ var _objective_controller: _ObjectiveController = null
 ## 普通光线只读薄适配层：内部依赖 _level_world_query，只组合既有边界与墙体规则，不新增规则、不执行传播循环或副作用。
 var _light_world_query: _LightWorldQuery = null
 
-## 固定发射器：运行期格子与方向的唯一所有者；_ready 中由 Inspector 初始配置构造一次，此后 fire_light 与 LevelWorldQuery 只读取本实例。
+## 固定发射器：运行期格子与方向的唯一所有者；_ready 中由 EmitterConfigNode 启动快照构造一次，此后 fire_light 与 LevelWorldQuery 只读取本实例。
 var _fixed_emitter: _FixedEmitter = null
 
 ## 正式运行期编排控制器：_ready 中构造并 add_child；核心只调 request_fire/reset_runtime 与运行期移动次数查询/扣除委托，不持有 pulse_generation 或 runtime_moves_used。
@@ -147,8 +149,9 @@ func _ready() -> void:
 		_inventory_controller,
 		Callable(self, "_create_formal_token_node")
 	)
-	# 固定发射器先于只读查询门面构造：LevelWorldQuery 与 fire_light 的运行期格子只取自本实例，emitter_cell 仅在此处作为初始配置读入。
-	_fixed_emitter = _FixedEmitter.new(emitter_cell, emitter_direction)
+	# 发射配置来源为场景内 EmitterConfigNode：读取一次启动快照构造不可变 FixedEmitter；PARTICLE 未接运行时则安全中止后续接线。
+	if not _build_fixed_emitter_from_config():
+		return
 	# 稳定对象索引：遍历 @onready crystals，按显式 crystal_id 与 cell 注册；任一失败 push_error 并 assert 暴露，不静默跳过。
 	for crystal: BasicCrystal in crystals:
 		assert(_level_object_registry.register_crystal(crystal.get_crystal_id(), crystal.cell, crystal),
@@ -205,9 +208,34 @@ func _ready() -> void:
 		_startup_self_check_coordinator.run_all(sample_cells, snapshot, true, true)
 
 
+## 由 EmitterConfigNode 构造启动快照与不可变 FixedEmitter；节点缺失或 PARTICLE 未接运行时则安全中止。
+## 返回 true 表示已构造 _fixed_emitter；false 表示已输出明确错误并中止初始化，调用方应停止后续接线。
+func _build_fixed_emitter_from_config() -> bool:
+	if _emitter_config == null:
+		_abort_runtime_initialization("RuntimeObjects/Emitter 节点缺失或类型不符，无法构造发射器。")
+		return false
+	# PARTICLE 仅保存配置与编辑器预览，未接运行时发射；不静默降级为 RAY，不构造虚假 FixedEmitter。
+	if not _emitter_config.is_runtime_form_supported():
+		_abort_runtime_initialization("default_light_form=PARTICLE 未接运行时发射，已拒绝初始化。")
+		return false
+	# 启动快照：position 为唯一位置事实、ray_default_direction 为唯一方向事实；本组局部值仅用于本次构造，不作为第二份持久事实。
+	var start_cell: Vector2i = _emitter_config.get_cell()
+	var ray_direction: Vector2i = _emitter_config.get_ray_direction_vector()
+	_fixed_emitter = _FixedEmitter.new(start_cell, ray_direction)
+	return true
+
+
+## 安全中止运行时初始化：输出明确错误，阻止后续空对象接线与输入持续崩溃。
+func _abort_runtime_initialization(reason: String) -> void:
+	push_error("CoreLoopPrototype: %s" % reason)
+
+
 ## 处理关卡输入动作和鼠标拖拽事件：fire_light 转发到 LevelRuntimeController.request_fire（拖拽中/PULSE_ACTIVE/COMPLETED 拒绝在控制器内）；reset_level 转发到 reset_runtime()；鼠标左键按运行权限驱动放置/移动/回收。
 ## 拖拽中按 Space 由控制器拒绝；拖拽中按 R 不依赖 _input 预取消，由 reset_runtime() 统一安全取消拖拽；PULSE_ACTIVE 期间布局变化只影响后续发射，不回溯当前脉冲。
 func _input(event: InputEvent) -> void:
+	# 运行时初始化被中止（如 PARTICLE 未接运行时）时忽略全部输入，避免空对象持续崩溃。
+	if _level_runtime_controller == null:
+		return
 	var command: _PlayerInteractionController.Command = _player_interaction_controller.translate(event)
 	match command.kind:
 		_PlayerInteractionController.Command.Kind.RESET:

@@ -1,3 +1,6 @@
+# @tool：使本数据资源可在编辑器中实例化与调用，配合 @tool Profile 在编辑器内呈现纹理。
+# 仅保存单一状态的纹理数据，不做视图或玩法逻辑；drag_texture 缺失由上层回退到同状态 world_texture。
+@tool
 class_name VisualStateTexture
 extends Resource
 

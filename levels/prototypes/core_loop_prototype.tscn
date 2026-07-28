@@ -2,10 +2,13 @@
 
 [ext_resource type="Script" uid="uid://cfkidx57m3yqa" path="res://gameplay/crystals/basic_crystal.gd" id="1_crystal"]
 [ext_resource type="Script" uid="uid://do7wigwkihxy0" path="res://levels/prototypes/core_loop_prototype.gd" id="2_proto"]
-[ext_resource type="PackedScene" uid="uid://dbjvvisualview0" path="res://gameplay/visuals/object_visuals/object_visual_view.tscn" id="3_view"]
-[ext_resource type="Resource" path="res://assets/visual_profiles/basic_crystal_visuals.tres" id="4_profile"]
-[ext_resource type="Script" path="res://gameplay/ui/inventory_slot_view.gd" id="5_slot_view"]
-[ext_resource type="Resource" path="res://assets/visual_profiles/single_cell_mirror_visuals.tres" id="6_mirror_profile"]
+[ext_resource type="PackedScene" uid="uid://cjha6lnu2voun" path="res://gameplay/visuals/object_visuals/object_visual_view.tscn" id="3_view"]
+[ext_resource type="Resource" uid="uid://2k3afc5lp8mh" path="res://assets/visual_profiles/basic_crystal_visuals.tres" id="4_profile"]
+[ext_resource type="Script" uid="uid://dctpsq4bkc0cr" path="res://gameplay/ui/inventory_slot_view.gd" id="5_slot_view"]
+[ext_resource type="Resource" uid="uid://brcg00d6kd6rs" path="res://assets/visual_profiles/single_cell_mirror_visuals.tres" id="6_mirror_profile"]
+[ext_resource type="Script" path="res://gameplay/mechanisms/emitters/emitter_config_node.gd" id="7_emitter_cfg"]
+[ext_resource type="Script" path="res://gameplay/mechanisms/emitters/emission_preview.gd" id="8_preview"]
+[ext_resource type="Resource" uid="uid://cq0d7p6pgay05" path="res://assets/visual_profiles/emitter_visuals.tres" id="9_emitter_profile"]
 
 [node name="CoreLoopPrototype" type="Node2D" unique_id=1552304930]
 script = ExtResource("2_proto")
@@ -24,23 +27,25 @@ color = Color(0.25, 0.25, 0.28, 1)
 [node name="RuntimeObjects" type="Node2D" parent="." unique_id=820444864]
 
 [node name="Emitter" type="Node2D" parent="RuntimeObjects" unique_id=1264479859]
+position = Vector2(96, 224)
+script = ExtResource("7_emitter_cfg")
+visual_profile = ExtResource("9_emitter_profile")
 
-[node name="EmitterVisual" type="ColorRect" parent="RuntimeObjects/Emitter" unique_id=1309797398]
-offset_left = 64.0
-offset_top = 192.0
-offset_right = 128.0
-offset_bottom = 256.0
-color = Color(0.2, 0.85, 1, 1)
+[node name="EmitterVisual" parent="RuntimeObjects/Emitter" unique_id=468152323 instance=ExtResource("3_view")]
+visual_profile = ExtResource("9_emitter_profile")
+
+[node name="EmissionPreview" type="Node2D" parent="RuntimeObjects/Emitter" unique_id=123116683]
+script = ExtResource("8_preview")
 
 [node name="Crystal" type="Node2D" parent="RuntimeObjects" unique_id=1716045995]
 script = ExtResource("1_crystal")
 cell = Vector2i(3, 1)
 crystal_id = &"crystal_001"
 
-[node name="VisualView" parent="RuntimeObjects/Crystal" instance=ExtResource("3_view")]
+[node name="VisualView" parent="RuntimeObjects/Crystal" unique_id=1732959339 instance=ExtResource("3_view")]
 position = Vector2(224, 96)
 visual_profile = ExtResource("4_profile")
-initial_state_id = "unlit"
+initial_state_id = &"unlit"
 
 [node name="LightPathLayer" type="Node2D" parent="." unique_id=1467401346]
 
@@ -61,14 +66,14 @@ offset_right = 320.0
 offset_bottom = 88.0
 text = "关卡完成"
 
-[node name="RuntimeMoveLabel" type="Label" parent="CanvasLayer"]
+[node name="RuntimeMoveLabel" type="Label" parent="CanvasLayer" unique_id=2060128155]
 offset_left = 16.0
 offset_top = 88.0
 offset_right = 320.0
 offset_bottom = 120.0
 text = "运行期移动：1 / 1"
 
-[node name="InventoryBar" type="PanelContainer" parent="CanvasLayer"]
+[node name="InventoryBar" type="PanelContainer" parent="CanvasLayer" unique_id=1804822805]
 anchors_preset = 12
 anchor_top = 1.0
 anchor_right = 1.0
@@ -78,63 +83,67 @@ offset_top = -104.0
 offset_right = -16.0
 offset_bottom = -16.0
 
-[node name="MarginContainer" type="MarginContainer" parent="CanvasLayer/InventoryBar"]
+[node name="MarginContainer" type="MarginContainer" parent="CanvasLayer/InventoryBar" unique_id=48562978]
 layout_mode = 2
 theme_override_constants/margin_left = 12
 theme_override_constants/margin_top = 10
 theme_override_constants/margin_right = 12
 theme_override_constants/margin_bottom = 10
 
-[node name="HBoxContainer" type="HBoxContainer" parent="CanvasLayer/InventoryBar/MarginContainer"]
+[node name="HBoxContainer" type="HBoxContainer" parent="CanvasLayer/InventoryBar/MarginContainer" unique_id=1723350610]
 layout_mode = 2
 theme_override_constants/separation = 12
 
-[node name="PrototypeTokenSlot" type="PanelContainer" parent="CanvasLayer/InventoryBar/MarginContainer/HBoxContainer"]
+[node name="PrototypeTokenSlot" type="PanelContainer" parent="CanvasLayer/InventoryBar/MarginContainer/HBoxContainer" unique_id=1242385289]
 custom_minimum_size = Vector2(150, 68)
 layout_mode = 2
 script = ExtResource("5_slot_view")
 visual_profile = ExtResource("6_mirror_profile")
 
-[node name="SlotMargin" type="MarginContainer" parent="CanvasLayer/InventoryBar/MarginContainer/HBoxContainer/PrototypeTokenSlot"]
+[node name="SlotMargin" type="MarginContainer" parent="CanvasLayer/InventoryBar/MarginContainer/HBoxContainer/PrototypeTokenSlot" unique_id=517114870]
 layout_mode = 2
 theme_override_constants/margin_left = 8
 theme_override_constants/margin_top = 6
 theme_override_constants/margin_right = 8
 theme_override_constants/margin_bottom = 6
 
-[node name="SlotContent" type="HBoxContainer" parent="CanvasLayer/InventoryBar/MarginContainer/HBoxContainer/PrototypeTokenSlot/SlotMargin"]
+[node name="SlotContent" type="HBoxContainer" parent="CanvasLayer/InventoryBar/MarginContainer/HBoxContainer/PrototypeTokenSlot/SlotMargin" unique_id=1400803543]
 layout_mode = 2
 theme_override_constants/separation = 8
 
-[node name="IconStack" type="Control" parent="CanvasLayer/InventoryBar/MarginContainer/HBoxContainer/PrototypeTokenSlot/SlotMargin/SlotContent"]
+[node name="IconStack" type="Control" parent="CanvasLayer/InventoryBar/MarginContainer/HBoxContainer/PrototypeTokenSlot/SlotMargin/SlotContent" unique_id=1319188651]
 custom_minimum_size = Vector2(44, 44)
 layout_mode = 2
 
-[node name="TokenIcon" type="ColorRect" parent="CanvasLayer/InventoryBar/MarginContainer/HBoxContainer/PrototypeTokenSlot/SlotMargin/SlotContent/IconStack"]
+[node name="TokenIcon" type="ColorRect" parent="CanvasLayer/InventoryBar/MarginContainer/HBoxContainer/PrototypeTokenSlot/SlotMargin/SlotContent/IconStack" unique_id=1191107581]
 layout_mode = 1
 anchors_preset = 15
 anchor_right = 1.0
 anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
 color = Color(0.25, 0.85, 0.95, 1)
 
-[node name="InventoryIcon" type="TextureRect" parent="CanvasLayer/InventoryBar/MarginContainer/HBoxContainer/PrototypeTokenSlot/SlotMargin/SlotContent/IconStack"]
+[node name="InventoryIcon" type="TextureRect" parent="CanvasLayer/InventoryBar/MarginContainer/HBoxContainer/PrototypeTokenSlot/SlotMargin/SlotContent/IconStack" unique_id=2067863861]
 visible = false
+texture_filter = 1
 layout_mode = 1
 anchors_preset = 15
 anchor_right = 1.0
 anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
 mouse_filter = 2
-texture_filter = 1
 expand_mode = 1
 stretch_mode = 5
 
-[node name="SlotTexts" type="VBoxContainer" parent="CanvasLayer/InventoryBar/MarginContainer/HBoxContainer/PrototypeTokenSlot/SlotMargin/SlotContent"]
+[node name="SlotTexts" type="VBoxContainer" parent="CanvasLayer/InventoryBar/MarginContainer/HBoxContainer/PrototypeTokenSlot/SlotMargin/SlotContent" unique_id=749619789]
 layout_mode = 2
 
-[node name="NameLabel" type="Label" parent="CanvasLayer/InventoryBar/MarginContainer/HBoxContainer/PrototypeTokenSlot/SlotMargin/SlotContent/SlotTexts"]
+[node name="NameLabel" type="Label" parent="CanvasLayer/InventoryBar/MarginContainer/HBoxContainer/PrototypeTokenSlot/SlotMargin/SlotContent/SlotTexts" unique_id=1450748881]
 layout_mode = 2
 text = "基础单格镜面"
 
-[node name="RemainingLabel" type="Label" parent="CanvasLayer/InventoryBar/MarginContainer/HBoxContainer/PrototypeTokenSlot/SlotMargin/SlotContent/SlotTexts"]
+[node name="RemainingLabel" type="Label" parent="CanvasLayer/InventoryBar/MarginContainer/HBoxContainer/PrototypeTokenSlot/SlotMargin/SlotContent/SlotTexts" unique_id=399982636]
 layout_mode = 2
 text = "剩余：1"
