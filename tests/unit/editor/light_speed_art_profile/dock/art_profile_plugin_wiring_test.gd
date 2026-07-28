@@ -1,32 +1,19 @@
 extends SceneTree
 
-## D4.5-C1-Hotfix 注入边界与“应用到当前状态”回归测试。
-## 覆盖：
+## D4.5-C1-Hotfix Plugin→Dock→Panel UndoRedo 注入边界测试（裁剪版）。
+## 只保留注入链路与真实 EditorUndoRedoManager do-path：
 ##   W1 plugin/Dock/Panel 提供 set_editor_undo_redo 注入接口；
 ##   W2 Dock 接收 manager 后转交 ActionPanel（_editor_undo_redo 一致）；
 ##   W3 ActionPanel 没有 manager 时明确写“应用失败”而非静默无效；
-##   W4 按钮 pressed 确实触发一次替换，且服务收到的是注入的 manager（非 EditorInterface 查找）；
-##   W5 有效路径从 crystal_normal_unlit 替换为 crystal_blue_unlit；
-##   W6 world_texture 引用发生变化；
-##   W7 成功状态文案含“已将”与“可使用 Ctrl+Z 撤销”；
-##   W8 当前纹理路径 UI 更新为 blue；
-##   W9 Undo 恢复旧纹理；W10 Redo 恢复新纹理；
-##   W11 相同纹理显示“没有创建修改”；
-##   W12 失败原因不被吞掉（应用失败：...）；
-##   W13 保存按钮仍不代替应用（不调用替换服务）；
-##   W14 不修改正式 .tres。
-##   W_REAL（仅编辑器模式）：用真实 EditorUndoRedoManager 走面板 do-path，验证 add_do_method 2 参形式不再 Invalid call。
+##   W4 按钮 pressed 触发一次替换，且服务收到的是注入的 manager（非 EditorInterface 查找）；
+##   W9/W10 通过面板按钮 + 注入 manager 完成 Undo/Redo（注入链端到端）；
+##   W_REAL（仅编辑器模式）：真实 EditorUndoRedoManager 走面板 do-path，验证 add_do_method 2 参形式不再 Invalid call。
+## 不重复 Dock 普通 UI 测试（按钮启用条件、状态列表、保存入口由 dock 边界测试覆盖）。
 ## 由 Godot --script 运行（游戏模式用 UndoRedo.new()）；--editor --script 运行时额外覆盖真实管理器 do-path。
 ## 任一失败 quit(1)。
 
 const _DockScene: PackedScene = preload(
 	"res://addons/light_speed_art_profile/dock/art_profile_dock.tscn"
-)
-const _EditServiceScript: GDScript = preload(
-	"res://addons/light_speed_art_profile/editing/visual_state_edit_service.gd"
-)
-const _SaveServiceScript: GDScript = preload(
-	"res://addons/light_speed_art_profile/editing/profile_save_service.gd"
 )
 const _ObjectVisualProfile: GDScript = preload(
 	"res://gameplay/visuals/object_visuals/object_visual_profile.gd"
@@ -39,13 +26,11 @@ const _ArtAssetEntry: GDScript = preload(
 )
 const _NORMAL_PNG: String = "res://assets/art/crystals/crystal_normal_unlit.png"
 const _BLUE_PNG: String = "res://assets/art/crystals/crystal_blue_unlit.png"
-const _BASIC_CRYSTAL_TRES: String = "res://assets/visual_profiles/basic_crystal_visuals.tres"
 
 var _failures: PackedStringArray = PackedStringArray()
 var _checks: int = 0
 # 当前测试向面板提供的素材 Entry；由 _provide_entry 回调返回。
 var _entry = null
-var _tres_baseline: String = ""
 
 # 测试替身：计数 replace_with_undo_redo 并捕获传入的 undo_redo，证明面板用的是注入的 manager。
 class _SpyEdit extends RefCounted:
@@ -61,33 +46,14 @@ class _SpyEdit extends RefCounted:
 		captured_ur = undo_redo
 		return return_result
 
-# 测试替身：捕获 SaveService 写入的 profile/path，返回指定 Error，避免真实磁盘写入。
-class _CapturingSaveBackend extends RefCounted:
-	var captured_path: String = ""
-	var captured_profile: Resource = null
-	var return_err: int = 0
-	func save(profile: Resource, path: String) -> int:
-		captured_path = path
-		captured_profile = profile
-		return return_err
-
 
 func _initialize() -> void:
-	_tres_baseline = FileAccess.get_file_as_string(_BASIC_CRYSTAL_TRES)
 	_test_w01_injection_interface_exists()
 	_test_w02_dock_forwards_to_panel()
 	_test_w03_panel_without_manager_fails()
 	_test_w04_button_press_uses_injected_manager()
-	_test_w05_normal_to_blue_replace()
-	_test_w06_world_texture_reference_changes()
-	_test_w07_success_text()
-	_test_w08_current_texture_path_ui()
 	_test_w09_undo_restores_old()
 	_test_w10_redo_restores_new()
-	_test_w11_same_texture_skip_message()
-	_test_w12_failure_not_swallowed()
-	_test_w13_save_does_not_replace()
-	_test_w14_no_formal_tres_pollution()
 	if Engine.is_editor_hint():
 		_test_w_real_editor_undo_redo_manager()
 	_report()
@@ -147,60 +113,7 @@ func _test_w04_button_press_uses_injected_manager() -> void:
 	dock.free()
 
 
-## W5. 有效路径从 normal_unlit 替换为 blue_unlit。
-func _test_w05_normal_to_blue_replace() -> void:
-	const NAME: String = "W5_normal替换为blue"
-	var dock = _make_dock_with_unlit(_normal_tex())
-	dock.set_editor_undo_redo(UndoRedo.new())
-	_select_unlit_and_blue_entry(dock)
-	dock._action_panel._apply_button.pressed.emit()
-	var state: _VisualStateTexture = dock._action_panel._edit_service.find_state(dock._action_panel.get_active_visual_target().visual_profile, &"unlit")
-	_check(NAME, state.world_texture == _blue_tex(), "替换后 world_texture 应为 blue_unlit。")
-	dock.free()
-
-
-## W6. world_texture 引用发生变化（与旧引用不同）。
-func _test_w06_world_texture_reference_changes() -> void:
-	const NAME: String = "W6_world_texture引用变化"
-	var normal := _normal_tex()
-	var dock = _make_dock_with_unlit(normal)
-	dock.set_editor_undo_redo(UndoRedo.new())
-	_select_unlit_and_blue_entry(dock)
-	dock._action_panel._apply_button.pressed.emit()
-	var state: _VisualStateTexture = dock._action_panel._edit_service.find_state(dock._action_panel.get_active_visual_target().visual_profile, &"unlit")
-	_check(NAME, state.world_texture != normal, "替换后 world_texture 引用应不同于旧纹理。")
-	_check(NAME, state.world_texture == _blue_tex(), "替换后 world_texture 引用应为 blue。")
-	dock.free()
-
-
-## W7. 成功状态文案含“已将”与“可使用 Ctrl+Z 撤销”。
-func _test_w07_success_text() -> void:
-	const NAME: String = "W7_成功文案"
-	var dock = _make_dock_with_unlit(_normal_tex())
-	dock.set_editor_undo_redo(UndoRedo.new())
-	_select_unlit_and_blue_entry(dock)
-	dock._action_panel._apply_button.pressed.emit()
-	var t: String = dock._action_panel._operation_status.text
-	_check(NAME, t.contains("已将"), "成功文案应含“已将”。")
-	_check(NAME, t.contains("可使用 Ctrl+Z 撤销"), "成功文案应含“可使用 Ctrl+Z 撤销”。")
-	_check(NAME, t.contains("crystal_blue_unlit.png"), "成功文案应含目标文件名。")
-	dock.free()
-
-
-## W8. 当前纹理路径 UI 更新为 blue。
-func _test_w08_current_texture_path_ui() -> void:
-	const NAME: String = "W8_当前纹理路径UI更新"
-	var dock = _make_dock_with_unlit(_normal_tex())
-	dock.set_editor_undo_redo(UndoRedo.new())
-	_select_unlit_and_blue_entry(dock)
-	dock._action_panel._apply_button.pressed.emit()
-	var info: String = dock._action_panel._current_state_info.text
-	_check(NAME, info.contains("crystal_blue_unlit.png"), "应用后当前状态纹理路径应为 blue_unlit。")
-	_check(NAME, not info.contains("crystal_normal_unlit.png"), "应用后不应再显示 normal_unlit。")
-	dock.free()
-
-
-## W9. Undo 恢复旧纹理。
+## W9. Undo 通过注入 manager 恢复旧纹理（注入链端到端）。
 func _test_w09_undo_restores_old() -> void:
 	const NAME: String = "W9_Undo恢复旧纹理"
 	var normal := _normal_tex()
@@ -212,12 +125,10 @@ func _test_w09_undo_restores_old() -> void:
 	ur.undo()
 	var state: _VisualStateTexture = dock._action_panel._edit_service.find_state(dock._action_panel.get_active_visual_target().visual_profile, &"unlit")
 	_check(NAME, state.world_texture == normal, "Undo 后 world_texture 应恢复为 normal。")
-	# Profile changed 监听应在 Undo 的 emit_changed 后即时刷新当前纹理路径 UI。
-	_check(NAME, dock._action_panel._current_state_info.text.contains("crystal_normal_unlit.png"), "Undo 后当前纹理路径 UI 应恢复为 normal_unlit。")
 	dock.free()
 
 
-## W10. Redo 恢复新纹理。
+## W10. Redo 通过注入 manager 恢复新纹理。
 func _test_w10_redo_restores_new() -> void:
 	const NAME: String = "W10_Redo恢复新纹理"
 	var dock = _make_dock_with_unlit(_normal_tex())
@@ -230,66 +141,6 @@ func _test_w10_redo_restores_new() -> void:
 	var state: _VisualStateTexture = dock._action_panel._edit_service.find_state(dock._action_panel.get_active_visual_target().visual_profile, &"unlit")
 	_check(NAME, state.world_texture == _blue_tex(), "Redo 后 world_texture 应恢复为 blue。")
 	dock.free()
-
-
-## W11. 相同纹理显示“没有创建修改”。
-func _test_w11_same_texture_skip_message() -> void:
-	const NAME: String = "W11_相同纹理跳过文案"
-	var normal := _normal_tex()
-	var dock = _make_dock_with_unlit(normal)
-	dock.set_editor_undo_redo(UndoRedo.new())
-	# 选中与当前纹理相同的素材。
-	_entry = _make_entry(_NORMAL_PNG, normal)
-	dock._action_panel.set_browser_entry_provider(Callable(self, "_provide_entry"))
-	_select_unlit_state(dock)
-	dock._action_panel._apply_button.pressed.emit()
-	_check(NAME, dock._action_panel._operation_status.text.contains("没有创建修改"), "相同纹理应显示“没有创建修改”。")
-	dock.free()
-
-
-## W12. 失败原因不被吞掉。
-func _test_w12_failure_not_swallowed() -> void:
-	const NAME: String = "W12_失败原因不被吞"
-	var dock = _make_dock_with_unlit(_normal_tex())
-	dock.set_editor_undo_redo(UndoRedo.new())
-	var spy := _SpyEdit.new()
-	spy.return_result = {ok = false, reason = "spy：模拟替换失败。", skipped = false}
-	dock._action_panel._edit_service = spy
-	_select_unlit_and_blue_entry(dock)
-	dock._action_panel._apply_button.pressed.emit()
-	var t: String = dock._action_panel._operation_status.text
-	_check(NAME, t.contains("应用失败"), "失败应写“应用失败”。")
-	_check(NAME, t.contains("spy：模拟替换失败"), "失败原因应被透出，不被吞掉。")
-	dock.free()
-
-
-## W13. 保存按钮仍不代替应用（不调用替换服务）。
-func _test_w13_save_does_not_replace() -> void:
-	const NAME: String = "W13_保存不调用替换"
-	var dock = _make_dock_with_unlit(_normal_tex())
-	# 给 profile 一个 visual_profiles 路径，使保存确认路径可达；写盘由捕获后端拦截，不污染正式 .tres。
-	dock._action_panel.get_active_visual_target().visual_profile.resource_path = "res://assets/visual_profiles/__wiring_w13__.tres"
-	dock.set_editor_undo_redo(UndoRedo.new())
-	var spy := _SpyEdit.new()
-	dock._action_panel._edit_service = spy
-	var save_service = _SaveServiceScript.new()
-	var backend := _CapturingSaveBackend.new()
-	backend.return_err = OK
-	save_service.set_save_backend(Callable(backend, "save"))
-	dock._action_panel._save_service = save_service
-	_select_unlit_and_blue_entry(dock)
-	dock._action_panel._on_save_pressed()
-	_check(NAME, dock._action_panel._save_confirm.visible == true, "保存应显示确认 UI。")
-	dock._action_panel._on_confirm_save_pressed()
-	_check(NAME, spy.replace_count == 0, "保存不应调用替换服务。")
-	dock.free()
-
-
-## W14. 不修改正式 .tres。
-func _test_w14_no_formal_tres_pollution() -> void:
-	const NAME: String = "W14_不污染正式tres"
-	var now: String = FileAccess.get_file_as_string(_BASIC_CRYSTAL_TRES)
-	_check(NAME, now == _tres_baseline, "basic_crystal_visuals.tres 测试前后内容应一致。")
 
 
 ## W_REAL（仅编辑器模式）：真实 EditorUndoRedoManager 走面板 do-path，验证 add_do_method 2 参形式不再 Invalid call。
@@ -307,7 +158,6 @@ func _test_w_real_editor_undo_redo_manager() -> void:
 	dock._action_panel._apply_button.pressed.emit()
 	var state: _VisualStateTexture = dock._action_panel._edit_service.find_state(dock._action_panel.get_active_visual_target().visual_profile, &"unlit")
 	_check(NAME, state.world_texture == _blue_tex(), "真实管理器 do-path 应完成替换（无 Invalid call）。")
-	_check(NAME, dock._action_panel._operation_status.text.contains("已将"), "真实管理器应用后应写成功文案。")
 	dock.free()
 
 
@@ -390,9 +240,9 @@ func _check(name: String, ok: bool, detail: String) -> void:
 
 ## 输出测试摘要。
 func _report() -> void:
-	var group_count: int = 15
+	var group_count: int = 7
 	var passed_checks: int = _checks - _failures.size()
-	print("==== 美术 Profile 注入边界 + 应用回归测试摘要 ====")
+	print("==== 美术 Profile 注入边界测试摘要 ====")
 	print("测试组数：%d" % group_count)
 	print("断言总数：%d" % _checks)
 	print("通过断言：%d" % passed_checks)

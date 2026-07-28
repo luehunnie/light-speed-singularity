@@ -1,11 +1,10 @@
 extends SceneTree
 
-## VisualStateEditService D4.5-C1 定向测试 + Dock 只读边界验证。
-## 覆盖 EditService：null view/profile/state/texture 拒绝、非 art 路径拒绝、合法替换、
+## VisualStateEditService D4.5-C1 核心测试（拆分自原 visual_state_edit_service_test）。
+## 仅覆盖 EditService：null view/profile/state/texture 拒绝、非 art 路径拒绝、合法替换、
 ##   新旧相同跳过、Do/Undo/Redo 纹理与视图刷新、emit_changed 可观察、refresh_visual 可观察、
 ##   不改 state_id/default_state_id、不切换 View 当前状态、共享 Profile 多 View 同一变化。
-## 覆盖 Dock 边界：单/多目标 active target、状态未选择、素材未选择、切换对象清除状态、
-##   应用按钮启用条件、不直接修改 Profile。
+## 不创建 Dock，不测试按钮和 UI。
 ## 由 Godot --script 运行，全部通过 quit(0)，任一失败 quit(1)。
 ## 注：EditorUndoRedoManager 无法在纯 headless 构造，故 UndoRedo 行为以可构造的 UndoRedo 验证；
 ##     正式编辑器走 EditorUndoRedoManager，二者 create_action/add_do_*/commit_action 接口一致。
@@ -13,25 +12,12 @@ extends SceneTree
 const _EditServiceScript: GDScript = preload(
 	"res://addons/light_speed_art_profile/editing/visual_state_edit_service.gd"
 )
-const _SaveServiceScript: GDScript = preload(
-	"res://addons/light_speed_art_profile/editing/profile_save_service.gd"
-)
-const _ObjectVisualView: GDScript = preload(
-	"res://gameplay/visuals/object_visuals/object_visual_view.gd"
-)
 const _ObjectVisualProfile: GDScript = preload(
 	"res://gameplay/visuals/object_visuals/object_visual_profile.gd"
 )
 const _VisualStateTexture: GDScript = preload(
 	"res://gameplay/visuals/visual_state_texture.gd"
 )
-const _DockScene: PackedScene = preload(
-	"res://addons/light_speed_art_profile/dock/art_profile_dock.tscn"
-)
-const _GridPlacedObject: GDScript = preload(
-	"res://gameplay/grid/grid_placed_object.gd"
-)
-const _REAL_ART_PATH: String = "res://assets/art/crystals/crystal_normal_unlit.png"
 
 var _failures: PackedStringArray = PackedStringArray()
 var _checks: int = 0
@@ -42,33 +28,6 @@ class _SignalCounter extends RefCounted:
 	var count: int = 0
 	func on_changed() -> void:
 		count += 1
-
-# 测试替身：ObjectVisualView 子类，便于构造多目标场景而不依赖场景文件内部子节点。
-class _StubVisual extends ObjectVisualView:
-	pass
-
-# 测试替身：包裹真实 EditService，仅计数 replace_with_undo_redo 调用；find_state/can_replace 透传。
-# 用于验证“保存路径不会触发替换服务”。
-class _SpyEdit extends RefCounted:
-	var replace_count: int = 0
-	var _real: RefCounted = _EditServiceScript.new()
-	func find_state(profile, state_id) -> VisualStateTexture:
-		return _real.find_state(profile, state_id)
-	func can_replace(view, state_id, texture, resource_path) -> Dictionary:
-		return _real.can_replace(view, state_id, texture, resource_path)
-	func replace_with_undo_redo(undo_redo, view, state_id, new_texture, action_name) -> Dictionary:
-		replace_count += 1
-		return {ok = false, reason = "spy：不应在保存路径调用替换", skipped = false}
-
-# 测试替身：捕获 SaveService 写入的 profile/path，返回指定 Error；避免真实磁盘写入。
-class _CapturingSaveBackend extends RefCounted:
-	var captured_path: String = ""
-	var captured_profile: Resource = null
-	var return_err: int = 0
-	func save(profile: Resource, path: String) -> int:
-		captured_path = path
-		captured_profile = profile
-		return return_err
 
 
 func _initialize() -> void:
@@ -88,19 +47,6 @@ func _initialize() -> void:
 	_test_14_default_state_id_unchanged()
 	_test_15_view_current_state_unchanged()
 	_test_16_shared_profile_multi_view()
-	_test_d01_single_target_active()
-	_test_d02_multi_target_unselected_null()
-	_test_d03_multi_target_selected()
-	_test_d04_no_state_selected_empty()
-	_test_d05_no_art_entry_null()
-	_test_d06_switch_object_clears_state()
-	_test_d07_apply_button_enable_conditions()
-	_test_d08_dock_does_not_modify_profile()
-	_test_d09_state_list_minimum_size()
-	_test_d10_two_states_in_list()
-	_test_d11_click_unlit_state_id()
-	_test_d14_save_does_not_invoke_replace()
-	_test_d15_browser_remains_in_dock()
 	_report()
 	quit(0 if _failures.is_empty() else 1)
 
@@ -331,260 +277,6 @@ func _test_16_shared_profile_multi_view() -> void:
 	view2.free()
 
 
-# ===== Dock 只读边界测试 =====
-
-## D1. 单目标 active target。
-func _test_d01_single_target_active() -> void:
-	const NAME: String = "D1_单目标active"
-	var dock = _DockScene.instantiate()
-	root.add_child(dock)
-	dock._ready()
-	var view = _make_stub_with_profile()
-	dock.show_selection([view])
-	_check(NAME, dock.get_active_visual_target() == view, "单目标应返回该视觉。")
-	dock.free()
-	view.free()
-
-
-## D2. 多目标未选择返回 null。
-func _test_d02_multi_target_unselected_null() -> void:
-	const NAME: String = "D2_多目标未选择null"
-	var dock = _DockScene.instantiate()
-	root.add_child(dock)
-	dock._ready()
-	var comp: Node = _GridPlacedObject.new()
-	var v1 = _make_stub_with_profile()
-	var v2 = _make_stub_with_profile()
-	comp.add_child(v1)
-	comp.add_child(v2)
-	dock.show_selection([comp])
-	_check(NAME, dock.get_active_visual_target() == null, "多目标未选择应返回 null。")
-	dock.free()
-	comp.free()
-
-
-## D3. 多目标选择后返回正确目标。
-func _test_d03_multi_target_selected() -> void:
-	const NAME: String = "D3_多目标选择"
-	var dock = _DockScene.instantiate()
-	root.add_child(dock)
-	dock._ready()
-	var comp: Node = _GridPlacedObject.new()
-	var v1 = _make_stub_with_profile()
-	var v2 = _make_stub_with_profile()
-	comp.add_child(v1)
-	comp.add_child(v2)
-	dock.show_selection([comp])
-	# 模拟用户在多目标选择器中选择第二项。
-	dock._on_target_selected(1)
-	_check(NAME, dock.get_active_visual_target() == v2, "选择后应返回正确目标。")
-	dock.free()
-	comp.free()
-
-
-## D4. 状态未选择返回空。
-func _test_d04_no_state_selected_empty() -> void:
-	const NAME: String = "D4_状态未选择空"
-	var dock = _DockScene.instantiate()
-	root.add_child(dock)
-	dock._ready()
-	var view = _make_stub_with_profile()
-	dock.show_selection([view])
-	_check(NAME, dock.get_selected_state_id() == &"", "未选择状态应返回空 StringName。")
-	dock.free()
-	view.free()
-
-
-## D5. 素材未选择返回 null。
-func _test_d05_no_art_entry_null() -> void:
-	const NAME: String = "D5_素材未选择null"
-	var dock = _DockScene.instantiate()
-	root.add_child(dock)
-	dock._ready()
-	var view = _make_stub_with_profile()
-	dock.show_selection([view])
-	_check(NAME, dock.get_selected_art_entry() == null, "未选择素材应返回 null。")
-	dock.free()
-	view.free()
-
-
-## D6. 切换对象清除状态选择。
-func _test_d06_switch_object_clears_state() -> void:
-	const NAME: String = "D6_切换对象清状态"
-	var dock = _DockScene.instantiate()
-	root.add_child(dock)
-	dock._ready()
-	var view1 = _make_stub_with_profile()
-	dock.show_selection([view1])
-	# 选中第一个状态。
-	dock._action_panel._state_list.select(0)
-	dock._action_panel._on_state_selected(0)
-	_check(NAME, dock.get_selected_state_id() != &"", "前置：应已选择状态。")
-	# 切换到另一个对象。
-	var view2 = _make_stub_with_profile()
-	dock.show_selection([view2])
-	_check(NAME, dock.get_selected_state_id() == &"", "切换对象应清除状态选择。")
-	dock.free()
-	view1.free()
-	view2.free()
-
-
-## D7. 应用按钮启用条件。
-func _test_d07_apply_button_enable_conditions() -> void:
-	const NAME: String = "D7_应用按钮启用条件"
-	var dock = _DockScene.instantiate()
-	root.add_child(dock)
-	dock._ready()
-	var view = _make_stub_with_profile()
-	dock.show_selection([view])
-	# 无状态、无素材：禁用。
-	_check(NAME, dock._action_panel._apply_button.disabled == true, "无状态/素材应禁用。")
-	# 选中状态但仍无素材：禁用。
-	dock._action_panel._state_list.select(0)
-	dock._action_panel._on_state_selected(0)
-	_check(NAME, dock._action_panel._apply_button.disabled == true, "有状态无素材应禁用。")
-	# 扫描浏览器并选中真实素材：启用。
-	dock._browser_view._ready()
-	var ok: bool = dock._browser_view.select_entry_by_path(_REAL_ART_PATH)
-	_check(NAME, ok, "应能选中真实素材。")
-	_check(NAME, dock._action_panel._apply_button.disabled == false, "状态+素材齐备应启用。")
-	dock.free()
-	view.free()
-
-
-## D8. Dock 不直接修改 Profile。
-func _test_d08_dock_does_not_modify_profile() -> void:
-	const NAME: String = "D8_Dock不改Profile"
-	var dock = _DockScene.instantiate()
-	root.add_child(dock)
-	dock._ready()
-	var profile: _ObjectVisualProfile = _make_profile_two_states()
-	var before_unlit: Texture2D = profile.get_world_texture(&"unlit")
-	var before_lit: Texture2D = profile.get_world_texture(&"lit")
-	var view = _StubVisual.new()
-	view.visual_profile = profile
-	dock.show_selection([view])
-	dock._action_panel._state_list.select(1)
-	dock._action_panel._on_state_selected(1)
-	dock._browser_view._ready()
-	dock._browser_view.select_entry_by_path(_REAL_ART_PATH)
-	_check(NAME, profile.get_world_texture(&"unlit") == before_unlit, "Dock 不应修改 unlit 纹理。")
-	_check(NAME, profile.get_world_texture(&"lit") == before_lit, "Dock 不应修改 lit 纹理。")
-	dock.free()
-	view.free()
-
-
-## D9. 状态列表 custom_minimum_size 非零（保证 unlit/lit 可见）。
-func _test_d09_state_list_minimum_size() -> void:
-	const NAME: String = "D9_状态列表最小高度"
-	var dock = _DockScene.instantiate()
-	root.add_child(dock)
-	dock._ready()
-	var view = _make_stub_with_profile()
-	dock.show_selection([view])
-	var sl: ItemList = dock._action_panel._state_list
-	_check(NAME, sl != null and is_instance_valid(sl), "状态列表应已创建。")
-	_check(NAME, sl.custom_minimum_size.y > 0, "状态列表 custom_minimum_size.y 应非零。")
-	dock.free()
-	view.free()
-
-
-## D10. Crystal 两个状态（unlit/lit）均进入 ItemList。
-func _test_d10_two_states_in_list() -> void:
-	const NAME: String = "D10_两状态入列表"
-	var dock = _DockScene.instantiate()
-	root.add_child(dock)
-	dock._ready()
-	var view = _make_stub_with_profile()
-	dock.show_selection([view])
-	var sl: ItemList = dock._action_panel._state_list
-	_check(NAME, sl != null and sl.item_count == 2, "Crystal 应有 unlit/lit 两项。")
-	if sl == null:
-		dock.free()
-		view.free()
-		return
-	var ids: Dictionary = {}
-	for i: int in range(sl.item_count):
-		ids[sl.get_item_metadata(i)] = true
-	_check(NAME, ids.has(&"unlit"), "列表应含 unlit。")
-	_check(NAME, ids.has(&"lit"), "列表应含 lit。")
-	dock.free()
-	view.free()
-
-
-## D11. 点击 unlit 后 get_selected_state_id() 返回正确 state_id。
-func _test_d11_click_unlit_state_id() -> void:
-	const NAME: String = "D11_点击unlit返回state_id"
-	var dock = _DockScene.instantiate()
-	root.add_child(dock)
-	dock._ready()
-	var view = _make_stub_with_profile()
-	dock.show_selection([view])
-	var sl: ItemList = dock._action_panel._state_list
-	var idx: int = -1
-	for i: int in range(sl.item_count):
-		if sl.get_item_metadata(i) == &"unlit":
-			idx = i
-			break
-	_check(NAME, idx >= 0, "应找到 unlit 项。")
-	if idx >= 0:
-		sl.select(idx)
-		dock._action_panel._on_state_selected(idx)
-		_check(NAME, dock.get_selected_state_id() == &"unlit", "点击 unlit 后 state_id 应为 unlit。")
-	dock.free()
-	view.free()
-
-
-## D14. 保存按钮不会调用替换服务；保存只走 SaveService。
-func _test_d14_save_does_not_invoke_replace() -> void:
-	const NAME: String = "D14_保存不调用替换"
-	var dock = _DockScene.instantiate()
-	root.add_child(dock)
-	dock._ready()
-	# 单状态 profile，resource_path 指向 visual_profiles，便于走保存确认路径。
-	var profile: _ObjectVisualProfile = _ObjectVisualProfile.new()
-	profile.default_state_id = &"default"
-	var state: _VisualStateTexture = _VisualStateTexture.new()
-	state.state_id = &"default"
-	state.world_texture = _make_texture()
-	profile.states = [state]
-	profile.resource_path = "res://assets/visual_profiles/__dock_d14__.tres"
-	var view = _StubVisual.new()
-	view.visual_profile = profile
-	dock.show_selection([view])
-	# 注入 spy 编辑服务（计数替换调用）与捕获保存后端（不写盘）。
-	var spy := _SpyEdit.new()
-	dock._action_panel._edit_service = spy
-	var save_service = _SaveServiceScript.new()
-	var backend := _CapturingSaveBackend.new()
-	backend.return_err = OK
-	save_service.set_save_backend(Callable(backend, "save"))
-	dock._action_panel._save_service = save_service
-	dock._action_panel._on_save_pressed()
-	_check(NAME, dock._action_panel._save_confirm.visible == true, "保存应显示确认 UI。")
-	dock._action_panel._on_confirm_save_pressed()
-	_check(NAME, spy.replace_count == 0, "保存不应调用替换服务。")
-	_check(NAME, backend.captured_profile == profile, "保存应走 SaveService 写入原 profile。")
-	dock.free()
-	view.free()
-
-
-## D15. BrowserView 仍位于 Dock 内且未被删除。
-# 注：--script 模式下 SceneTree 根未 entered，is_inside_tree() 不可靠；改用父节点与祖先关系判定。
-func _test_d15_browser_remains_in_dock() -> void:
-	const NAME: String = "D15_Browser仍在Dock内"
-	var dock = _DockScene.instantiate()
-	root.add_child(dock)
-	dock._ready()
-	_check(NAME, dock._browser_view != null and is_instance_valid(dock._browser_view), "BrowserView 应存在。")
-	if dock._browser_view == null:
-		dock.free()
-		return
-	_check(NAME, dock._browser_view.get_parent() != null, "BrowserView 父节点不应为空（未被删除）。")
-	_check(NAME, dock.is_ancestor_of(dock._browser_view), "BrowserView 应位于 Dock 子树内。")
-	dock.free()
-
-
 # ===== 辅助 =====
 
 ## 创建真实 ObjectVisualView 场景实例并调用 _ready 缓存子节点。
@@ -619,13 +311,6 @@ func _make_texture() -> PlaceholderTexture2D:
 	return tex
 
 
-## 创建带两状态 profile 的 _StubVisual，未入树。
-func _make_stub_with_profile() -> ObjectVisualView:
-	var view: _StubVisual = _StubVisual.new()
-	view.visual_profile = _make_profile_two_states()
-	return view
-
-
 # ===== 断言与报告 =====
 
 ## 单项断言：累计计数，失败时记录原因。
@@ -637,9 +322,9 @@ func _check(name: String, ok: bool, detail: String) -> void:
 
 ## 输出测试摘要。
 func _report() -> void:
-	var group_count: int = 29
+	var group_count: int = 16
 	var passed_checks: int = _checks - _failures.size()
-	print("==== VisualStateEditService + Dock 边界测试摘要 ====")
+	print("==== VisualStateEditService 核心测试摘要 ====")
 	print("测试组数：%d" % group_count)
 	print("断言总数：%d" % _checks)
 	print("通过断言：%d" % passed_checks)
