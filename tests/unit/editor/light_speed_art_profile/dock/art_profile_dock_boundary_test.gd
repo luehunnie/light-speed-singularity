@@ -71,6 +71,9 @@ func _initialize() -> void:
 	_test_d11_click_unlit_state_id()
 	_test_d14_save_does_not_invoke_replace()
 	_test_d15_browser_remains_in_dock()
+	_test_d16_subpanel_control_ownership()
+	_test_d17_service_forwarding()
+	_test_d18_clear_action_clears_subpanels()
 	_report()
 	quit(0 if _failures.is_empty() else 1)
 
@@ -161,8 +164,8 @@ func _test_d06_switch_object_clears_state() -> void:
 	var view1 = _make_stub_with_profile()
 	dock.show_selection([view1])
 	# 选中第一个状态。
-	dock._action_panel._state_list.select(0)
-	dock._action_panel._on_state_selected(0)
+	dock._action_panel._visual_state_panel._state_list.select(0)
+	dock._action_panel._visual_state_panel._on_state_selected(0)
 	_check(NAME, dock.get_selected_state_id() != &"", "前置：应已选择状态。")
 	# 切换到另一个对象。
 	var view2 = _make_stub_with_profile()
@@ -182,16 +185,16 @@ func _test_d07_apply_button_enable_conditions() -> void:
 	var view = _make_stub_with_profile()
 	dock.show_selection([view])
 	# 无状态、无素材：禁用。
-	_check(NAME, dock._action_panel._apply_button.disabled == true, "无状态/素材应禁用。")
+	_check(NAME, dock._action_panel._visual_state_panel._apply_button.disabled == true, "无状态/素材应禁用。")
 	# 选中状态但仍无素材：禁用。
-	dock._action_panel._state_list.select(0)
-	dock._action_panel._on_state_selected(0)
-	_check(NAME, dock._action_panel._apply_button.disabled == true, "有状态无素材应禁用。")
+	dock._action_panel._visual_state_panel._state_list.select(0)
+	dock._action_panel._visual_state_panel._on_state_selected(0)
+	_check(NAME, dock._action_panel._visual_state_panel._apply_button.disabled == true, "有状态无素材应禁用。")
 	# 扫描浏览器并选中真实素材：启用。
 	dock._browser_view._ready()
 	var ok: bool = dock._browser_view.select_entry_by_path(_REAL_ART_PATH)
 	_check(NAME, ok, "应能选中真实素材。")
-	_check(NAME, dock._action_panel._apply_button.disabled == false, "状态+素材齐备应启用。")
+	_check(NAME, dock._action_panel._visual_state_panel._apply_button.disabled == false, "状态+素材齐备应启用。")
 	dock.free()
 	view.free()
 
@@ -208,8 +211,8 @@ func _test_d08_dock_does_not_modify_profile() -> void:
 	var view = _StubVisual.new()
 	view.visual_profile = profile
 	dock.show_selection([view])
-	dock._action_panel._state_list.select(1)
-	dock._action_panel._on_state_selected(1)
+	dock._action_panel._visual_state_panel._state_list.select(1)
+	dock._action_panel._visual_state_panel._on_state_selected(1)
 	dock._browser_view._ready()
 	dock._browser_view.select_entry_by_path(_REAL_ART_PATH)
 	_check(NAME, profile.get_world_texture(&"unlit") == before_unlit, "Dock 不应修改 unlit 纹理。")
@@ -226,7 +229,7 @@ func _test_d09_state_list_minimum_size() -> void:
 	dock._ready()
 	var view = _make_stub_with_profile()
 	dock.show_selection([view])
-	var sl: ItemList = dock._action_panel._state_list
+	var sl: ItemList = dock._action_panel._visual_state_panel._state_list
 	_check(NAME, sl != null and is_instance_valid(sl), "状态列表应已创建。")
 	_check(NAME, sl.custom_minimum_size.y > 0, "状态列表 custom_minimum_size.y 应非零。")
 	dock.free()
@@ -241,7 +244,7 @@ func _test_d10_two_states_in_list() -> void:
 	dock._ready()
 	var view = _make_stub_with_profile()
 	dock.show_selection([view])
-	var sl: ItemList = dock._action_panel._state_list
+	var sl: ItemList = dock._action_panel._visual_state_panel._state_list
 	_check(NAME, sl != null and sl.item_count == 2, "Crystal 应有 unlit/lit 两项。")
 	if sl == null:
 		dock.free()
@@ -264,7 +267,7 @@ func _test_d11_click_unlit_state_id() -> void:
 	dock._ready()
 	var view = _make_stub_with_profile()
 	dock.show_selection([view])
-	var sl: ItemList = dock._action_panel._state_list
+	var sl: ItemList = dock._action_panel._visual_state_panel._state_list
 	var idx: int = -1
 	for i: int in range(sl.item_count):
 		if sl.get_item_metadata(i) == &"unlit":
@@ -273,7 +276,7 @@ func _test_d11_click_unlit_state_id() -> void:
 	_check(NAME, idx >= 0, "应找到 unlit 项。")
 	if idx >= 0:
 		sl.select(idx)
-		dock._action_panel._on_state_selected(idx)
+		dock._action_panel._visual_state_panel._on_state_selected(idx)
 		_check(NAME, dock.get_selected_state_id() == &"unlit", "点击 unlit 后 state_id 应为 unlit。")
 	dock.free()
 	view.free()
@@ -304,9 +307,9 @@ func _test_d14_save_does_not_invoke_replace() -> void:
 	backend.return_err = OK
 	save_service.set_save_backend(Callable(backend, "save"))
 	dock._action_panel._save_service = save_service
-	dock._action_panel._on_save_pressed()
-	_check(NAME, dock._action_panel._save_confirm.visible == true, "保存应显示确认 UI。")
-	dock._action_panel._on_confirm_save_pressed()
+	dock._action_panel._save_panel._on_save_pressed()
+	_check(NAME, dock._action_panel._save_panel._save_confirm.visible == true, "保存应显示确认 UI。")
+	dock._action_panel._save_panel._on_confirm_save_pressed()
 	_check(NAME, spy.replace_count == 0, "保存不应调用替换服务。")
 	_check(NAME, backend.captured_profile == profile, "保存应走 SaveService 写入原 profile。")
 	dock.free()
@@ -330,6 +333,67 @@ func _test_d15_browser_remains_in_dock() -> void:
 
 
 # ===== 辅助 =====
+
+## D16. 拆分后控件归属：状态/应用控件在 VisualStatePanel，保存控件在 ProfileSavePanel，共享状态在 ActionPanel。
+func _test_d16_subpanel_control_ownership() -> void:
+	const NAME: String = "D16_子面板控件归属"
+	var dock = _DockScene.instantiate()
+	root.add_child(dock)
+	dock._ready()
+	var view = _make_stub_with_profile()
+	dock.show_selection([view])
+	var vsp = dock._action_panel._visual_state_panel
+	var ssp = dock._action_panel._save_panel
+	_check(NAME, vsp != null and is_instance_valid(vsp), "VisualStatePanel 应存在。")
+	_check(NAME, ssp != null and is_instance_valid(ssp), "ProfileSavePanel 应存在。")
+	_check(NAME, vsp._state_list != null and is_instance_valid(vsp._state_list), "状态列表应归属 VisualStatePanel。")
+	_check(NAME, vsp._apply_button != null and is_instance_valid(vsp._apply_button), "应用按钮应归属 VisualStatePanel。")
+	_check(NAME, ssp._save_button != null and is_instance_valid(ssp._save_button), "保存按钮应归属 ProfileSavePanel。")
+	_check(NAME, ssp._save_confirm != null and is_instance_valid(ssp._save_confirm), "保存确认应归属 ProfileSavePanel。")
+	_check(NAME, dock._action_panel._operation_status != null, "共享操作状态 Label 应归属 ActionPanel。")
+	dock.free()
+	view.free()
+
+
+## D17. ActionPanel 属性赋值实时转发：EditService / SaveService / UndoRedo 注入子面板。
+func _test_d17_service_forwarding() -> void:
+	const NAME: String = "D17_服务与UndoRedo转发"
+	var dock = _DockScene.instantiate()
+	root.add_child(dock)
+	dock._ready()
+	var spy := _SpyEdit.new()
+	dock._action_panel._edit_service = spy
+	_check(NAME, dock._action_panel._visual_state_panel._edit_service == spy, "EditService 赋值应转发到 VisualStatePanel。")
+	var save_service = _SaveServiceScript.new()
+	dock._action_panel._save_service = save_service
+	_check(NAME, dock._action_panel._save_panel._save_service == save_service, "SaveService 赋值应转发到 ProfileSavePanel。")
+	var ur := UndoRedo.new()
+	dock.set_editor_undo_redo(ur)
+	_check(NAME, dock._action_panel._editor_undo_redo == ur, "ActionPanel 应持有注入的 UndoRedo。")
+	_check(NAME, dock._action_panel._visual_state_panel._editor_undo_redo == ur, "UndoRedo 应转发到 VisualStatePanel。")
+	dock.free()
+
+
+## D18. clear_action 同时清空两个子面板：状态列表释放、选择清空、保存确认隐藏、共享状态行清空。
+func _test_d18_clear_action_clears_subpanels() -> void:
+	const NAME: String = "D18_clear_action清两子面板"
+	var dock = _DockScene.instantiate()
+	root.add_child(dock)
+	dock._ready()
+	var view = _make_stub_with_profile()
+	dock.show_selection([view])
+	dock._action_panel._visual_state_panel._state_list.select(0)
+	dock._action_panel._visual_state_panel._on_state_selected(0)
+	_check(NAME, dock._action_panel._visual_state_panel._state_list != null, "前置：状态列表应已创建。")
+	_check(NAME, dock.get_selected_state_id() != &"", "前置：应已选择状态。")
+	dock._action_panel.clear_action()
+	_check(NAME, dock._action_panel._visual_state_panel._state_list == null, "clear_action 应释放状态列表。")
+	_check(NAME, dock._action_panel._visual_state_panel.get_selected_state_id() == &"", "clear_action 应清空状态选择。")
+	_check(NAME, dock._action_panel._save_panel._save_confirm.visible == false, "clear_action 应隐藏保存确认。")
+	_check(NAME, dock._action_panel._operation_status.text == "", "clear_action 应清空共享状态行。")
+	dock.free()
+	view.free()
+
 
 ## 创建带两状态（unlit/lit）的 profile，default=unlit。
 func _make_profile_two_states() -> _ObjectVisualProfile:
@@ -373,7 +437,7 @@ func _check(name: String, ok: bool, detail: String) -> void:
 
 ## 输出测试摘要。
 func _report() -> void:
-	var group_count: int = 13
+	var group_count: int = 16
 	var passed_checks: int = _checks - _failures.size()
 	print("==== ArtProfileDock 只读边界测试摘要 ====")
 	print("测试组数：%d" % group_count)

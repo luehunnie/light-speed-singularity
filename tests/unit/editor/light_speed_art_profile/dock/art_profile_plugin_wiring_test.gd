@@ -92,8 +92,8 @@ func _test_w03_panel_without_manager_fails() -> void:
 	var dock = _make_dock_with_unlit(_normal_tex())
 	dock.set_editor_undo_redo(null)
 	_select_unlit_and_blue_entry(dock)
-	_check(NAME, dock._action_panel._apply_button.disabled == false, "状态+素材齐备时按钮应启用。")
-	dock._action_panel._apply_button.pressed.emit()
+	_check(NAME, dock._action_panel._visual_state_panel._apply_button.disabled == false, "状态+素材齐备时按钮应启用。")
+	dock._action_panel._visual_state_panel._apply_button.pressed.emit()
 	_check(NAME, dock._action_panel._operation_status.text.contains("应用失败"), "无 manager 应写“应用失败”。")
 	dock.free()
 
@@ -107,7 +107,7 @@ func _test_w04_button_press_uses_injected_manager() -> void:
 	var spy := _SpyEdit.new()
 	dock._action_panel._edit_service = spy
 	_select_unlit_and_blue_entry(dock)
-	dock._action_panel._apply_button.pressed.emit()
+	dock._action_panel._visual_state_panel._apply_button.pressed.emit()
 	_check(NAME, spy.replace_count == 1, "按下应用按钮应触发一次替换。")
 	_check(NAME, spy.captured_ur == ur, "服务应收到注入的 manager，而非 EditorInterface 查找结果。")
 	dock.free()
@@ -121,7 +121,7 @@ func _test_w09_undo_restores_old() -> void:
 	var ur := UndoRedo.new()
 	dock.set_editor_undo_redo(ur)
 	_select_unlit_and_blue_entry(dock)
-	dock._action_panel._apply_button.pressed.emit()
+	dock._action_panel._visual_state_panel._apply_button.pressed.emit()
 	ur.undo()
 	var state: _VisualStateTexture = dock._action_panel._edit_service.find_state(dock._action_panel.get_active_visual_target().visual_profile, &"unlit")
 	_check(NAME, state.world_texture == normal, "Undo 后 world_texture 应恢复为 normal。")
@@ -135,7 +135,7 @@ func _test_w10_redo_restores_new() -> void:
 	var ur := UndoRedo.new()
 	dock.set_editor_undo_redo(ur)
 	_select_unlit_and_blue_entry(dock)
-	dock._action_panel._apply_button.pressed.emit()
+	dock._action_panel._visual_state_panel._apply_button.pressed.emit()
 	ur.undo()
 	ur.redo()
 	var state: _VisualStateTexture = dock._action_panel._edit_service.find_state(dock._action_panel.get_active_visual_target().visual_profile, &"unlit")
@@ -155,7 +155,7 @@ func _test_w_real_editor_undo_redo_manager() -> void:
 	var dock = _make_dock_with_unlit(_normal_tex())
 	dock.set_editor_undo_redo(real_ur)
 	_select_unlit_and_blue_entry(dock)
-	dock._action_panel._apply_button.pressed.emit()
+	dock._action_panel._visual_state_panel._apply_button.pressed.emit()
 	var state: _VisualStateTexture = dock._action_panel._edit_service.find_state(dock._action_panel.get_active_visual_target().visual_profile, &"unlit")
 	_check(NAME, state.world_texture == _blue_tex(), "真实管理器 do-path 应完成替换（无 Invalid call）。")
 	dock.free()
@@ -189,14 +189,14 @@ func _select_unlit_and_blue_entry(dock: Node) -> void:
 
 ## 在面板状态列表中选中 unlit。
 func _select_unlit_state(dock: Node) -> void:
-	var sl: ItemList = dock._action_panel._state_list
+	var sl: ItemList = dock._action_panel._visual_state_panel._state_list
 	var idx: int = -1
 	for i: int in range(sl.item_count):
 		if sl.get_item_metadata(i) == &"unlit":
 			idx = i
 			break
 	sl.select(idx)
-	dock._action_panel._on_state_selected(idx)
+	dock._action_panel._visual_state_panel._on_state_selected(idx)
 
 
 ## 浏览器素材提供器回调：返回当前测试设置的 Entry。
