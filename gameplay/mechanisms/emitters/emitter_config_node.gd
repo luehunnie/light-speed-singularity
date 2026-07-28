@@ -2,9 +2,10 @@
 class_name EmitterConfigNode
 extends GridPlacedObject
 
-## 发射器关卡配置节点（阶段 1 D3B-1 / D3C-0）。
+## 发射器关卡配置节点（阶段 1 D3B-1 / D3C-0 / D3C-2.5）。
 ## 职责：承载可由 Inspector 编辑的发射器配置数据——形态、光线方向、光粒方向、视觉资源、预览可见性，
 ##   在配置实际变化时发出信号，并单向驱动两个可选直属子节点（EmitterVisual / EmissionPreview）的显示；
+##   D3C-2.5：根据 default_light_form 与对应活动方向计算 EmitterVisual.rotation，不旋转根节点、不建立方向到角度的第二张映射表；
 ##   不执行发射、不创建子节点、不接运行时编排，子节点缺失由后续阶段检查结构完整性。
 ## 位置事实：position 继承自 GridPlacedObject，是唯一放置事实；cell 由 position 派生；
 ##   本类不重新导出 cell、不新增 emitter_position、不使用 Node.name 作为 ID、本批不新增 emitter_id。
@@ -111,9 +112,11 @@ static func _is_valid_particle_direction(value: int) -> bool:
 # 固定直属子节点角色名仅用于预制场景内部接线，不作为稳定 emitter_id；单向同步配置到视图，子节点缺失安全跳过。
 
 ## 入树时将当前配置单向同步给两个可选直属子节点；不修改自身 position/cell，不执行发射。
+## 同步顺序：Visual Profile → EmitterVisual 朝向 → EmissionPreview 状态（D3C-2.5）。
 ## 基类 GridPlacedObject 未定义 _ready，故不调 super。
 func _ready() -> void:
 	_refresh_visual()
+	_refresh_visual_orientation()
 	_refresh_preview()
 
 
@@ -141,6 +144,16 @@ func _refresh_visual() -> void:
 	visual.set_profile(visual_profile)
 
 
+## 将当前活动方向单向同步为 EmitterVisual.rotation；缺失则跳过，不创建子节点（D3C-2.5）。
+## 基础图片约定朝向 RIGHT，故 rotation = Vector2(活动方向).angle()；
+## 不建立方向到角度的第二张映射表，不修改 local position 与 visual_profile。
+func _refresh_visual_orientation() -> void:
+	var visual := _get_emitter_visual()
+	if visual == null:
+		return
+	visual.rotation = Vector2(get_active_direction_vector()).angle()
+
+
 ## 将当前活动方向、形态样式与预览可见性单向同步给 EmissionPreview；缺失则跳过。
 func _refresh_preview() -> void:
 	var preview := _get_emission_preview()
@@ -154,6 +167,8 @@ func _refresh_preview() -> void:
 
 
 # ===== Setter：仅在实际变化时发信号，非法值拒绝并保持旧值 =====
+# 形态 / 方向 setter 顺序：1.校验 → 2.判断变化 → 3.写值 → 4.刷新 EmitterVisual 朝向与 Preview → 5.发信号。
+# 非活动形态方向被修改时仍走刷新，但 get_active_direction_vector() 返回活动形态方向，故视觉朝向不变。
 
 func _set_default_light_form(next: LightForm) -> void:
 	if not _is_valid_light_form(next):
@@ -162,6 +177,7 @@ func _set_default_light_form(next: LightForm) -> void:
 	if default_light_form == next:
 		return
 	default_light_form = next
+	_refresh_visual_orientation()
 	_refresh_preview()
 	configuration_changed.emit()
 
@@ -173,6 +189,7 @@ func _set_ray_default_direction(next: RayDirection) -> void:
 	if ray_default_direction == next:
 		return
 	ray_default_direction = next
+	_refresh_visual_orientation()
 	_refresh_preview()
 	configuration_changed.emit()
 
@@ -184,6 +201,7 @@ func _set_particle_default_direction(next: ParticleDirection) -> void:
 	if particle_default_direction == next:
 		return
 	particle_default_direction = next
+	_refresh_visual_orientation()
 	_refresh_preview()
 	configuration_changed.emit()
 
