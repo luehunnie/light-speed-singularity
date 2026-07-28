@@ -10,7 +10,7 @@ extends Control
 ##       不监听 EditorFileSystem 自动变更（留待 D4.5-E）；选择素材不影响 Profile 状态。
 
 const _CatalogScript: GDScript = preload(
-	"res://addons/light_speed_art_profile/art_asset_catalog.gd"
+	"res://addons/light_speed_art_profile/browser/art_asset_catalog.gd"
 )
 const _ModelScript: GDScript = preload(
 	"res://addons/light_speed_art_profile/browser/art_asset_browser_model.gd"

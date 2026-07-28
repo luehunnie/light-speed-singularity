@@ -11,7 +11,7 @@ extends RefCounted
 
 # 通过 preload 引用 Entry 脚本，规避新 class_name 在运行期尚未注册时的 "Could not find type" 坑。
 const _EntryScript: GDScript = preload(
-	"res://addons/light_speed_art_profile/art_asset_entry.gd"
+	"res://addons/light_speed_art_profile/browser/art_asset_entry.gd"
 )
 
 ## 正式美术源目录。注：任务冻结事实 #1 写 res://art/，但仓库实际美术资产位于 res://assets/art/，

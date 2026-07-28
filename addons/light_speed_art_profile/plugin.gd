@@ -7,7 +7,7 @@ extends EditorPlugin
 ## 副作用：增删右侧 Dock 并连接/断开 EditorSelection.selection_changed。
 ## 边界：重复启停先清理旧连接；空选择、多选、释放节点交由 Dock 安全清空。
 
-const _DOCK_SCENE: PackedScene = preload("res://addons/light_speed_art_profile/art_profile_dock.tscn")
+const _DOCK_SCENE: PackedScene = preload("res://addons/light_speed_art_profile/dock/art_profile_dock.tscn")
 
 var _dock: Control = null
 var _selection: EditorSelection = null

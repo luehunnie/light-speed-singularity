@@ -8,7 +8,7 @@ extends VBoxContainer
 ## 边界：无选择、多选、释放节点、无视觉目标、空状态列表都会清空旧目标信息，
 ##       不留“-”占位；不修改 Resolver 解析规则，不让未接入对象强行接入。
 
-const _VisualTargetResolver: GDScript = preload("res://addons/light_speed_art_profile/visual_target_resolver.gd")
+const _VisualTargetResolver: GDScript = preload("res://addons/light_speed_art_profile/target/visual_target_resolver.gd")
 const _BrowserViewScript: GDScript = preload("res://addons/light_speed_art_profile/browser/art_asset_browser_view.gd")
 
 var _resolver: RefCounted = _VisualTargetResolver.new()

@@ -5,13 +5,13 @@ extends SceneTree
 ## 由 Godot --script 运行，全部通过 quit(0)，任一失败 quit(1)。
 
 const _ResolverScript: GDScript = preload(
-	"res://addons/light_speed_art_profile/visual_target_resolver.gd"
+	"res://addons/light_speed_art_profile/target/visual_target_resolver.gd"
 )
 const _PluginScript: GDScript = preload(
 	"res://addons/light_speed_art_profile/plugin.gd"
 )
 const _DockScene: PackedScene = preload(
-	"res://addons/light_speed_art_profile/art_profile_dock.tscn"
+	"res://addons/light_speed_art_profile/dock/art_profile_dock.tscn"
 )
 const _ObjectVisualView: GDScript = preload(
 	"res://gameplay/visuals/object_visuals/object_visual_view.gd"

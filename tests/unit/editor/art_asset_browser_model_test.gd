@@ -10,7 +10,7 @@ const _ModelScript: GDScript = preload(
 	"res://addons/light_speed_art_profile/browser/art_asset_browser_model.gd"
 )
 const _EntryScript: GDScript = preload(
-	"res://addons/light_speed_art_profile/art_asset_entry.gd"
+	"res://addons/light_speed_art_profile/browser/art_asset_entry.gd"
 )
 
 var _failures: PackedStringArray = PackedStringArray()
