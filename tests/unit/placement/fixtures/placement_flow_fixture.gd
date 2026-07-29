@@ -38,6 +38,17 @@ class _FailRegisterForCellRegistry extends "res://gameplay/placement/occupancy_r
 		return super.register_single_cell(mechanism_id, cell)
 
 
+## 占用表桩：register_single_cell 首次继承真实行为、第二次起返回 false，用于伪造回收回滚恢复占用失败（不变量破坏）。
+## 放置时第 1 次注册成功，回收回滚时第 2 次注册失败；仅模拟接口结果，不含业务判断。
+class _FailRegisterOnSecondCallRegistry extends "res://gameplay/placement/occupancy_registry.gd":
+	var _register_count: int = 0
+	func register_single_cell(mechanism_id: StringName, cell: Vector2i) -> bool:
+		_register_count += 1
+		if _register_count >= 2:
+			return false
+		return super.register_single_cell(mechanism_id, cell)
+
+
 ## 占用表桩：仅对指定 ID 令 unregister 失败，其余继承真实行为。
 class _FailUnregisterForIdRegistry extends "res://gameplay/placement/occupancy_registry.gd":
 	var fail_id: StringName = &""
@@ -66,6 +77,16 @@ class _FailReserveInventory extends "res://gameplay/placement/inventory_controll
 class _FailCommitReturnInventory extends "res://gameplay/placement/inventory_controller.gd":
 	func commit_reserved_return() -> bool:
 		return false
+
+
+## 库存桩：commit_reserved_return 首次返回 false、之后继承真实行为，用于验证 commit 失败事务回滚后再次回收成功（库存只归还一次）。
+class _FailCommitOnceInventory extends "res://gameplay/placement/inventory_controller.gd":
+	var _commit_failed_once: bool = false
+	func commit_reserved_return() -> bool:
+		if not _commit_failed_once:
+			_commit_failed_once = true
+			return false
+		return super.commit_reserved_return()
 
 
 ## 库存桩：can_consume_one 继承真实行为，try_consume_one 强制失败，用于伪造扣库存失败。
