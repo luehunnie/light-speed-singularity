@@ -161,11 +161,11 @@ func move_placed(
 	return PlacementTransactionResult.new(Status.SUCCESS, mechanism_id, source_cell, target_cell, true)
 
 
-## 回收原子事务（预留两阶段归还）。
-## [br]顺序：确认存在 → 预留库存归还 → 注销占用 → 删映射 → 销毁节点 → 提交归还。
+## 回收原子事务（预留两阶段归还，commit 成功前不动不可逆事实）。
+## [br]顺序：确认存在 → 预留归还容量 → 暂时注销占用 → 提交归还 → 成功后才删映射/销毁节点。
 ## [br]预留失败：不注销占用、不删映射、不销毁节点，返回 FAILED，全部保持。
 ## [br]注销占用失败：取消预留，节点/映射/库存保持，返回 FAILED。
-## [br]提交归还失败（预留已锁定容量，正常同步事务不应发生）：push_error 并返回 FAILED，视为不变量破坏。
+## [br]提交归还失败：用正式注册接口恢复原占用、取消预留，节点/映射/库存保持，返回 FAILED（事务一致，可重试）。
 ## [br]正常路径最终不出现“机关已删除但库存未归还”；不调用普通 try_return_one。
 func recycle_placed(mechanism_id: StringName) -> PlacementTransactionResult:
 	if not _placed_tokens_by_id.has(mechanism_id):
@@ -178,18 +178,24 @@ func recycle_placed(mechanism_id: StringName) -> PlacementTransactionResult:
 	if not _inventory.try_reserve_return_one():
 		push_error("PlacementController: 回收库存归还预留失败，保留节点/映射/占用：%s" % [mechanism_id])
 		return PlacementTransactionResult.new(Status.FAILED, mechanism_id, source_cell, Vector2i.ZERO, false, "库存归还预留失败")
-	# 2. 注销占用；失败则取消预留，节点/映射/库存保持。
+	# 2. 暂时注销占用；失败则取消预留，节点/映射/库存保持。
 	if not _occupancy.unregister(mechanism_id):
 		push_error("PlacementController: 回收注销占用失败，取消预留并保留节点/映射/库存：%s" % [mechanism_id])
 		_inventory.cancel_reserved_return()
 		return PlacementTransactionResult.new(Status.FAILED, mechanism_id, source_cell, Vector2i.ZERO, false, "注销占用失败")
-	# 3. 占用已清理：删映射 → 销毁节点（queue_free 不必等待真正释放）。
+	# 3. 提交归还；失败则用正式注册接口恢复原占用、取消预留，节点/映射/库存保持，事务一致可重试。
+	# 回滚恢复占用的事务假设：刚注销的是同一 mechanism_id 与 source_cell，且库存 commit 不修改占用，
+	# 故 register_single_cell 原则上必成功；返回 false 即不变量破坏，必须 push_error 报告，不得静默吞掉。
+	# 无论恢复成功与否，预留都只在此清理一次；Token/映射保留、不 queue_free、不进入成功路径、不改内部 Dictionary。
+	if not _inventory.commit_reserved_return():
+		push_error("PlacementController: 回收提交归还失败，恢复占用并取消预留，保留节点/映射/库存：%s" % [mechanism_id])
+		if not _occupancy.register_single_cell(mechanism_id, source_cell):
+			push_error("PlacementController: 回收回滚恢复占用失败（不变量破坏）：%s at %s" % [mechanism_id, source_cell])
+		_inventory.cancel_reserved_return()
+		return PlacementTransactionResult.new(Status.FAILED, mechanism_id, source_cell, Vector2i.ZERO, false, "库存归还提交失败")
+	# 4. 归还已提交成功：删映射 → 销毁节点（queue_free 不必等待真正释放）。
 	_placed_tokens_by_id.erase(mechanism_id)
 	_destroy_token(token)
-	# 4. 提交归还；预留已锁定容量，正常同步事务不应失败，否则视为不变量破坏。
-	if not _inventory.commit_reserved_return():
-		push_error("PlacementController: 回收提交归还失败（不变量破坏），映射与节点已清理，库存未增：%s" % [mechanism_id])
-		return PlacementTransactionResult.new(Status.FAILED, mechanism_id, source_cell, Vector2i.ZERO, false, "库存归还提交失败")
 	return PlacementTransactionResult.new(Status.SUCCESS, mechanism_id, source_cell, Vector2i.ZERO, false)
 
 
