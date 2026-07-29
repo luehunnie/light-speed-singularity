@@ -1,6 +1,6 @@
 # 《光速奇点》文档索引
 
-> 更新日期：2026 年 7 月 27 日
+> 更新日期：2026 年 7 月 29 日
 > 实际文件名：`README_文档索引.md`，不得创建或引用 `.mdz` 变体。
 > 本索引用于快速定位当前仓库正式文档。`docs/ai/` 只用于本地 AI 协作，不属于正式仓库文档。
 
@@ -10,14 +10,14 @@
 
 以下文档位于 `docs/` 根目录，是当前团队共同遵守的正式核心文档：
 
-| 文档 | 用途 |
+| 文档 | 用途与当前状态 |
 |---|---|
-| [《光速奇点》玩法设计 v0.9](./光速奇点_玩法设计_v0.9.md) | 玩家行为、光线/光粒规则、机关、水晶、目标、关卡结构与重置规则 |
-| [《光速奇点》开发规范 v0.9](./光速奇点_开发规范_v0.9.md) | 代码、模块、场景、资源、测试、Git 与 AI 协作规范 |
-| [《光速奇点》技术栈 v0.9](./光速奇点_技术栈_v0.9.md) | 引擎、语言、网格、传播、资源、诊断、UI、成就、存档与导出技术选择 |
-| [《光速奇点》项目管理 v0.7](./光速奇点_项目管理_v0.7.md) | 9 月 5 日前范围、阶段排期、任务流程、完成定义、风险与交付验收 |
-| [《光速奇点》实际业务 v0.7](./光速奇点_实际业务_v0.7.md) | 产品定位、目标用户、业务范围、科学家内容、真实性与业务验收 |
-| [《光速奇点》各阶段团队分工与交付物 v0.9](./光速奇点_各阶段团队分工与交付物_v0.9.md) | 陈俊贤、潘陈俣、张梓涵的职责、阶段任务与交付物 |
+| [《光速奇点》玩法设计 v0.9](./光速奇点_玩法设计_v0.9.md) | 玩家行为、光线/光粒规则、机关、水晶、目标、关卡结构与重置规则。是已冻结设计，不等于全部已实现 |
+| [《光速奇点》开发规范 v0.9](./光速奇点_开发规范_v0.9.md) | 当前代码边界、坐标、对象、Diagnostics、测试与 Git/AI 协作规范 |
+| [《光速奇点》技术栈 v0.9](./光速奇点_技术栈_v0.9.md) | 当前已用技术、组件状态和实现边界 |
+| [《光速奇点》项目管理 v0.7](./光速奇点_项目管理_v0.7.md) | 当前阶段、进度、风险与下一开发入口 |
+| [《光速奇点》实际业务 v0.7](./光速奇点_实际业务_v0.7.md) | 交付目标和业务范围 |
+| [《光速奇点》各阶段团队分工与交付物 v0.9](./光速奇点_各阶段团队分工与交付物_v0.9.md) | 陈俊贤、潘陈俣、张梓涵三人职责和阶段交付 |
 
 ---
 
@@ -43,7 +43,7 @@
 
 > 注意：
 > - 接口设计文档包含长期目标契约；
-> - GridPlacedObject 和完整编辑器工作流当前尚未实现；
+> - `GridPlacedObject` 基类已实现，但完整编辑器工作流（编辑器方法 B）尚未完成；
 > - 不得仅凭 API 文档判断功能已经可用；
 > - 实施状态必须结合真实代码和当前状态文档。
 
@@ -61,12 +61,39 @@
 
 ---
 
-## 5. 当前下一开发方向
+## 5. 当前实现摘要与下一开发方向
 
-- Diagnostics foundation 已完成并合并 `main`；
-- D3 运行编排解耦冲刺已在 `refactor/kud-runtime-orchestration` 基本完成：运行状态、世界查询、运行期编排、交互/放置/库存/目标/视觉/水晶身份/Diagnostics 编排均已迁出核心，`core_loop_prototype.gd` 已降至约 480 物理行；当前仍为四态，不含 `READY_TO_FIRE`；
-- 已实现模块：`RunStateController`、`LevelRuntimeController`、`LevelWorldQuery`、`LightWorldQuery`、`RayExecutionModule`、`RayMechanismAdapter`、`FireRequest`、`LightVisualController`、`FixedEmitter`、`LevelObjectRegistry`、`ObjectiveController`、`InventoryController`、`PlacementController`、`DragFlowController`、`DragContext`、`PlayerInteractionController`、`StartupSelfCheckCoordinator`；
-- 尚未开始 `GridPlacedObject` 位置契约重构（D3A，当前 D1 旧 cell→position，待重构：position 为场景编辑事实，cell 由 position 派生）、Godot 原生 64 格拖动吸附（不另建吸附插件）、`EmitterConfigNode`（D3B）、`EmissionPreview` 与真实光线接线（D3C）、两正式插件（D7A 美术配置插件 / D7B 关卡工具插件）、`LevelValidator`、统一 `EmissionRequest`/`LightRuntimeCoordinator`/光粒、`READY_TO_FIRE`、开始运行按钮、真实 `RuntimeSnapshot` 采样。
+当前实现摘要：
+
+已完成：
+
+- `GridPlacedObject`、`EmitterConfigNode`、`EmissionPreview`；
+- 当前光线路径接线（发射器真实光路端到端集成测试已落地）；
+- `BasicCrystal` 基础视觉与状态接口；
+- Placement 与 DragFlow 基础（`PlacementController` / `InventoryController` / `DragFlowController` / `OccupancyRegistry`）；
+- Runtime 与 Diagnostics 基础（`RunStateController` / `LevelRuntimeController` / `DiagnosticsController` / `RuntimeLogger` / `RuntimeSnapshotData` / `StartupSelfCheckCoordinator`）；
+- 单一美术 Profile 插件 `addons/light_speed_art_profile/`（Dock、Panel、Service、Resolver、Browser 均为该插件内部模块）；
+- 核心测试架构按职责拆分；
+- 回收事务一致性修复。
+
+未完成：
+
+- 编辑器方法 B（2D 拖动、64×64 吸附、写回逻辑 `cell`）；
+- Profile 独立副本与共享 Profile 自动转实例独立资源；
+- 光线/光粒形态切换、统一光运行架构、光粒；
+- WASD 发射器实时控制与提示 UI；
+- 真实 `RuntimeSnapshot` 自动采样与自动保存；
+- `READY_TO_FIRE` 状态与开始运行按钮；
+- 正式主界面、选关、存档、成就与 Windows 发布流程。
+
+当前下一开发方向：
+
+- 独立可复用对象的 `PackedScene` 模板；
+- 单格/多格锚点规范落地；
+- 编辑器方法 B（2D 拖动、64×64 吸附、写回逻辑 `cell`，移动父节点时视觉和光路配置同步）；
+- 在冻结接口和对象模板内开发机关和关卡内容。
+
+D8 Diagnostics 保持现有架构，在 foundation 上补强，不作为大规模重构任务。
 
 ---
 

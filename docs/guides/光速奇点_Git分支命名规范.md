@@ -473,7 +473,7 @@ test/zhang-mechanism-template-visual
 
 ```bash
 git switch main
-git pull origin main
+git pull --ff-only origin main
 ```
 
 然后创建自己的任务分支。
@@ -491,6 +491,21 @@ git switch -c feat/pan-single-mirror-rule-adapter
 张梓涵示例：
 ```bash
 git switch -c test/zhang-mechanism-template-visual
+```
+
+完整的关键上传与拉取流程：
+
+```text
+切回 main
+→ git pull --ff-only origin main
+→ 从最新 main 创建短生命周期分支
+→ 小批次提交，一次提交只承担一个清晰职责
+→ 推送到 GitHub
+→ 创建 PR
+→ 合并进 main
+→ 本地切回 main 并重新拉取
+→ 删除已合并分支
+→ git fetch --prune 清理远程引用
 ```
 
 # 12. 提交与合并标准
@@ -531,14 +546,33 @@ git switch -c test/zhang-mechanism-template-visual
 示例（仅由用户人工执行；AI 不执行 Git 写操作）：
 ```bash
 git switch main
-git pull origin main
+git pull --ff-only origin main
 git branch -d feat/kud-mechanism-interface
+git fetch --prune
 ```
 
 远程分支未自动删除时：
 ```bash
 git push origin --delete feat/kud-mechanism-interface
 ```
+
+## 12.5 提交范围
+
+- `.gd`、`.tscn` 以及对应的 `.gd.uid` 必须同步提交，不要只提交其中一部分；
+- Godot 新 UID 由引擎生成，不手写；
+- `docs/ai` 不提交；
+- 临时诊断文件不放仓库根目录；
+- 提交前检查 `git status` 与 `git diff --check`；
+- 一次提交只承担一个清晰职责，不顺手混入无关模块。
+
+## 12.6 合并汇报
+
+每次合并必须说明：
+
+- 改动内容；
+- 修改文件；
+- 验证结果；
+- 下一步。
 
 # 13. 推荐的下一批分支
 
