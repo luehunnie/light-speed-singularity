@@ -53,3 +53,6 @@ desktop.ini
 *.p12
 
 export_credentials.cfg
+
+# Codex ±æµÿ≈‰÷√
+.codex/
