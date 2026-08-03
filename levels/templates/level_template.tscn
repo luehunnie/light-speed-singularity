@@ -1,0 +1,30 @@
+[gd_scene format=3]
+
+[ext_resource type="TileSet" path="res://assets/art/tilesets/d5_placeholder_tileset.tres" id="1_ts"]
+[ext_resource type="PackedScene" path="res://gameplay/mechanisms/emitters/emitter_config_node.tscn" id="2_emitter"]
+[ext_resource type="PackedScene" path="res://gameplay/crystals/basic_crystal.tscn" id="3_crystal"]
+
+[node name="LevelTemplate" type="Node2D"]
+
+[node name="TerrainLayer" type="TileMapLayer" parent="."]
+tile_set = ExtResource("1_ts")
+
+[node name="WallLayer" type="TileMapLayer" parent="."]
+tile_set = ExtResource("1_ts")
+
+[node name="LegalAreaLayer" type="TileMapLayer" parent="."]
+tile_set = ExtResource("1_ts")
+
+[node name="DecorationLayer" type="TileMapLayer" parent="."]
+tile_set = ExtResource("1_ts")
+
+[node name="RuntimeObjects" type="Node2D" parent="."]
+
+[node name="Emitter" parent="RuntimeObjects" instance=ExtResource("2_emitter")]
+position = Vector2(96, 224)
+
+[node name="BasicCrystal" parent="RuntimeObjects" instance=ExtResource("3_crystal")]
+position = Vector2(224, 96)
+crystal_id = &"crystal_001"
+
+[node name="LightPathLayer" type="Node2D" parent="."]
