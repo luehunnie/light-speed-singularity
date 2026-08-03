@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- D5 技术占位图块 atlas（128x128，2x2 各 64x64）。
+     仅用于让四层 TileMapLayer 在 GUI 中可绘制、可区分；
+     逻辑职责只由所在图层决定，不由本图颜色/形状/文件名决定。
+     四象限：左上 Terrain / 右上 Wall / 左下 LegalArea / 右下 Decoration。 -->
+<svg xmlns="http://www.w3.org/2000/svg" width="128" height="128" viewBox="0 0 128 128">
+  <!-- Terrain (atlas 0,0)：关卡内部地面 -->
+  <rect x="0" y="0" width="64" height="64" fill="#3d4f3a"/>
+  <line x1="8" y1="20" x2="56" y2="20" stroke="#5a7050" stroke-width="4"/>
+  <line x1="8" y1="32" x2="56" y2="32" stroke="#5a7050" stroke-width="4"/>
+  <line x1="8" y1="44" x2="56" y2="44" stroke="#5a7050" stroke-width="4"/>
+
+  <!-- Wall (atlas 1,0)：普通静态阻挡块 -->
+  <rect x="64" y="0" width="64" height="64" fill="#6e3b3b"/>
+  <rect x="70" y="6" width="52" height="52" fill="none" stroke="#2a1414" stroke-width="6"/>
+
+  <!-- LegalArea (atlas 0,1)：Terrain 内允许放置覆盖 -->
+  <rect x="0" y="64" width="64" height="64" fill="#2f6f8f"/>
+  <circle cx="18" cy="82" r="5" fill="#8fd0f0"/>
+  <circle cx="46" cy="82" r="5" fill="#8fd0f0"/>
+  <circle cx="18" cy="110" r="5" fill="#8fd0f0"/>
+  <circle cx="46" cy="110" r="5" fill="#8fd0f0"/>
+
+  <!-- Decoration (atlas 1,1)：纯视觉装饰 -->
+  <rect x="64" y="64" width="64" height="64" fill="#7a4f8a"/>
+  <polygon points="96,78 114,96 96,114 78,96" fill="none" stroke="#d0a0e0" stroke-width="5"/>
+</svg>
