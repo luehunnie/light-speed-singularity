@@ -193,7 +193,7 @@ cell     : Vector2i  # 由 position 派生
 1. `GridPlacedObject` 根节点自身的局部原点为 `(0, 0)`；
 2. 根节点在场景中的 `position` 对齐目标格中心——`cell_to_world(Vector2i.ZERO)` 在 64 格下返回 `(32, 32)`，这是从 64×64 格子左上角计算的格中心偏移（半格），用于把根 `position` 放到格中心，而非根节点局部原点；
 3. visual、collision、hint 子节点使用相对根节点的局部坐标，不得把子节点统一放到 `(32, 32)` 来二次补偿根节点位置；
-4. 多格对象根 `position` 对齐明确锚点格中心，占用偏移由 `get_occupied_offsets()` 表达。
+4. 多格对象根 `position` 对齐明确锚点格中心，占用偏移由 `get_occupied_offsets(p_orientation: int = 0)` 表达，全部占用格由 `get_occupied_cells(anchor_cell: Vector2i, p_orientation: int = 0)` 叠加计算。
 
 不得把根节点局部原点直接写为 `(32, 32)`，避免混淆局部坐标与格内偏移。
 
@@ -631,7 +631,7 @@ LegalAreaLayer
 
 # 15. 多格机关
 
-> **状态：目标接口，当前未实现。** `anchor_cell`、`occupied_offsets` 和多格编辑流程属于目标契约，字段名为目标示例，**最终以真实实现为准**，当前不存在可依赖的正式字段或代码。
+> **状态：公共占用接口已冻结并落地；正式多格机关子类与方法 B 尚未实现。** `get_occupied_offsets(p_orientation: int = 0)` 与 `get_occupied_cells(anchor_cell: Vector2i, p_orientation: int = 0)` 已冻结并落地于 `GridPlacedObject` 基类（单格默认 `[Vector2i.ZERO]`）；`anchor_cell` 是查询参数或由根 `position` 派生，不是持久化的第二位置事实。正式多格机关子类、多格旋转占用，以及关卡编辑方法 B（2D 视图直接拖动写回）尚未完整实现。
 
 多格机关目标上使用：
 
