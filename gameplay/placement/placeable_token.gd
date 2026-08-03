@@ -2,7 +2,9 @@ class_name PlaceableToken
 extends Node2D
 
 ## 核心闭环原型单格可放置机关通用视觉脚本（永久视觉接口 v1.0 §13）。
-## 职责：保存原型机关的唯一 ID 与逻辑格子，按关卡控制器传入的位置刷新显示，
+## 位置契约：position 是唯一场景位置事实；cell 由 position 经共享 GridCoordinateRules 确定性派生，
+## 不持有可独立漂移的 cell 后备字段，不复制第二套 64×64 换算；set_cell/.cell 经 setter 把 position 对齐到格中心。
+## 职责：保存原型机关的唯一 ID，按关卡控制器传入的 position 刷新显示，
 ## 通过 ObjectVisualView 统一承载正式放置态与拖拽预览态的纹理及合法 / 非法反馈，
 ## 不再让旧 ColorRect 占位承担正式机关图片或合法性反馈。
 ## 位置：由 levels/prototypes/core_loop_prototype.gd 在布置阶段实例化和驱动，用于验证库存、拖拽、占用登记、移动和回收流程；
@@ -13,12 +15,26 @@ extends Node2D
 ## 正式图片、拖拽图片与合法 / 非法覆盖层均由 ObjectVisualView 负责，本类不直接访问 TextureRect.texture，
 ## 也不通过修改正式图片的 color 或 self_modulate 表达合法 / 非法。
 ## 世界机关尺寸：世界视觉矩形由 ObjectVisualView 固定为 64×64（offsets -32～32），与 GridMetrics.SINGLE_CELL_WORLD_SIZE 一致；
-## 本脚本不自行换算坐标，世界位置统一由关卡控制器的 cell_to_world() 传入。
+## cell↔position 换算统一经 preload 共享模块 GridCoordinateRules，本脚本不复制第二套 64×64 公式；position 由关卡控制器的 cell_to_world() 或 set_world_position() 写入。
 ## UI 分离：CanvasLayer 机关栏 TokenIcon 等 UI 图标尺寸与世界机关尺寸相互独立，不随 64 世界格强制缩放。
 ## 不负责：地图合法性判断、OccupancyRegistry 写入、库存数量、RunState、光传播、阻挡、反射、颜色转换或通关判断。
 
+## 格坐标纯换算规则唯一来源：preload 引用以避开 Godot MCP 运行期未重建全局 class 缓存的类型解析问题。
+## 与 GridPlacedObject 共享同一模块，保证单格机关与世界固定格对象使用同一套 cell↔position 换算，无第二套 64×64 公式。
+const _GridCoordinateRules: GDScript = preload(
+	"res://gameplay/grid/grid_coordinate_rules.gd"
+)
+
 var mechanism_id: StringName = &""
-var cell: Vector2i = Vector2i.ZERO
+
+## 格子坐标（Vector2i），由 position 确定性派生，非独立持久化事实。
+## getter：position → world_to_cell；setter：cell_to_world → position。保留 .cell 访问兼容性。
+## 不使用显式后备字段 / 元数据，不序列化第二份 cell；setter 不引用 cell，无递归。
+var cell: Vector2i:
+	get:
+		return _GridCoordinateRules.world_to_cell(position)
+	set(next_cell):
+		position = _GridCoordinateRules.cell_to_world(next_cell)
 
 ## 通用视觉显示组件，承载正式 / 拖拽纹理与合法 / 非法 / 禁用反馈；由具体派生机关场景配置 visual_profile。
 @onready var _visual_view: ObjectVisualView = $VisualView
@@ -32,7 +48,7 @@ const _DRAG_PREVIEW_SCALE: Vector2 = Vector2(1.08, 1.08)
 
 ## 配置原型机关实例的基础数据。
 ## [br]id 是关卡控制器分配的唯一机关 ID，initial_cell 是当前逻辑格子。
-## [br]无返回值；副作用是写入 mechanism_id 和 cell，并把视觉切换为正式放置态（WORLD + NONE）。
+## [br]无返回值；副作用是写入 mechanism_id，并经 cell setter 把 position 对齐到 initial_cell 格中心，再把视觉切换为正式放置态（WORLD + NONE）。
 ## [br]边界条件：允许预览节点使用临时 ID；本函数不验证 ID 唯一性、不判断格子合法性、不写占用表；
 ## [br]调用时机在 add_child 之后，VisualView 已完成 _ready，可安全驱动。
 func configure(id: StringName, initial_cell: Vector2i) -> void:
@@ -41,18 +57,24 @@ func configure(id: StringName, initial_cell: Vector2i) -> void:
 	set_drag_preview(false, true)
 
 
-## 更新机关保存的逻辑格子。
+## 更新机关的逻辑格子。
 ## [br]new_cell 是关卡控制器确认后的格子坐标。
-## [br]无返回值；副作用仅修改 cell，不移动节点世界坐标。
+## [br]无返回值；副作用是经 cell setter 把 position 对齐到 new_cell 格中心（cell 随 position 派生为 new_cell）。
 ## [br]边界条件：本函数不判断地图边界、墙体、水晶或占用；调用方必须在提交前完成合法性检查。
 func set_cell(new_cell: Vector2i) -> void:
 	cell = new_cell
 
 
+## 读取当前派生格。委派给 cell getter，结果随 position 实时变化；保留 get_cell() 兼容接口。
+## [br]无副作用，不修改 position、cell、视觉、库存或 OccupancyRegistry。
+func get_cell() -> Vector2i:
+	return cell
+
+
 ## 更新机关节点的世界位置。
 ## [br]world_position 是关卡控制器通过统一 cell_to_world() 或鼠标吸附规则计算出的世界坐标。
-## [br]无返回值；副作用是设置 Node2D.position，VisualView 位于本节点局部原点因此随之移动。
-## [br]边界条件：本节点不自行实现坐标换算，避免与关卡控制器产生第二套 cell/world 规则。
+## [br]无返回值；副作用是设置 Node2D.position，cell 由该 position 派生，VisualView 位于本节点局部原点因此随之移动。
+## [br]边界条件：本节点不复制第二套 cell/world 换算，cell 始终由 position 经共享 GridCoordinateRules 派生。
 func set_world_position(world_position: Vector2) -> void:
 	position = world_position
 

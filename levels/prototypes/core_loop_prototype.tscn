@@ -1,14 +1,10 @@
 [gd_scene format=3 uid="uid://bw4ulmdm0mei0"]
 
-[ext_resource type="Script" uid="uid://cfkidx57m3yqa" path="res://gameplay/crystals/basic_crystal.gd" id="1_crystal"]
 [ext_resource type="Script" uid="uid://do7wigwkihxy0" path="res://levels/prototypes/core_loop_prototype.gd" id="2_proto"]
-[ext_resource type="PackedScene" uid="uid://cjha6lnu2voun" path="res://gameplay/visuals/object_visuals/object_visual_view.tscn" id="3_view"]
-[ext_resource type="Resource" path="res://assets/visual_profiles/basic_crystal_visuals.tres" id="4_profile"]
 [ext_resource type="Script" uid="uid://dctpsq4bkc0cr" path="res://gameplay/ui/inventory_slot_view.gd" id="5_slot_view"]
 [ext_resource type="Resource" path="res://assets/visual_profiles/single_cell_mirror_visuals.tres" id="6_mirror_profile"]
-[ext_resource type="Script" path="res://gameplay/mechanisms/emitters/emitter_config_node.gd" id="7_emitter_cfg"]
-[ext_resource type="Script" path="res://gameplay/mechanisms/emitters/emission_preview.gd" id="8_preview"]
-[ext_resource type="Resource" uid="uid://cq0d7p6pgay05" path="res://assets/visual_profiles/emitter_visuals.tres" id="9_emitter_profile"]
+[ext_resource type="PackedScene" path="res://gameplay/crystals/basic_crystal.tscn" id="10_crystal_scene"]
+[ext_resource type="PackedScene" uid="uid://bnqexhtb2sfgu" path="res://gameplay/mechanisms/emitters/emitter_config_node.tscn" id="11_emitter_scene"]
 
 [node name="CoreLoopPrototype" type="Node2D" unique_id=1552304930]
 script = ExtResource("2_proto")
@@ -26,25 +22,12 @@ color = Color(0.25, 0.25, 0.28, 1)
 
 [node name="RuntimeObjects" type="Node2D" parent="." unique_id=820444864]
 
-[node name="Emitter" type="Node2D" parent="RuntimeObjects" unique_id=1264479859]
+[node name="Emitter" parent="RuntimeObjects" unique_id=1264479859 instance=ExtResource("11_emitter_scene")]
 position = Vector2(96, 224)
-script = ExtResource("7_emitter_cfg")
-visual_profile = ExtResource("9_emitter_profile")
 
-[node name="EmitterVisual" parent="RuntimeObjects/Emitter" unique_id=468152323 instance=ExtResource("3_view")]
-visual_profile = ExtResource("9_emitter_profile")
-
-[node name="EmissionPreview" type="Node2D" parent="RuntimeObjects/Emitter" unique_id=123116683]
-script = ExtResource("8_preview")
-
-[node name="Crystal" type="Node2D" parent="RuntimeObjects" unique_id=1716045995]
+[node name="Crystal" parent="RuntimeObjects" unique_id=1716045995 instance=ExtResource("10_crystal_scene")]
 position = Vector2(224, 96)
-script = ExtResource("1_crystal")
 crystal_id = &"crystal_001"
-
-[node name="VisualView" parent="RuntimeObjects/Crystal" unique_id=1732959339 instance=ExtResource("3_view")]
-visual_profile = ExtResource("4_profile")
-initial_state_id = &"unlit"
 
 [node name="LightPathLayer" type="Node2D" parent="." unique_id=1467401346]
 

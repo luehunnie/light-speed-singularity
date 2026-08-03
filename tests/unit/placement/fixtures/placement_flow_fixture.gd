@@ -23,6 +23,9 @@ const _LevelObjectRegistry: GDScript = preload(
 const _DragFlowController: GDScript = preload(
 	"res://gameplay/interaction/drag_flow_controller.gd"
 )
+const _GridCoordinateRules: GDScript = preload(
+	"res://gameplay/grid/grid_coordinate_rules.gd"
+)
 
 const _MAP_BOUNDS: Rect2i = Rect2i(0, 0, 16, 16)
 
@@ -95,11 +98,15 @@ class _FailConsumeInventory extends "res://gameplay/placement/inventory_controll
 		return false
 
 
-## 机关节点桩：保存 mechanism_id/cell/orientation，提供控制器事务所需的 set_cell/queue_free 等接口。
+## 机关节点桩：保存 mechanism_id/orientation，cell 由 position 经共享 GridCoordinateRules 派生（单一位置事实，不维护第二套 cell 后备字段，对齐 PlaceableToken 新位置契约），提供控制器事务所需的 set_cell/queue_free 等接口。
 class _StubToken extends Node2D:
 	var mechanism_id: StringName = &""
-	var cell: Vector2i = Vector2i.ZERO
 	var orientation: Variant = null
+	var cell: Vector2i:
+		get:
+			return _GridCoordinateRules.world_to_cell(position)
+		set(next_cell):
+			position = _GridCoordinateRules.cell_to_world(next_cell)
 	func configure(id: StringName, c: Vector2i) -> void:
 		mechanism_id = id
 		cell = c
@@ -109,8 +116,8 @@ class _StubToken extends Node2D:
 		orientation = o
 	func set_drag_preview(_p: bool, _v: bool) -> void:
 		pass
-	func set_world_position(_p: Vector2) -> void:
-		pass
+	func set_world_position(p: Vector2) -> void:
+		position = p
 	func set_placed_visible(_v: bool) -> void:
 		pass
 
@@ -166,16 +173,19 @@ func make_controller(
 
 # ===== DragFlowController 测试用桩 =====
 
-## 机关节点桩（拖拽流）：保存 mechanism_id/cell/orientation 与可见性/预览状态，供控制器事务与 DragFlowController 调用。
+## 机关节点桩（拖拽流）：保存 mechanism_id/orientation 与可见性/预览状态，cell 由 position 经共享 GridCoordinateRules 派生（单一位置事实，不维护第二套 cell/world_position 后备字段，对齐 PlaceableToken 新位置契约），供控制器事务与 DragFlowController 调用。
 class _DragStubToken extends Node2D:
 	var mechanism_id: StringName = &""
-	var cell: Vector2i = Vector2i.ZERO
 	var orientation: Variant = null
 	var placed_visible: bool = true
 	var drag_preview_visible: bool = true
 	var drag_preview_is_preview: bool = false
 	var drag_preview_is_valid: bool = false
-	var world_position: Vector2 = Vector2.ZERO
+	var cell: Vector2i:
+		get:
+			return _GridCoordinateRules.world_to_cell(position)
+		set(next_cell):
+			position = _GridCoordinateRules.cell_to_world(next_cell)
 	func configure(id: StringName, c: Vector2i) -> void:
 		mechanism_id = id
 		cell = c
@@ -191,7 +201,7 @@ class _DragStubToken extends Node2D:
 	func set_placed_visible(v: bool) -> void:
 		placed_visible = v
 	func set_world_position(p: Vector2) -> void:
-		world_position = p
+		position = p
 
 
 ## 节点工厂桩（拖拽流）：create_formal 供 PlacementController，create_preview 供 DragFlowController；记录预览节点供校验销毁。

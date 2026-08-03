@@ -156,7 +156,7 @@ func move_placed(
 	if not _occupancy.move_single_cell(mechanism_id, source_cell, target_cell):
 		push_error("PlacementController: 原子占用迁移失败，节点保持原格：%s %s -> %s" % [mechanism_id, source_cell, target_cell])
 		return PlacementTransactionResult.new(Status.FAILED, mechanism_id, source_cell, target_cell, false, "原子占用迁移失败")
-	# 占用原子迁移成功；更新节点逻辑格（世界位置与可见性由核心处理），orientation 不变。
+	# 占用原子迁移成功；move_placed 经 token.set_cell() 把 position 对齐目标格中心、更新节点世界位置；可见性仍由核心恢复，orientation 不变。
 	token.set_cell(target_cell)
 	return PlacementTransactionResult.new(Status.SUCCESS, mechanism_id, source_cell, target_cell, true)
 
