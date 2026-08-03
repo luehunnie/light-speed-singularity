@@ -14,7 +14,6 @@ const _PlacementController: GDScript = preload("res://gameplay/placement/placeme
 const _InventoryController: GDScript = preload("res://gameplay/placement/inventory_controller.gd")
 const _LevelWorldQuery: GDScript = preload("res://gameplay/world/level_world_query.gd")
 const _SingleCellMirror: GDScript = preload("res://gameplay/mechanisms/mirrors/single_cell_mirror.gd")
-const _GridCoordinateRules: GDScript = preload("res://gameplay/grid/grid_coordinate_rules.gd")
 
 ## 库存拖拽的机关类型 ID；与核心 MIRROR_TOKEN_TYPE_ID 一致，不复制拖拽事实（事实由 DragContext 持有）。
 const MIRROR_TOKEN_TYPE_ID: StringName = &"basic_single_cell_mirror"
@@ -184,8 +183,8 @@ func update_preview(pointer_position: Vector2) -> void:
 		_drag_context.preview_cell,
 		spatially_valid
 	)
+	# set_cell 已把 position 对齐到预览格中心，无需再写一次世界位置。
 	_drag_preview_token.set_cell(_drag_context.preview_cell)
-	_drag_preview_token.set_world_position(_GridCoordinateRules.cell_to_world(_drag_context.preview_cell))
 	_drag_preview_token.set_drag_preview(true, is_valid)
 
 
@@ -257,8 +256,8 @@ func _commit_placed_drag_or_cancel() -> void:
 		# NO_CHANGE/INVALID/FAILED：节点仍在原格，恢复可见性并取消，不扣次数。
 		cancel_current_drag()
 		return
-	# 成功：确认正式节点终态（世界位置与可见性）→ 清预览/上下文 → 扣次 → 刷新 UI → 断言；orientation 不变。
-	token.set_world_position(_GridCoordinateRules.cell_to_world(to_cell))
+	# 成功：确认正式节点终态（可见性）→ 清预览/上下文 → 扣次 → 刷新 UI → 断言；orientation 不变。
+	# 世界位置由 move_placed 经 token.set_cell() 对齐到目标格中心，此处不再重复写入（避免第二套 cell→world 换算）。
 	token.set_placed_visible(true)
 	_clear_drag_preview_only()
 	_reset_drag_state()
@@ -295,8 +294,8 @@ func cancel_current_drag(should_assert_consistency: bool = true) -> void:
 	if _drag_context.is_placed_source() and _dragged_placed_token != null:
 		if is_instance_valid(_dragged_placed_token):
 			# 拖拽期间保留旧逻辑占用，取消时只恢复正式视觉。
+			# set_cell 已把 position 对齐到原格中心，无需再写一次世界位置。
 			_dragged_placed_token.set_cell(_drag_context.original_cell)
-			_dragged_placed_token.set_world_position(_GridCoordinateRules.cell_to_world(_drag_context.original_cell))
 			_dragged_placed_token.set_placed_visible(true)
 		elif OS.is_debug_build():
 			# 失效节点不得再次解引用；仅报告一致性异常，不静默重建占用或映射。

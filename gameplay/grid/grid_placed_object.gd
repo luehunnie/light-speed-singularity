@@ -43,13 +43,18 @@ func sync_world_position_from_cell() -> void:
 
 
 ## 相对 cell 的占用偏移；单格默认 [Vector2i.ZERO]，子类可重写表达多格占用。每次返回新数组。
-func get_occupied_offsets() -> Array[Vector2i]:
+## 方向参数（冻结多格占用接口）：p_orientation 为前向兼容方向槽（int，默认 0=默认方向），
+##   不在此建立方向枚举/方向系统；基类不解释方向，单格对象任意方向均只占 [ZERO]，
+##   未来多格子类按自身枚举（GDScript 枚举底层即 int）传入并重写本方法。
+func get_occupied_offsets(p_orientation: int = 0) -> Array[Vector2i]:
 	return [Vector2i.ZERO]
 
 
-## 实际占用的绝对格子列表（当前派生 cell 加各偏移）；单格默认 [当前派生 cell]。每次返回新数组。
-func get_occupied_cells() -> Array[Vector2i]:
+## 实际占用的绝对格子列表（anchor_cell 加各方向偏移）；单格默认 [anchor_cell]。每次返回新数组。
+## anchor_cell 由调用方显式传入，p_orientation 原样透传给 get_occupied_offsets；基类不解释方向，
+##   单格对象任意方向均只占 [anchor_cell]；不保存 orientation，不新增锚点/位置后备字段，不实现多格占用。
+func get_occupied_cells(anchor_cell: Vector2i, p_orientation: int = 0) -> Array[Vector2i]:
 	var cells: Array[Vector2i] = []
-	for offset: Vector2i in get_occupied_offsets():
-		cells.append(get_cell() + offset)
+	for offset: Vector2i in get_occupied_offsets(p_orientation):
+		cells.append(anchor_cell + offset)
 	return cells
