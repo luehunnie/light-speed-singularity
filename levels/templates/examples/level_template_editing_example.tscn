@@ -1,0 +1,192 @@
+[gd_scene format=4 uid="uid://ccw1k0y07mypx"]
+
+[ext_resource type="TileSet" uid="uid://bnek2denq6pnd" path="res://assets/art/tilesets/placeholder_terrain_tileset.tres" id="1_terrain"]
+[ext_resource type="TileSet" uid="uid://def2ipanaqi3u" path="res://assets/art/tilesets/placeholder_wall_tileset.tres" id="2_wall"]
+[ext_resource type="TileSet" uid="uid://cv15gkq3ahuni" path="res://assets/art/tilesets/placeholder_legal_area_tileset.tres" id="3_legal"]
+[ext_resource type="TileSet" uid="uid://bmbflag7qp3n6" path="res://assets/art/tilesets/placeholder_decoration_tileset.tres" id="4_decoration"]
+[ext_resource type="PackedScene" uid="uid://bnqexhtb2sfgu" path="res://gameplay/mechanisms/emitters/emitter_config_node.tscn" id="5_emitter"]
+[ext_resource type="PackedScene" path="res://gameplay/crystals/basic_crystal.tscn" id="6_crystal"]
+
+[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_guide_panel"]
+content_margin_left = 14.0
+content_margin_top = 12.0
+content_margin_right = 14.0
+content_margin_bottom = 12.0
+bg_color = Color(0.07, 0.08, 0.1, 0.94)
+border_width_left = 2
+border_width_top = 2
+border_width_right = 2
+border_width_bottom = 2
+border_color = Color(0.42, 0.46, 0.55, 1)
+corner_radius_top_left = 8
+corner_radius_top_right = 8
+corner_radius_bottom_right = 8
+corner_radius_bottom_left = 8
+
+[node name="LevelTemplateEditingExample" type="Node2D" unique_id=705731751]
+editor_description = "编辑示例，不是正式关卡。展示非矩形 Terrain、内部空洞、Terrain 内非 Legal、Legal/Wall 位于 Terrain 内、Decoration。制作正式关卡请复制 level_template.tscn，不要在此场景作画。"
+
+[node name="TerrainLayer" type="TileMapLayer" parent="." unique_id=1633573816]
+editor_description = "关卡内格与不规则地图边界。本示例含右下缺口（非矩形）与 (2,1) 内部空洞。"
+tile_map_data = PackedByteArray("AAABAAAAAAAAAAAAAAACAAAAAAAAAAAAAAADAAAAAAAAAAAAAAAEAAAAAAAAAAAAAAAFAAAAAAAAAAAAAAAAAAEAAAAAAAAAAAABAAEAAAAAAAAAAAADAAEAAAAAAAAAAAAEAAEAAAAAAAAAAAAFAAEAAAAAAAAAAAAAAAIAAAAAAAAAAAABAAIAAAAAAAAAAAACAAIAAAAAAAAAAAADAAIAAAAAAAAAAAAEAAIAAAAAAAAAAAAFAAIAAAAAAAAAAAAAAAMAAAAAAAAAAAABAAMAAAAAAAAAAAACAAMAAAAAAAAAAAADAAMAAAAAAAAAAAAEAAMAAAAAAAAAAAAAAAQAAAAAAAAAAAABAAQAAAAAAAAAAAACAAQAAAAAAAAAAAADAAQAAAAAAAAAAAA=")
+tile_set = ExtResource("1_terrain")
+
+[node name="WallLayer" type="TileMapLayer" parent="." unique_id=1049983644]
+editor_description = "Terrain 内普通静态墙体。本示例墙在 (4,3) 与 (3,4)，均在 Terrain 内。"
+tile_map_data = PackedByteArray("AAAEAAMAAAAAAAAAAAADAAQAAAAAAAAAAAA=")
+tile_set = ExtResource("2_wall")
+
+[node name="LegalAreaLayer" type="TileMapLayer" parent="." unique_id=610490957]
+editor_description = "Terrain 内允许放置机关的格子子集。本示例 Legal 全在 Terrain 内；Terrain 内 (0,1)/(1,1) 等为非 Legal 格。"
+tile_map_data = PackedByteArray("AAACAAAAAAAAAAAAAAADAAAAAAAAAAAAAAAEAAAAAAAAAAAAAAABAAIAAAAAAAAAAAACAAIAAAAAAAAAAAADAAIAAAAAAAAAAAAEAAIAAAAAAAAAAAA=")
+tile_set = ExtResource("3_legal")
+
+[node name="DecorationLayer" type="TileMapLayer" parent="." unique_id=407384254]
+editor_description = "纯视觉装饰，不参与边界、阻挡或放置判断。本示例装饰在 (5,1) 与 (2,4)。"
+tile_map_data = PackedByteArray("AAAFAAEAAAAAAAAAAAACAAQAAAAAAAAAAAA=")
+tile_set = ExtResource("4_decoration")
+
+[node name="RuntimeObjects" type="Node2D" parent="." unique_id=414888120]
+
+[node name="Emitter" parent="RuntimeObjects" unique_id=1814874930 instance=ExtResource("5_emitter")]
+position = Vector2(96, 160)
+
+[node name="BasicCrystal" parent="RuntimeObjects" unique_id=1389869593 instance=ExtResource("6_crystal")]
+position = Vector2(224, 96)
+crystal_id = &"crystal_001"
+
+[node name="LightPathLayer" type="Node2D" parent="." unique_id=1692774781]
+
+[node name="EditorGuide" type="CanvasLayer" parent="." unique_id=441096478]
+editor_description = "编辑示例专用的中文图例与操作指引（无需脚本）。仅在示例场景出现，正式模板不含此节点。"
+
+[node name="GuidePanel" type="PanelContainer" parent="EditorGuide" unique_id=672149297]
+offset_left = 728.0
+offset_top = 408.0
+offset_right = 1438.0
+offset_bottom = 1060.0
+theme_override_styles/panel = SubResource("StyleBoxFlat_guide_panel")
+
+[node name="VBox" type="VBoxContainer" parent="EditorGuide/GuidePanel" unique_id=64890061]
+layout_mode = 2
+theme_override_constants/separation = 6
+
+[node name="Title" type="Label" parent="EditorGuide/GuidePanel/VBox" unique_id=573049666]
+layout_mode = 2
+theme_override_colors/font_color = Color(1, 0.96, 0.66, 1)
+theme_override_font_sizes/font_size = 19
+text = "关卡编辑示例｜四层图例与操作指引"
+
+[node name="SubTitle" type="Label" parent="EditorGuide/GuidePanel/VBox" unique_id=1183167601]
+custom_minimum_size = Vector2(682, 0)
+layout_mode = 2
+theme_override_colors/font_color = Color(0.82, 0.86, 0.92, 1)
+text = "图例颜色仅用于肉眼区分图层；格子的逻辑职责由“所在图层”决定，不由颜色/形状/文件名决定。"
+autowrap_mode = 3
+
+[node name="Sep0" type="HSeparator" parent="EditorGuide/GuidePanel/VBox" unique_id=1119773809]
+layout_mode = 2
+
+[node name="RowTerrain" type="HBoxContainer" parent="EditorGuide/GuidePanel/VBox" unique_id=1618220548]
+layout_mode = 2
+theme_override_constants/separation = 10
+
+[node name="Swatch" type="ColorRect" parent="EditorGuide/GuidePanel/VBox/RowTerrain" unique_id=1541879193]
+custom_minimum_size = Vector2(28, 28)
+layout_mode = 2
+color = Color(0.239, 0.31, 0.227, 1)
+
+[node name="Text" type="Label" parent="EditorGuide/GuidePanel/VBox/RowTerrain" unique_id=360095223]
+custom_minimum_size = Vector2(644, 0)
+layout_mode = 2
+size_flags_horizontal = 3
+theme_override_colors/font_color = Color(0.55, 0.78, 0.5, 1)
+text = "绿色条纹 — TerrainLayer：有图块=关卡内，无图块=关卡外（可含内部空洞、非矩形边界）。"
+autowrap_mode = 3
+
+[node name="RowLegal" type="HBoxContainer" parent="EditorGuide/GuidePanel/VBox" unique_id=94426573]
+layout_mode = 2
+theme_override_constants/separation = 10
+
+[node name="Swatch" type="ColorRect" parent="EditorGuide/GuidePanel/VBox/RowLegal" unique_id=306329571]
+custom_minimum_size = Vector2(28, 28)
+layout_mode = 2
+color = Color(0.184, 0.435, 0.561, 1)
+
+[node name="Text" type="Label" parent="EditorGuide/GuidePanel/VBox/RowLegal" unique_id=253079527]
+custom_minimum_size = Vector2(644, 0)
+layout_mode = 2
+size_flags_horizontal = 3
+theme_override_colors/font_color = Color(0.56, 0.81, 0.94, 1)
+text = "蓝色圆点 — LegalAreaLayer：仅表示 Terrain 内允许放置机关的子集，不能代替 Terrain。"
+autowrap_mode = 3
+
+[node name="RowWall" type="HBoxContainer" parent="EditorGuide/GuidePanel/VBox" unique_id=607240234]
+layout_mode = 2
+theme_override_constants/separation = 10
+
+[node name="Swatch" type="ColorRect" parent="EditorGuide/GuidePanel/VBox/RowWall" unique_id=1543515978]
+custom_minimum_size = Vector2(28, 28)
+layout_mode = 2
+color = Color(0.431, 0.231, 0.231, 1)
+
+[node name="Text" type="Label" parent="EditorGuide/GuidePanel/VBox/RowWall" unique_id=916985057]
+custom_minimum_size = Vector2(644, 0)
+layout_mode = 2
+size_flags_horizontal = 3
+theme_override_colors/font_color = Color(0.9, 0.6, 0.6, 1)
+text = "红褐色方块 — WallLayer：Terrain 内普通静态墙体，请勿画到 Terrain 外。"
+autowrap_mode = 3
+
+[node name="RowDecoration" type="HBoxContainer" parent="EditorGuide/GuidePanel/VBox" unique_id=491147715]
+layout_mode = 2
+theme_override_constants/separation = 10
+
+[node name="Swatch" type="ColorRect" parent="EditorGuide/GuidePanel/VBox/RowDecoration" unique_id=500288055]
+custom_minimum_size = Vector2(28, 28)
+layout_mode = 2
+color = Color(0.478, 0.31, 0.541, 1)
+
+[node name="Text" type="Label" parent="EditorGuide/GuidePanel/VBox/RowDecoration" unique_id=574574889]
+custom_minimum_size = Vector2(644, 0)
+layout_mode = 2
+size_flags_horizontal = 3
+theme_override_colors/font_color = Color(0.82, 0.63, 0.88, 1)
+text = "紫色菱形 — DecorationLayer：纯视觉装饰，不参与边界、阻挡或放置判断。"
+autowrap_mode = 3
+
+[node name="Sep1" type="HSeparator" parent="EditorGuide/GuidePanel/VBox" unique_id=727316538]
+layout_mode = 2
+
+[node name="OrderLabel" type="Label" parent="EditorGuide/GuidePanel/VBox" unique_id=1009767108]
+layout_mode = 2
+theme_override_colors/font_color = Color(1, 0.96, 0.66, 1)
+text = "推荐绘制顺序：Terrain → LegalArea → Wall → Decoration"
+
+[node name="OpsTitle" type="Label" parent="EditorGuide/GuidePanel/VBox" unique_id=2002908201]
+layout_mode = 2
+theme_override_colors/font_color = Color(0.82, 0.86, 0.92, 1)
+text = "编辑器操作："
+
+[node name="OpTileTab" type="Label" parent="EditorGuide/GuidePanel/VBox" unique_id=524879856]
+custom_minimum_size = Vector2(682, 0)
+layout_mode = 2
+text = "• 底部使用“图块”页签取笔刷；切换左侧图层后，只显示该层对应的一个 64×64 图块。"
+autowrap_mode = 3
+
+[node name="OpMouse" type="Label" parent="EditorGuide/GuidePanel/VBox" unique_id=1173173306]
+layout_mode = 2
+text = "• 左键绘制、右键删除、Ctrl+Z 撤销。"
+
+[node name="OpArt" type="Label" parent="EditorGuide/GuidePanel/VBox" unique_id=1811851428]
+custom_minimum_size = Vector2(682, 0)
+layout_mode = 2
+text = "• 四层系统即正式关卡结构，当前彩色图块只是白盒占位；后续正式美术通过替换或扩展对应 TileSet 完成，不修改核心 GDScript。"
+autowrap_mode = 3
+
+[node name="OpTemplate" type="Label" parent="EditorGuide/GuidePanel/VBox" unique_id=370570017]
+custom_minimum_size = Vector2(682, 0)
+layout_mode = 2
+theme_override_colors/font_color = Color(1, 0.82, 0.5, 1)
+text = "• 制作正式关卡请复制 level_template.tscn，勿在此示例场景作画。"
+autowrap_mode = 3

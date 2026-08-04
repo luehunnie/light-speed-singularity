@@ -2,16 +2,16 @@
 
 importer="texture"
 type="CompressedTexture2D"
-uid="uid://ccbyd0f3nwhm"
-path="res://.godot/imported/d5_placeholder_atlas.svg-2230e1910b793d6a4c65a753738cb6ab.ctex"
+uid="uid://358ofw0bunu3"
+path="res://.godot/imported/placeholder_wall.svg-ce571e442e55f962df402091b7a3dfe3.ctex"
 metadata={
 "vram_texture": false
 }
 
 [deps]
 
-source_file="res://assets/art/tilesets/d5_placeholder_atlas.svg"
-dest_files=["res://.godot/imported/d5_placeholder_atlas.svg-2230e1910b793d6a4c65a753738cb6ab.ctex"]
+source_file="res://assets/art/tilesets/placeholder_wall.svg"
+dest_files=["res://.godot/imported/placeholder_wall.svg-ce571e442e55f962df402091b7a3dfe3.ctex"]
 
 [params]
 
