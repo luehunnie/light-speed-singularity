@@ -46,7 +46,7 @@ func sync_world_position_from_cell() -> void:
 ## 方向参数（冻结多格占用接口）：p_orientation 为前向兼容方向槽（int，默认 0=默认方向），
 ##   不在此建立方向枚举/方向系统；基类不解释方向，单格对象任意方向均只占 [ZERO]，
 ##   未来多格子类按自身枚举（GDScript 枚举底层即 int）传入并重写本方法。
-func get_occupied_offsets(p_orientation: int = 0) -> Array[Vector2i]:
+func get_occupied_offsets(_p_orientation: int = 0) -> Array[Vector2i]:
 	return [Vector2i.ZERO]
 
 

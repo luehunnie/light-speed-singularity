@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- 技术占位：Decoration 单图块（64×64）。
+     仅用于让 DecorationLayer 在 GUI 中可绘制、可区分；逻辑职责只由所在图层决定，不由本图颜色/形状/文件名决定。
+     对应原共享 atlas 右下象限：纯视觉装饰，不参与边界/阻挡/放置判断。 -->
+<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 64 64">
+  <rect x="0" y="0" width="64" height="64" fill="#7a4f8a"/>
+  <polygon points="32,14 50,32 32,50 14,32" fill="none" stroke="#d0a0e0" stroke-width="5"/>
+</svg>
