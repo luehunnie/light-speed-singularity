@@ -1,0 +1,12 @@
+[gd_resource type="TileSet" format=3 uid="uid://cv15gkq3ahuni"]
+
+[ext_resource type="Texture2D" path="res://assets/art/legal_area/legal_area_cell.svg" id="1_atlas"]
+
+[sub_resource type="TileSetAtlasSource" id="TileSetAtlasSource_placeholder"]
+texture = ExtResource("1_atlas")
+texture_region_size = Vector2i(64, 64)
+0:0/0 = 0
+
+[resource]
+tile_size = Vector2i(64, 64)
+sources/0 = SubResource("TileSetAtlasSource_placeholder")
