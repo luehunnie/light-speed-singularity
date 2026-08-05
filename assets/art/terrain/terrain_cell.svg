@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- 技术占位：Terrain 单图块（64×64）。
+     仅用于让 TerrainLayer 在 GUI 中可绘制、可区分；逻辑职责只由所在图层决定，不由本图颜色/形状/文件名决定。
+     对应原共享 atlas 左上象限：关卡内部地面。 -->
+<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 64 64">
+  <rect x="0" y="0" width="64" height="64" fill="#3d4f3a"/>
+  <line x1="8" y1="20" x2="56" y2="20" stroke="#5a7050" stroke-width="4"/>
+  <line x1="8" y1="32" x2="56" y2="32" stroke="#5a7050" stroke-width="4"/>
+  <line x1="8" y1="44" x2="56" y2="44" stroke="#5a7050" stroke-width="4"/>
+</svg>

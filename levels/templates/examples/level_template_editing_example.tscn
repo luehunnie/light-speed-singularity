@@ -1,9 +1,9 @@
 [gd_scene format=4 uid="uid://ccw1k0y07mypx"]
 
-[ext_resource type="TileSet" uid="uid://bnek2denq6pnd" path="res://assets/art/tilesets/placeholder_terrain_tileset.tres" id="1_terrain"]
-[ext_resource type="TileSet" uid="uid://def2ipanaqi3u" path="res://assets/art/tilesets/placeholder_wall_tileset.tres" id="2_wall"]
-[ext_resource type="TileSet" uid="uid://cv15gkq3ahuni" path="res://assets/art/tilesets/placeholder_legal_area_tileset.tres" id="3_legal"]
-[ext_resource type="TileSet" uid="uid://bmbflag7qp3n6" path="res://assets/art/tilesets/placeholder_decoration_tileset.tres" id="4_decoration"]
+[ext_resource type="TileSet" uid="uid://bnek2denq6pnd" path="res://assets/art/tilesets/terrain_tileset.tres" id="1_terrain"]
+[ext_resource type="TileSet" uid="uid://def2ipanaqi3u" path="res://assets/art/tilesets/wall_tileset.tres" id="2_wall"]
+[ext_resource type="TileSet" uid="uid://cv15gkq3ahuni" path="res://assets/art/tilesets/legal_area_tileset.tres" id="3_legal"]
+[ext_resource type="TileSet" uid="uid://bmbflag7qp3n6" path="res://assets/art/tilesets/decoration_tileset.tres" id="4_decoration"]
 [ext_resource type="PackedScene" uid="uid://bnqexhtb2sfgu" path="res://gameplay/mechanisms/emitters/emitter_config_node.tscn" id="5_emitter"]
 [ext_resource type="PackedScene" path="res://gameplay/crystals/basic_crystal.tscn" id="6_crystal"]
 
