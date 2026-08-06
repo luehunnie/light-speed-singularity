@@ -1,13 +1,13 @@
 extends RefCounted
 
 
-## 四层 TileMapLayer 只读快照（D5-B.1）。
-## 职责：构造时一次性复制 Terrain/Wall/LegalArea/Decoration 四层 used cells 到内部 Dictionary，之后不再持有 TileMapLayer 节点；
+## 四层 TileMapLayer 只读快照（D5-B.1；D5-B.1R 校验接口化）。
+## 职责：由静态校验 validate_layers 检查四层有效后由调用方 new() 构造；构造时一次性复制 Terrain/Wall/LegalArea/Decoration 四层 used cells 到内部 Dictionary，之后不再持有 TileMapLayer 节点；
 ## 以只读方式回答“某格在某层是否存在”与 Terrain 外包矩形查询。
-## 输入：_init 接收四个 TileMapLayer 节点（仅用于本次复制 used cells；存在性与类型校验由调用方负责）。
+## 输入：validate_layers 接收四个 TileMapLayer 节点（任一无效则 push_error 列出缺层并返回 false）；_init 仅复制 used cells，不再承担存在性/类型校验。
 ## 输出：has_*_cell 返回 bool；get_terrain_bounds 返回 Rect2i。
-## 边界：构造后与源节点解耦，源节点后续增删不影响本快照；不暴露内部 Dictionary/Array 引用，对外只返回值类型。
-
+## 边界：构造后与源节点解耦，源节点后续增删不影响本快照；不暴露内部 Dictionary/Array 引用，对外只返回值类型；缺层不静默退回 map_bounds。
+## 类型注册：本文件沿用 D5-B.1 决策不使用 class_name（避开 MCP/全局 class 缓存坑）；D5-B.1R 移除自 preload（解析期循环风险），改为外部 preload 后先 validate_layers 再 new() 两段式构造。
 
 # 四层 used cells：以 Vector2i 为键、true 为占位值，复制后与源 TileMapLayer 解耦。
 var _terrain_cells: Dictionary = {}
@@ -18,7 +18,31 @@ var _decoration_cells: Dictionary = {}
 var _terrain_bounds: Rect2i = Rect2i(0, 0, 0, 0)
 
 
+## 四层校验接口（D5-B.1R 替代原静态工厂）：逐层检查 TileMapLayer 非 null（@onready 类型转换失败同样为 null），任一缺失则收集全部缺层名称、push_error 明确说明不回退 map_bounds 并返回 false；四层齐全返回 true，由调用方据此 new() 构造快照。
+## 不承担 used cells 复制与外包矩形计算（构造细节由 _init 完成）；不静默退回 map_bounds；不长期持有 TileMapLayer。
+static func validate_layers(
+		terrain_layer: TileMapLayer,
+		wall_layer: TileMapLayer,
+		legal_area_layer: TileMapLayer,
+		decoration_layer: TileMapLayer
+) -> bool:
+	var missing_layers: PackedStringArray = PackedStringArray()
+	if terrain_layer == null:
+		missing_layers.append("TerrainLayer")
+	if wall_layer == null:
+		missing_layers.append("WallLayer")
+	if legal_area_layer == null:
+		missing_layers.append("LegalAreaLayer")
+	if decoration_layer == null:
+		missing_layers.append("DecorationLayer")
+	if not missing_layers.is_empty():
+		push_error("LevelTileLayerSnapshot: 四层 TileMapLayer 缺失或类型不符：%s；已跳过只读快照构造，不退回 map_bounds。" % [", ".join(missing_layers)])
+		return false
+	return true
+
+
 ## 构造四层只读快照：逐层复制 used cells 并计算 Terrain 外包矩形。复制完成后不再保留传入的 TileMapLayer 引用。
+## 存在性/类型校验由 validate_layers 负责；调用方须先通过 validate_layers 再 new()，直接 new() 须自行保证四层非 null。
 func _init(
 		terrain_layer: TileMapLayer,
 		wall_layer: TileMapLayer,
