@@ -112,6 +112,15 @@ func has_decoration_cell(cell: Vector2i) -> bool:
 	return _decoration_cells.has(cell)
 
 
+## Wall 层真实格子的值拷贝（Array[Vector2i]），供诊断采样等只读消费；每次调用构造独立副本，不暴露内部 Dictionary，调用方修改不影响快照内部状态。
+## 用于启动诊断采集真实 WallLayer 格样本（D5-B.2B），替代旧 wall_cells 导出作为正式墙体事实来源。
+func get_wall_cells_copy() -> Array[Vector2i]:
+	var cells: Array[Vector2i] = []
+	for cell: Vector2i in _wall_cells:
+		cells.append(cell)
+	return cells
+
+
 ## Terrain used cells 的外包矩形（空 Terrain 返回零尺寸 Rect2i）；返回值类型，调用方修改不影响快照内部状态。
 func get_terrain_bounds() -> Rect2i:
 	return _terrain_bounds

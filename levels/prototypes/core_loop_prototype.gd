@@ -33,7 +33,7 @@ const INVALID_CELL: Vector2i = Vector2i(-999999, -999999)
 @export_range(0, 99, 1) var runtime_move_limit: int = 1
 
 # 四层 TileMapLayer 接线（D5-B.1）：Terrain/Wall/LegalArea/Decoration 均已接入对应 TileSet，visible=false 不改变当前运行画面；
-# 启动构造只读快照 _tile_layer_snapshot 复制四层 used cells。本批不接入 LevelWorldQuery，放置/光线仍走 map_bounds+wall_cells 旧路径。
+# 启动构造只读快照 _tile_layer_snapshot 复制四层 used cells（D5-B.2A）：快照作为正式运行 Terrain/LegalArea/Wall 唯一事实接入 LevelWorldQuery，map_bounds/wall_cells 退化为 Diagnostics/导出与旧兼容路径。
 # 格↔世界换算仍由 GridCoordinateRules 实现，不依赖 map_to_local。
 @onready var terrain_layer: TileMapLayer = $TerrainLayer
 @onready var wall_layer: TileMapLayer = $WallLayer
@@ -89,7 +89,7 @@ const _PlayerInteractionController: GDScript = preload("res://gameplay/interacti
 # 世界只读查询门面与光线层薄适配器；不加入场景树、不设为 Autoload。
 const _LevelWorldQuery: GDScript = preload("res://gameplay/world/level_world_query.gd")
 const _LightWorldQuery: GDScript = preload("res://gameplay/world/light_world_query.gd")
-# 四层 TileMapLayer 只读快照（D5-B.1）：validate_layers 校验后 new() 构造，构造时复制 used cells，不持有 TileMapLayer；本批不接入 LevelWorldQuery。
+# 四层 TileMapLayer 只读快照（D5-B.1）：validate_layers 校验后 new() 构造，构造时复制 used cells，不持有 TileMapLayer；D5-B.2A 起作为正式运行事实接入 LevelWorldQuery。
 const _LevelTileLayerSnapshot: GDScript = preload("res://gameplay/world/level_tile_layer_snapshot.gd")
 # 关卡稳定对象索引所有者（D3-C）：水晶按显式 crystal_id 与 cell 双向索引，LevelWorldQuery 据此查询水晶，不暴露可写字典。
 const _LevelObjectRegistry: GDScript = preload("res://gameplay/level/level_object_registry.gd")
@@ -128,7 +128,7 @@ var _light_visual_controller: _LightVisualController = null
 ## 世界只读查询门面：在所有真实依赖初始化后构造，持有容器引用而非复制（容器运行期只原地增删，从不整体重赋值）；只读，不修改世界事实。
 var _level_world_query: _LevelWorldQuery = null
 
-## 四层 TileMapLayer 只读快照（D5-B.1）：_ready 中由四层 used cells 构造；缺层时保持 null，不退回 map_bounds。本批未接入 LevelWorldQuery，放置/光线行为不变。
+## 四层 TileMapLayer 只读快照（D5-B.1）：_ready 中由四层 used cells 构造；缺层时保持 null，不退回 map_bounds。D5-B.2A 起非空时接入 LevelWorldQuery 作为正式运行 Terrain/LegalArea/Wall 唯一事实，放置/光线据此区分越界与墙体。
 var _tile_layer_snapshot: _LevelTileLayerSnapshot = null
 
 ## 关卡稳定对象索引：_ready 中遍历 crystals 按显式 crystal_id 与 cell 注册，LevelWorldQuery 据此查询水晶；不暴露内部字典。
@@ -153,8 +153,12 @@ func _ready() -> void:
 	_run_state_controller.state_changed.connect(_on_run_state_changed)
 	# 光路视觉控制器先构造：注入 LightPathLayer 作为视觉父节点，视觉资源与颜色由控制器自持。
 	_light_visual_controller = _LightVisualController.new(light_path_layer)
-	# 四层 TileMapLayer 只读快照（D5-B.1）：先 validate_layers 校验四层再 new() 复制 used cells；缺层 push_error 且保持 null，不退回 map_bounds，不影响后续玩法接线。
+	# 四层 TileMapLayer 只读快照（D5-B.1）：先 validate_layers 校验四层再 new() 复制 used cells；缺层 push_error 且保持 null，不退回 map_bounds。
 	_build_tile_layer_snapshot()
+	# 快照为正式运行 Terrain/LegalArea/Wall 唯一事实来源（D5-B.2A）：构造失败则停止后续世界查询接线，避免空快照静默退回 map_bounds+wall_cells 成为正式运行事实。
+	if _tile_layer_snapshot == null:
+		_abort_runtime_initialization("四层 TileMapLayer 只读快照构造失败，已停止世界查询初始化。")
+		return
 	# 放置事务控制器先于只读查询门面构造：LevelWorldQuery 需持有控制器映射引用，供光线层 cell→ID→节点解析。
 	_placement_controller = _PlacementController.new(
 		occupancy,
@@ -171,13 +175,16 @@ func _ready() -> void:
 	# 目标完成事实所有者：在 Registry 填充后构造，唯一持有水晶激活/完成判断/运行期重置。
 	_objective_controller = _ObjectiveController.new(_level_object_registry)
 	# 在所有真实依赖初始化后构造只读查询门面；水晶查询走 Registry，机关节点走 PlacementController.get_placed_node 只读 Callable，不共享可写映射。
+	# 首个粗筛边界参数取快照 Terrain 外包矩形（D5-B.2B）：正式运行边界事实即 Terrain bounds，构造现场不再误传 map_bounds 为边界；快照作为末参接入为 Terrain/LegalArea/Wall 唯一事实。
+	# wall_cells 仍传入仅供 LevelWorldQuery 无快照兼容路径（本场景已由上方守卫保证非空快照，不触发）；map_bounds 退化为导出与旧兼容，不作为正式运行边界。
 	_level_world_query = _LevelWorldQuery.new(
-		map_bounds,
+		_tile_layer_snapshot.get_terrain_bounds(),
 		wall_cells,
 		_fixed_emitter.get_cell(),
 		_level_object_registry,
 		occupancy,
-		Callable(_placement_controller, "get_placed_node")
+		Callable(_placement_controller, "get_placed_node"),
+		_tile_layer_snapshot
 	)
 	_placement_controller.set_level_world_query(_level_world_query)
 	_light_world_query = _LightWorldQuery.new(_level_world_query)
@@ -220,8 +227,8 @@ func _ready() -> void:
 		_startup_self_check_coordinator.run_all(sample_cells, snapshot, true, true)
 
 
-## 构造四层 TileMapLayer 只读快照（D5-B.1；D5-B.1R 两段式构造）：先调静态校验 validate_layers 检查四层有效；校验失败保持 _tile_layer_snapshot 为 null 并安全返回，不退回 map_bounds，不影响后续玩法接线；成功则直接 new() 构造快照。
-## 本批不接入 LevelWorldQuery，放置与光线行为不变。
+## 构造四层 TileMapLayer 只读快照（D5-B.1；D5-B.1R 两段式构造）：先调静态校验 validate_layers 检查四层有效；校验失败保持 _tile_layer_snapshot 为 null 并安全返回，不退回 map_bounds；成功则直接 new() 构造快照。
+## D5-B.2A 起校验失败（null 快照）由 _ready 中止后续世界查询初始化；成功则接入 LevelWorldQuery 作为正式运行 Terrain/LegalArea/Wall 唯一事实。
 func _build_tile_layer_snapshot() -> void:
 	if not _LevelTileLayerSnapshot.validate_layers(
 		terrain_layer, wall_layer, legal_area_layer, decoration_layer
@@ -461,9 +468,12 @@ func _collect_grid_coordinate_sample_cells() -> Array[Vector2i]:
 		assert(crystal_id != &"", "存在空 crystal_id 的水晶。")
 		assert(_level_object_registry.get_crystal_at(crystal.cell) == crystal,
 				"cell 反查水晶不一致：cell=%s crystal_id=%s" % [crystal.cell, crystal_id])
-	for wall_cell: Vector2i in wall_cells:
+	# 真实 Wall 采样：正式运行墙体事实来自 WallLayer 快照（D5-B.2B），不读旧 wall_cells 导出；get_wall_cells_copy 返回独立值拷贝。
+	for wall_cell: Vector2i in _tile_layer_snapshot.get_wall_cells_copy():
 		sample_cells.append(wall_cell)
-	sample_cells.append(Vector2i(map_bounds.end.x - 1, map_bounds.end.y - 1))
+	# 真实地图边界角：取 Terrain 外包矩形右下角（D5-B.2B），由真实 Terrain used cells 计算，不读旧 map_bounds.end。
+	var terrain_bounds: Rect2i = _tile_layer_snapshot.get_terrain_bounds()
+	sample_cells.append(Vector2i(terrain_bounds.end.x - 1, terrain_bounds.end.y - 1))
 	return sample_cells
 
 
