@@ -472,8 +472,10 @@ func _collect_grid_coordinate_sample_cells() -> Array[Vector2i]:
 	for wall_cell: Vector2i in _tile_layer_snapshot.get_wall_cells_copy():
 		sample_cells.append(wall_cell)
 	# 真实地图边界角：取 Terrain 外包矩形右下角（D5-B.2B），由真实 Terrain used cells 计算，不读旧 map_bounds.end。
+	# 仅当 Terrain 有有效面积时才追加右下角样本；空 Terrain 的快照外包为 Rect2i(0,0,0,0)、端点为 (0,0)，不得减一伪造 (-1,-1) 边界样本。
 	var terrain_bounds: Rect2i = _tile_layer_snapshot.get_terrain_bounds()
-	sample_cells.append(Vector2i(terrain_bounds.end.x - 1, terrain_bounds.end.y - 1))
+	if terrain_bounds.has_area():
+		sample_cells.append(Vector2i(terrain_bounds.end.x - 1, terrain_bounds.end.y - 1))
 	return sample_cells
 
 
