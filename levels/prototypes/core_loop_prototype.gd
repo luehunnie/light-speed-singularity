@@ -32,8 +32,13 @@ const INVALID_CELL: Vector2i = Vector2i(-999999, -999999)
 ## 运行期移动次数上限。仅在 PULSE_ACTIVE 或 MOVE_WINDOW 中成功跨格移动已放置机关时消耗；SETUP 移动不受此限制。
 @export_range(0, 99, 1) var runtime_move_limit: int = 1
 
-# terrain_layer 保留以满足 plan §3.1 节点树约定；当前原型不使用 TileSet，格↔世界换算由 GridCoordinateRules 实现，不依赖 map_to_local。
+# 四层 TileMapLayer 接线（D5-B.1）：Terrain/Wall/LegalArea/Decoration 均已接入对应 TileSet，visible=false 不改变当前运行画面；
+# 启动构造只读快照 _tile_layer_snapshot 复制四层 used cells。本批不接入 LevelWorldQuery，放置/光线仍走 map_bounds+wall_cells 旧路径。
+# 格↔世界换算仍由 GridCoordinateRules 实现，不依赖 map_to_local。
 @onready var terrain_layer: TileMapLayer = $TerrainLayer
+@onready var wall_layer: TileMapLayer = $WallLayer
+@onready var legal_area_layer: TileMapLayer = $LegalAreaLayer
+@onready var decoration_layer: TileMapLayer = $DecorationLayer
 @onready var runtime_objects: Node2D = $RuntimeObjects
 @onready var light_path_layer: Node2D = $LightPathLayer
 @onready var canvas_layer: CanvasLayer = $CanvasLayer
@@ -84,6 +89,8 @@ const _PlayerInteractionController: GDScript = preload("res://gameplay/interacti
 # 世界只读查询门面与光线层薄适配器；不加入场景树、不设为 Autoload。
 const _LevelWorldQuery: GDScript = preload("res://gameplay/world/level_world_query.gd")
 const _LightWorldQuery: GDScript = preload("res://gameplay/world/light_world_query.gd")
+# 四层 TileMapLayer 只读快照（D5-B.1）：构造时复制 used cells，不持有 TileMapLayer；本批不接入 LevelWorldQuery。
+const _LevelTileLayerSnapshot: GDScript = preload("res://gameplay/world/level_tile_layer_snapshot.gd")
 # 关卡稳定对象索引所有者（D3-C）：水晶按显式 crystal_id 与 cell 双向索引，LevelWorldQuery 据此查询水晶，不暴露可写字典。
 const _LevelObjectRegistry: GDScript = preload("res://gameplay/level/level_object_registry.gd")
 # 目标完成事实唯一所有者（D3-D）：按 cell 激活水晶、判断完成、运行期重置水晶；核心只读取 is_completed()/reset_runtime()，不保留第二套目标业务实现。
@@ -121,6 +128,9 @@ var _light_visual_controller: _LightVisualController = null
 ## 世界只读查询门面：在所有真实依赖初始化后构造，持有容器引用而非复制（容器运行期只原地增删，从不整体重赋值）；只读，不修改世界事实。
 var _level_world_query: _LevelWorldQuery = null
 
+## 四层 TileMapLayer 只读快照（D5-B.1）：_ready 中由四层 used cells 构造；缺层时保持 null，不退回 map_bounds。本批未接入 LevelWorldQuery，放置/光线行为不变。
+var _tile_layer_snapshot: _LevelTileLayerSnapshot = null
+
 ## 关卡稳定对象索引：_ready 中遍历 crystals 按显式 crystal_id 与 cell 注册，LevelWorldQuery 据此查询水晶；不暴露内部字典。
 var _level_object_registry: _LevelObjectRegistry = _LevelObjectRegistry.new()
 
@@ -143,6 +153,8 @@ func _ready() -> void:
 	_run_state_controller.state_changed.connect(_on_run_state_changed)
 	# 光路视觉控制器先构造：注入 LightPathLayer 作为视觉父节点，视觉资源与颜色由控制器自持。
 	_light_visual_controller = _LightVisualController.new(light_path_layer)
+	# 四层 TileMapLayer 只读快照（D5-B.1）：校验四层存在且类型正确后复制 used cells；缺层 push_error 并跳过快照构造，不退回 map_bounds，不影响后续玩法接线。
+	_build_tile_layer_snapshot()
 	# 放置事务控制器先于只读查询门面构造：LevelWorldQuery 需持有控制器映射引用，供光线层 cell→ID→节点解析。
 	_placement_controller = _PlacementController.new(
 		occupancy,
@@ -206,6 +218,27 @@ func _ready() -> void:
 		var sample_cells: Array[Vector2i] = _collect_grid_coordinate_sample_cells()
 		var snapshot: _InventoryConsistencySnapshot = _collect_inventory_consistency_snapshot()
 		_startup_self_check_coordinator.run_all(sample_cells, snapshot, true, true)
+
+
+## 构造四层 TileMapLayer 只读快照（D5-B.1）：校验 Terrain/Wall/LegalArea/Decoration 存在且类型正确后复制 used cells。
+## 任一层缺失或类型不符（@onready 类型转换失败为 null）则逐项 push_error 并跳过快照构造（_tile_layer_snapshot 保持 null）；
+## 不静默退回 map_bounds；本批不接入 LevelWorldQuery，放置与光线行为不变。
+func _build_tile_layer_snapshot() -> void:
+	var missing_layers: PackedStringArray = PackedStringArray()
+	if terrain_layer == null:
+		missing_layers.append("TerrainLayer")
+	if wall_layer == null:
+		missing_layers.append("WallLayer")
+	if legal_area_layer == null:
+		missing_layers.append("LegalAreaLayer")
+	if decoration_layer == null:
+		missing_layers.append("DecorationLayer")
+	if not missing_layers.is_empty():
+		push_error("CoreLoopPrototype: 四层 TileMapLayer 缺失或类型不符：%s；已跳过只读快照构造，不退回 map_bounds。" % [", ".join(missing_layers)])
+		return
+	_tile_layer_snapshot = _LevelTileLayerSnapshot.new(
+		terrain_layer, wall_layer, legal_area_layer, decoration_layer
+	)
 
 
 ## 由 EmitterConfigNode 构造启动快照与不可变 FixedEmitter；节点缺失或 PARTICLE 未接运行时则安全中止。
