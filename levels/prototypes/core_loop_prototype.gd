@@ -89,7 +89,7 @@ const _PlayerInteractionController: GDScript = preload("res://gameplay/interacti
 # 世界只读查询门面与光线层薄适配器；不加入场景树、不设为 Autoload。
 const _LevelWorldQuery: GDScript = preload("res://gameplay/world/level_world_query.gd")
 const _LightWorldQuery: GDScript = preload("res://gameplay/world/light_world_query.gd")
-# 四层 TileMapLayer 只读快照（D5-B.1）：构造时复制 used cells，不持有 TileMapLayer；本批不接入 LevelWorldQuery。
+# 四层 TileMapLayer 只读快照（D5-B.1）：validate_layers 校验后 new() 构造，构造时复制 used cells，不持有 TileMapLayer；本批不接入 LevelWorldQuery。
 const _LevelTileLayerSnapshot: GDScript = preload("res://gameplay/world/level_tile_layer_snapshot.gd")
 # 关卡稳定对象索引所有者（D3-C）：水晶按显式 crystal_id 与 cell 双向索引，LevelWorldQuery 据此查询水晶，不暴露可写字典。
 const _LevelObjectRegistry: GDScript = preload("res://gameplay/level/level_object_registry.gd")
@@ -153,7 +153,7 @@ func _ready() -> void:
 	_run_state_controller.state_changed.connect(_on_run_state_changed)
 	# 光路视觉控制器先构造：注入 LightPathLayer 作为视觉父节点，视觉资源与颜色由控制器自持。
 	_light_visual_controller = _LightVisualController.new(light_path_layer)
-	# 四层 TileMapLayer 只读快照（D5-B.1）：校验四层存在且类型正确后复制 used cells；缺层 push_error 并跳过快照构造，不退回 map_bounds，不影响后续玩法接线。
+	# 四层 TileMapLayer 只读快照（D5-B.1）：先 validate_layers 校验四层再 new() 复制 used cells；缺层 push_error 且保持 null，不退回 map_bounds，不影响后续玩法接线。
 	_build_tile_layer_snapshot()
 	# 放置事务控制器先于只读查询门面构造：LevelWorldQuery 需持有控制器映射引用，供光线层 cell→ID→节点解析。
 	_placement_controller = _PlacementController.new(
@@ -220,21 +220,13 @@ func _ready() -> void:
 		_startup_self_check_coordinator.run_all(sample_cells, snapshot, true, true)
 
 
-## 构造四层 TileMapLayer 只读快照（D5-B.1）：校验 Terrain/Wall/LegalArea/Decoration 存在且类型正确后复制 used cells。
-## 任一层缺失或类型不符（@onready 类型转换失败为 null）则逐项 push_error 并跳过快照构造（_tile_layer_snapshot 保持 null）；
-## 不静默退回 map_bounds；本批不接入 LevelWorldQuery，放置与光线行为不变。
+## 构造四层 TileMapLayer 只读快照（D5-B.1；D5-B.1R 两段式构造）：先调静态校验 validate_layers 检查四层有效；校验失败保持 _tile_layer_snapshot 为 null 并安全返回，不退回 map_bounds，不影响后续玩法接线；成功则直接 new() 构造快照。
+## 本批不接入 LevelWorldQuery，放置与光线行为不变。
 func _build_tile_layer_snapshot() -> void:
-	var missing_layers: PackedStringArray = PackedStringArray()
-	if terrain_layer == null:
-		missing_layers.append("TerrainLayer")
-	if wall_layer == null:
-		missing_layers.append("WallLayer")
-	if legal_area_layer == null:
-		missing_layers.append("LegalAreaLayer")
-	if decoration_layer == null:
-		missing_layers.append("DecorationLayer")
-	if not missing_layers.is_empty():
-		push_error("CoreLoopPrototype: 四层 TileMapLayer 缺失或类型不符：%s；已跳过只读快照构造，不退回 map_bounds。" % [", ".join(missing_layers)])
+	if not _LevelTileLayerSnapshot.validate_layers(
+		terrain_layer, wall_layer, legal_area_layer, decoration_layer
+	):
+		_tile_layer_snapshot = null
 		return
 	_tile_layer_snapshot = _LevelTileLayerSnapshot.new(
 		terrain_layer, wall_layer, legal_area_layer, decoration_layer
