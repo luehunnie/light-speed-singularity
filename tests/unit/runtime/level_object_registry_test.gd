@@ -9,6 +9,11 @@ extends SceneTree
 const _LevelObjectRegistry: GDScript = preload("res://gameplay/level/level_object_registry.gd")
 const _BasicCrystalScript: GDScript = preload("res://gameplay/crystals/basic_crystal.gd")
 
+## 主原型场景 → basic_crystal.tscn 子场景 → basic_crystal.gd 根脚本 的真实资源链路径（测试 16 用）。
+const _MAIN_SCENE_PATH: String = "res://levels/prototypes/core_loop_prototype.tscn"
+const _CRYSTAL_SCENE_PATH: String = "res://gameplay/crystals/basic_crystal.tscn"
+const _CRYSTAL_SCRIPT_PATH: String = "res://gameplay/crystals/basic_crystal.gd"
+
 
 ## 累积失败项（每项为“[组名] 原因”）。
 var _failures: PackedStringArray = PackedStringArray()
@@ -219,43 +224,65 @@ func _test_15_no_mutable_dict_exposed() -> void:
 	_check(NAME, lwq_src.find("_crystals") == -1, "LevelWorldQuery 不应持有可写 crystals 数组。")
 
 
-## 16. 主原型场景所有水晶实例均有显式唯一 crystal_id，且数量与水晶节点一致。
+## 16. 主原型场景水晶资源链契约：主场景引用 basic_crystal.tscn PackedScene 并实例化 Crystal 节点，
+## 子场景根节点挂载 basic_crystal.gd；每个 Crystal 实例显式覆盖非空唯一 crystal_id，且不依赖 Node.name。
+## 通过 PackedScene.get_state() 的 SceneState 稳定读取资源链（与 crystal_contract_test 同源做法），
+## 既不实例化整个原型场景（避免 _ready/VisualView 副作用），也不做脆弱的单点文本子串匹配。
+## 注：Godot 4.6 SceneState 不暴露 ext_resource 枚举，故“主场景引用 basic_crystal.tscn”由发现实例化该资源的
+## Crystal 节点直接证明（引用而未实例化的 PackedScene 对契约无意义，且 Godot 会警告未用 ext_resource）。
 func _test_16_scene_crystal_ids_valid() -> void:
 	const NAME: String = "16_场景水晶显式唯一crystal_id"
-	var tscn: String = FileAccess.get_file_as_string("res://levels/prototypes/core_loop_prototype.tscn")
-	var crystal_ext_id: String = _resolve_crystal_ext_id(tscn)
-	_check(NAME, crystal_ext_id != "", "应能解析 basic_crystal.gd 的 ext_resource id。")
-	var crystal_node_count: int = tscn.count('script = ExtResource("%s")' % [crystal_ext_id])
-	var crystal_ids: PackedStringArray = _extract_crystal_ids(tscn)
-	_check(NAME, crystal_node_count >= 1, "原型场景至少应有一个水晶实例，实际 %d。" % [crystal_node_count])
-	_check(NAME, crystal_ids.size() == crystal_node_count, "crystal_id 数量应等于水晶节点数：%d vs %d。" % [crystal_ids.size(), crystal_node_count])
+	var main_scene: PackedScene = load(_MAIN_SCENE_PATH) as PackedScene
+	_check(NAME, main_scene != null, "主原型场景应能加载为 PackedScene。")
+	if main_scene == null:
+		return
+	var main_state: SceneState = main_scene.get_state()
+
+	# 契约3：basic_crystal.tscn 根节点（非 instance 子节点）挂载 basic_crystal.gd。
+	var sub_scene: PackedScene = load(_CRYSTAL_SCENE_PATH) as PackedScene
+	_check(NAME, sub_scene != null, "basic_crystal.tscn 应能加载为 PackedScene。")
+	var root_mounts_script: bool = false
+	if sub_scene != null:
+		var sub_state: SceneState = sub_scene.get_state()
+		for i: int in range(sub_state.get_node_count()):
+			if sub_state.get_node_instance(i) != null:
+				continue
+			for j: int in range(sub_state.get_node_property_count(i)):
+				if sub_state.get_node_property_name(i, j) != &"script":
+					continue
+				var scr: Script = sub_state.get_node_property_value(i, j) as Script
+				if scr != null and scr.resource_path == _CRYSTAL_SCRIPT_PATH:
+					root_mounts_script = true
+	_check(NAME, root_mounts_script, "basic_crystal.tscn 根节点应挂载 basic_crystal.gd。")
+
+	# 契约1+2：按 instance 资源识别 Crystal 实例（不读 Node.name）。发现实例化 basic_crystal.tscn 的节点即
+	# 证明主场景引用该 PackedScene；节点数 >= 1 即实例化至少一个 Crystal。逐节点校验显式、非空 crystal_id。
+	var crystal_ids: Array[StringName] = []
+	var crystal_node_count: int = 0
+	for i: int in range(main_state.get_node_count()):
+		var inst: PackedScene = main_state.get_node_instance(i)
+		if inst == null:
+			continue
+		if inst != sub_scene and inst.resource_path != _CRYSTAL_SCENE_PATH:
+			continue
+		crystal_node_count += 1
+		var cid: StringName = &""
+		var has_cid_override: bool = false
+		for j: int in range(main_state.get_node_property_count(i)):
+			if main_state.get_node_property_name(i, j) == &"crystal_id":
+				cid = main_state.get_node_property_value(i, j)
+				has_cid_override = true
+		_check(NAME, has_cid_override, "每个 Crystal 实例应显式覆盖 crystal_id 属性，不得依赖 Node.name 或默认空值。")
+		_check(NAME, cid != &"", "Crystal 实例 crystal_id 不应为空。")
+		crystal_ids.append(cid)
+	_check(NAME, crystal_node_count >= 1, "主场景应引用 basic_crystal.tscn 并实例化至少一个 Crystal 节点，实际 %d。" % [crystal_node_count])
+	_check(NAME, crystal_ids.size() == crystal_node_count, "crystal_id 数量应等于 Crystal 实例数：%d vs %d。" % [crystal_ids.size(), crystal_node_count])
+
+	# 契约5：crystal_id 全局唯一。
 	var seen: Dictionary = {}
-	for cid: String in crystal_ids:
-		_check(NAME, cid != "", "水晶 crystal_id 不应为空。")
-		_check(NAME, not seen.has(cid), "水晶 crystal_id 不应重复：%s" % [cid])
+	for cid: StringName in crystal_ids:
+		_check(NAME, not seen.has(cid), "Crystal crystal_id 不应重复：%s。" % [cid])
 		seen[cid] = true
-
-
-## 解析 basic_crystal.gd 在场景中的 ext_resource id。
-func _resolve_crystal_ext_id(tscn: String) -> String:
-	var key: String = 'path="res://gameplay/crystals/basic_crystal.gd" id="'
-	var idx: int = tscn.find(key)
-	if idx == -1:
-		return ""
-	var start: int = idx + key.length()
-	var end_idx: int = tscn.find('"', start)
-	if end_idx == -1:
-		return ""
-	return tscn.substr(start, end_idx - start)
-
-
-## 提取场景中所有 crystal_id = &"..." 的值。
-func _extract_crystal_ids(tscn: String) -> PackedStringArray:
-	var ids: PackedStringArray = PackedStringArray()
-	var pattern: RegEx = RegEx.create_from_string('crystal_id = &"([^"]*)"')
-	for m: RegExMatch in pattern.search_all(tscn):
-		ids.append(m.get_string(1))
-	return ids
 
 
 ## 单项断言：累计计数，失败时追加“[组名] 原因”到失败列表。
