@@ -12,6 +12,12 @@ extends SceneTree
 const _LevelValidator: GDScript = preload("res://gameplay/level/validation/level_validator.gd")
 const _LevelValidationIssue: GDScript = preload("res://gameplay/level/validation/level_validation_issue.gd")
 const _LevelValidationResult: GDScript = preload("res://gameplay/level/validation/level_validation_result.gd")
+# D6-B：固定对象校验已并入 LevelValidator.validate()，结构测试 fixture 需同步带上合法固定对象。
+const _GridCoordinateRules: GDScript = preload("res://gameplay/grid/grid_coordinate_rules.gd")
+const _EmitterConfigNode: GDScript = preload("res://gameplay/mechanisms/emitters/emitter_config_node.gd")
+const _BasicCrystal: GDScript = preload("res://gameplay/crystals/basic_crystal.gd")
+const _ObjectVisualView: GDScript = preload("res://gameplay/visuals/object_visuals/object_visual_view.gd")
+const _ObjectVisualProfile: GDScript = preload("res://gameplay/visuals/object_visuals/object_visual_profile.gd")
 
 const _GROUP_COUNT: int = 21
 
@@ -209,7 +215,7 @@ func _test_13_legal_area_empty() -> void:
 ## 14. Legal/Wall 重叠 → legal_wall_overlap（WARNING）且 valid。
 func _test_14_legal_wall_overlap() -> void:
 	const G: String = "14_LegalWall重叠"
-	var root: Node2D = _make_root([Vector2i(0, 0), Vector2i(1, 1)], [Vector2i(1, 1)], [Vector2i(1, 1)], [])
+	var root: Node2D = _make_root([Vector2i(0, 0), Vector2i(1, 0), Vector2i(1, 1)], [Vector2i(1, 1)], [Vector2i(1, 1)], [])
 	var result: _LevelValidationResult = _validate(root)
 	_check(G, result.is_valid() == true, "Legal/Wall 重叠为 WARNING 期望 is_valid=true。")
 	_check(G, result.get_error_count() == 0, "重叠期望 0 ERROR。")
@@ -339,10 +345,34 @@ func _make_root(terrain_cells: Array, legal_cells: Array, wall_cells: Array, dec
 	var runtime: Node2D = Node2D.new()
 	runtime.name = &"RuntimeObjects"
 	root.add_child(runtime)
+	# D6-B：结构合法的 fixture 必须同时满足固定对象合同（恰好 1 Emitter + 1 Crystal），否则被并入 validate() 的固定对象校验报错。
+	_populate_runtime_objects(runtime)
 	var light: Node2D = Node2D.new()
 	light.name = &"LightPathLayer"
 	root.add_child(light)
 	return root
+
+
+## D6-B：在 RuntimeObjects 下放置合法固定对象——Emitter@(0,0) + Crystal@(1,0)，均带 Profile，
+## 使结构合法的 fixture 也满足 v0 固定对象合同。对象落在多数 fixture 的 terrain 内（含 (0,0)/(1,0)）；
+## 仅 test_14 的 terrain 额外补 (1,0)（见该用例）。
+func _populate_runtime_objects(runtime: Node2D) -> void:
+	var emitter_profile: _ObjectVisualProfile = _ObjectVisualProfile.new()
+	var emitter: _EmitterConfigNode = _EmitterConfigNode.new()
+	emitter.name = &"Emitter"
+	emitter.position = _GridCoordinateRules.cell_to_world(Vector2i(0, 0))
+	emitter.visual_profile = emitter_profile
+	runtime.add_child(emitter)
+	var crystal_profile: _ObjectVisualProfile = _ObjectVisualProfile.new()
+	var crystal: _BasicCrystal = _BasicCrystal.new()
+	crystal.name = &"BasicCrystal"
+	crystal.position = _GridCoordinateRules.cell_to_world(Vector2i(1, 0))
+	crystal.crystal_id = &"crystal_layers"
+	var view: _ObjectVisualView = _ObjectVisualView.new()
+	view.name = &"VisualView"
+	view.visual_profile = crystal_profile
+	crystal.add_child(view)
+	runtime.add_child(crystal)
 
 
 ## 构造最小可用 TileSet：单 atlas 源、无纹理；set_cell 引用 source 0 即可使 get_used_cells 返回该格。
