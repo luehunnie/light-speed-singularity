@@ -5,10 +5,13 @@ extends RefCounted
 ## 只读当前场景 TileMapLayer 事实，输出 LevelValidationResult。无状态：不跨调用保存场景节点或 used-cell 缓存。
 ## 不 push_error/push_warning；不修改场景。原始事实直接来自传入 level_root 子树的 TileMapLayer。
 ## 本批仅覆盖：六个正式角色结构识别（存在/类型/位置/重复）、逻辑 transform、TileSet 绑定，
-##   以及 Terrain/Legal/Wall 跨层规则。不做 Emitter/Crystal/对象/VisualProfile/自动修复等（属 D6-B/C）。
+##   以及 Terrain/Legal/Wall 跨层规则；固定对象（Emitter/Crystal/VisualProfile）校验委托给
+##   LevelFixedObjectValidator（D6-B），本类只读取 Terrain/Wall 局部事实并合并其 Issue。
+##   不做自动修复、多水晶正式运行、光粒正式运行等（属 D6-C）。
 
 const _LevelValidationIssue: GDScript = preload("res://gameplay/level/validation/level_validation_issue.gd")
 const _LevelValidationResult: GDScript = preload("res://gameplay/level/validation/level_validation_result.gd")
+const _LevelFixedObjectValidator: GDScript = preload("res://gameplay/level/validation/level_fixed_object_validator.gd")
 
 # 正式 TileMapLayer 角色名（按绘制顺序：地形→墙→合法区→装饰）。
 const _TILE_ROLES: Array = ["TerrainLayer", "WallLayer", "LegalAreaLayer", "DecorationLayer"]
@@ -32,6 +35,13 @@ func validate(level_root: Node) -> _LevelValidationResult:
 	_validate_logic_transforms(root, valid_direct, issues)
 	_validate_tilesets(root, valid_direct, issues)
 	_validate_layer_data(root, valid_direct, issues)
+	# D6-B：固定对象校验。Terrain / Wall 局部事实交给 LevelFixedObjectValidator，合并 Issue 后由 Result 统一排序。
+	var terrain_cells: Variant = _read_layer_cells(valid_direct.get("TerrainLayer", null))
+	var wall_cells: Variant = _read_layer_cells(valid_direct.get("WallLayer", null))
+	var fixed_issues: Array = (
+		_LevelFixedObjectValidator.new().validate_fixed_objects(root, terrain_cells, wall_cells)
+	)
+	issues.append_array(fixed_issues)
 	return _LevelValidationResult.new(issues)
 
 
