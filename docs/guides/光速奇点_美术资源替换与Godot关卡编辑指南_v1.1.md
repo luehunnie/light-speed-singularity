@@ -14,7 +14,7 @@
 本指南区分两类内容：
 
 - **当前可用**：基于已实现视觉接口（`VisualStateTexture`、`ObjectVisualProfile`、`ObjectVisualView`、`InventorySlotView`、`LightSegmentVisualProfile`、`LightSegmentView`）、`GridPlacedObject` 位置契约、`EmitterConfigNode`/`EmissionPreview`、现有原型场景，以及唯一的美术 Profile 编辑器插件 `addons/light_speed_art_profile/` 的流程，张梓涵现在就可以执行；
-- **目标 / 未实现**：方法 B（2D 视图直接拖动编辑、64×64 吸附、位置写回逻辑 cell、父节点移动一致性）、`LevelValidator`、完整正式关卡模板、`FixedEmitter` 独立预制场景与统一 `EmissionRequest`、`READY_TO_FIRE`、开始运行按钮、光粒运行时编辑、一键创建独立 Profile 副本等，属于未来目标，当前不具备可依赖的代码或字段。
+- **目标 / 未实现**：方法 B 多格编辑与父节点移动一致性完整流程、Runtime 自动 Validation Gate、`FixedEmitter` 独立预制场景与统一 `EmissionRequest`、`READY_TO_FIRE`、正式“开始运行”入口、光粒（Particle）运行时编辑、Particle 八方向、一键创建独立 Profile 副本等，属于未来目标，当前不具备可依赖的代码或字段。（方法 B 单格路径、`LevelValidator` v0、正式关卡模板、Godot 原生 GUI 关卡编辑基础、墙体方向编辑均已完成。）
 
 契约存在不等于代码已经实现。已实现视觉接口的路径、`class_name`、基类和公开方法以真实代码为准（详见《永久视觉与关卡编辑接口设计 v1.1》§6、§7–§10、§14.4、§15）。
 
@@ -32,10 +32,10 @@
 | `GridPlacedObject` 位置契约 | 当前已实现 | `position` 为场景编辑事实，`cell` 由 `world_to_cell` 派生，`set_cell` 用 `cell_to_world` |
 | `EmitterConfigNode` / `EmissionPreview` | 当前已实现 | 发射器关卡配置唯一来源与编辑器预览；`EmissionPreview` 仅编辑器预览，不是正式运行光线 |
 | 编辑器 64 格吸附 | 当前可用（Godot 原生） | 节点拖动、复制、64×64 网格吸附、position Undo/Redo 均由 Godot 原生负责 |
-| 方法 B（2D 视图直接拖动编辑） | 目标 / 未完整实现 | 拖动写回逻辑 cell、父节点移动一致性尚未完整实现 |
+| 方法 B（2D 视图直接拖动编辑） | 单格已完成 / 多格为目标 | 单格拖动写回逻辑 cell 已完成（D5）；多格对象编辑、父节点移动一致性完整流程仍为目标 |
 | `LevelObjectRegistry`（完整扫描） | 部分实现 | 水晶按 `crystal_id` 与 cell 双向索引已实现；扫描/多类型对象注册仍为目标 |
-| `LevelValidator` | 目标 / 未实现 | 不能作为当前验收必跑步骤 |
-| 完整正式关卡模板 | 目标 / 未实现 | 仅存在核心原型场景 |
+| `LevelValidator` | v0 已实现 / 自动门未实现 | v0 只读校验已实现（D6，PR #45–#48）；Runtime 自动 Validation Gate（运行期/编辑器自动调用）未实现，不作为保存时自动校验必跑步骤 |
+| 正式关卡模板 | 已实现（基础） | `levels/templates/level_template.tscn` 四层 `TileMapLayer`（D5，PR #35–#44）；多格对象完整编辑流程仍为目标 |
 | `FixedEmitter` 独立预制场景与统一 `EmissionRequest` | 目标 / 未实现 | 运行期 cell/direction 与 `FireRequest` 已实现；`fixed_emitter.tscn`/统一 `EmissionRequest`/光粒运行时仍为目标 |
 | `READY_TO_FIRE` | 目标 / 未实现 | 不在当前验收项 |
 | 开始运行按钮 | 目标 / 未实现 | 不在当前验收项 |
@@ -138,10 +138,10 @@ DecorationLayer
 - 复制（Godot 原生）；
 - 64 格吸附（Godot 原生，不制作移动吸附插件）；
 - Inspector 配置；
-- 关卡加载校验（`LevelValidator`，D6，目标 / 未实现）；
+- 关卡加载校验（`LevelValidator` v0 已实现 D6；Runtime 自动 Validation Gate 未实现）；
 - 视觉 Profile 替换（当前可用）。
 
-当前已有视觉 Profile 替换（含插件）、`GridPlacedObject` 位置契约（已实现）、`EmitterConfigNode`/`EmissionPreview` 与原型场景内的基础操作可用；Godot 原生 64 格吸附可用于节点拖动/复制，但方法 B（拖动写回逻辑 cell 与父节点移动一致性）尚未完整实现、`LevelValidator` 未落地，关卡校验不得列为当前必测项。
+当前已有视觉 Profile 替换（含插件）、`GridPlacedObject` 位置契约（已实现）、`EmitterConfigNode`/`EmissionPreview` 与原型场景内的基础操作可用；Godot 原生 64 格吸附可用于节点拖动/复制，方法 B 单格路径（拖动写回逻辑 cell）已完成（D5）、`LevelValidator` v0 已实现（D6）；方法 B 多格编辑与父节点移动一致性完整流程仍为目标，Runtime 自动 Validation Gate（运行期自动调用校验器）未实现，关卡校验自动门不得列为当前必测项。
 
 ---
 
@@ -197,7 +197,7 @@ cell     : Vector2i  # 由 position 派生
 
 不得把根节点局部原点直接写为 `(32, 32)`，避免混淆局部坐标与格内偏移。
 
-> 注：方法 B（2D 视图直接拖动后把最终位置写回逻辑 cell、父节点移动时视觉/碰撞/方向/光路配置一致性）尚未完整实现。当前可使用 Godot 原生拖动 `position`，但不要假定拖动后所有派生配置已自动完整写回。
+> 注：方法 B 单格路径（2D 视图直接拖动后把最终位置写回逻辑 cell）已完成（D5）；多格对象编辑与父节点移动时视觉/碰撞/方向/光路配置一致性完整流程仍为目标。当前可使用 Godot 原生拖动 `position`，但多格场景下不要假定拖动后所有派生配置已自动完整写回。
 
 ## 3.3 编辑器吸附（Godot 原生）
 
@@ -461,12 +461,12 @@ backslash_texture
 
 # 10. 发射器美术和配置
 
-> **状态：部分实现。** `FixedEmitter`（`gameplay/mechanisms/emitters/fixed_emitter.gd`）为运行期 cell/direction 唯一所有者，由核心 `_ready` 从 `EmitterConfigNode` 启动快照构造，`build_fire_request` 构建 `FireRequest`。`EmitterConfigNode`（`@tool`，`extends GridPlacedObject`）已实现，是发射器关卡配置唯一来源：`default_light_form`、`ray_default_direction`（光线八方向）、`particle_default_direction`（光粒四方向）、`visual_profile: ObjectVisualProfile`、`editor_preview_visible`。`EmissionPreview` 已实现，跟随 Emitter 移动和方向变化，仅编辑器预览，不参与玩法判定，不复制完整传播算法。`LightPathLayer` 独立、固定原点，只承载运行时真实光路，已在核心原型场景存在。结构 `RuntimeObjects/Emitter/{EmitterVisual, EmissionPreview}` 已落地。`CoreLoopPrototype.emitter_cell`/`emitter_direction` 双事实已删除。发射器视觉复用通用 `ObjectVisualProfile`（`assets/visual_profiles/emitter_visuals.tres`）。仍为目标：`fixed_emitter.tscn` 独立预制场景、统一 `EmissionRequest`、光粒运行时（`PARTICLE` 仅保存配置与编辑器预览，不执行发射）。`EmissionPreview` 不是正式运行光线。
+> **状态：部分实现。** `FixedEmitter`（`gameplay/mechanisms/emitters/fixed_emitter.gd`）为运行期 cell/direction 唯一所有者，由核心 `_ready` 从 `EmitterConfigNode` 启动快照构造，`build_fire_request` 构建 `FireRequest`。`EmitterConfigNode`（`@tool`，`extends GridPlacedObject`）已实现，是发射器关卡配置唯一来源：`default_light_form`、`ray_default_direction`（光线八方向）、`particle_default_direction`（光粒四方向；当前实现，PARTICLE 八方向为最终目标尚未实现）、`visual_profile: ObjectVisualProfile`、`editor_preview_visible`。`EmissionPreview` 已实现，跟随 Emitter 移动和方向变化，仅编辑器预览，不参与玩法判定，不复制完整传播算法。`LightPathLayer` 独立、固定原点，只承载运行时真实光路，已在核心原型场景存在。结构 `RuntimeObjects/Emitter/{EmitterVisual, EmissionPreview}` 已落地。`CoreLoopPrototype.emitter_cell`/`emitter_direction` 双事实已删除。发射器视觉复用通用 `ObjectVisualProfile`（`assets/visual_profiles/emitter_visuals.tres`）。仍为目标：`fixed_emitter.tscn` 独立预制场景、统一 `EmissionRequest`、光粒运行时（`PARTICLE` 仅保存配置与编辑器预览，不执行发射）、Particle 八方向。`EmissionPreview` 不是正式运行光线。
 
 固定发射器目标上包含：
 
 - `cell`；
-- 四方向；
+- 八方向（RAY/PARTICLE 最终目标均为八方向；当前真实代码 Ray 已八方向、Particle 仍四正方向）；
 - 光形态；
 - 发射器视觉 Profile；
 - 视觉子节点。
@@ -482,16 +482,20 @@ particle_texture
 
 ## 10.2 一张图片旋转
 
-每种光形态使用一张基础方向图。
+每种光形态使用一张基础方向图。RAY/PARTICLE 最终目标均为八方向（当前真实代码 Ray 已八方向、Particle 仍四正方向）。
 
 建议原图朝右：
 
 | 逻辑方向 | 视觉旋转 |
 |---|---:|
-| 右 | 0° |
-| 下 | 90° |
-| 左 | 180° |
-| 上 | 270° |
+| 右（RIGHT） | 0° |
+| 右下（DOWN_RIGHT） | 45° |
+| 下（DOWN） | 90° |
+| 左下（DOWN_LEFT） | 135° |
+| 左（LEFT） | 180° |
+| 左上（UP_LEFT） | 225° |
+| 上（UP） | 270° |
+| 右上（UP_RIGHT） | 315° |
 
 只旋转视觉子节点，不旋转发射器逻辑根节点。
 
@@ -502,7 +506,7 @@ particle_texture
 - `position`（场景编辑事实，`cell` 由其派生，不需手填 `cell`）；
 - `default_light_form`（`RAY` / `PARTICLE`，当前仅 `RAY` 接运行时）；
 - `ray_default_direction`（光线八方向）；
-- `particle_default_direction`（光粒四方向）；
+- `particle_default_direction`（光粒四方向；当前实现，PARTICLE 八方向为最终目标尚未实现）；
 - `visual_profile`（`ObjectVisualProfile`）；
 - `editor_preview_visible`。
 
@@ -568,7 +572,7 @@ LegalAreaLayer
 
 # 13. 固定对象的移动
 
-> **状态：当前可用（Godot 原生）+ 方法 B 未完整实现。** 节点拖动、复制、64×64 网格吸附、position Undo/Redo 由 Godot 原生负责；`GridPlacedObject` 位置契约已实现（`position` 为事实、`cell` 派生）。方法 B（拖动后把最终位置写回逻辑 cell、父节点移动时视觉/碰撞/方向/光路配置一致性）尚未完整实现，不要假定拖动后所有派生配置已自动完整写回。
+> **状态：当前可用（Godot 原生）+ 方法 B 单格已完成。** 节点拖动、复制、64×64 网格吸附、position Undo/Redo 由 Godot 原生负责；`GridPlacedObject` 位置契约已实现（`position` 为事实、`cell` 派生），方法 B 单格路径（拖动后把最终位置写回逻辑 cell）已完成（D5）。多格对象编辑与父节点移动时视觉/碰撞/方向/光路配置一致性完整流程仍为目标，多格场景下不要假定拖动后所有派生配置已自动完整写回。
 
 目标操作：
 
@@ -592,7 +596,7 @@ LegalAreaLayer
 
 # 14. 固定对象的复制
 
-> **状态：当前可用（Godot 原生）+ 目标校验未实现。** 复制与 64 格吸附由 Godot 原生负责；运行时注册器校验依赖 `LevelObjectRegistry` 完整扫描 / `LevelValidator`，当前均未实现（`LevelObjectRegistry` 仅实现水晶双向索引）。张梓涵当前可复制对象节点，但不得依赖注册器校验。复制生成稳定 ID 的自动化能力尚未实现，需按显式字段（如 `crystal_id`）手工配置，不用 `Node.name` 作为正式 ID。
+> **状态：当前可用（Godot 原生）+ 目标校验未实现。** 复制与 64 格吸附由 Godot 原生负责；运行时注册器校验依赖 `LevelObjectRegistry` 完整扫描（`LevelValidator` v0 已实现 D6，但 `LevelObjectRegistry` 仅实现水晶双向索引、完整扫描仍为目标）。张梓涵当前可复制对象节点，但不得依赖注册器自动校验。复制生成稳定 ID 的自动化能力尚未实现，需按显式字段（如 `crystal_id`）手工配置，不用 `Node.name` 作为正式 ID。
 
 目标操作：
 
@@ -631,7 +635,7 @@ LegalAreaLayer
 
 # 15. 多格机关
 
-> **状态：公共占用接口已冻结并落地；正式多格机关子类与方法 B 尚未实现。** `get_occupied_offsets(p_orientation: int = 0)` 与 `get_occupied_cells(anchor_cell: Vector2i, p_orientation: int = 0)` 已冻结并落地于 `GridPlacedObject` 基类（单格默认 `[Vector2i.ZERO]`）；`anchor_cell` 是查询参数或由根 `position` 派生，不是持久化的第二位置事实。正式多格机关子类、多格旋转占用，以及关卡编辑方法 B（2D 视图直接拖动写回）尚未完整实现。
+> **状态：公共占用接口已冻结并落地；正式多格机关子类与方法 B 多格编辑尚未实现。** `get_occupied_offsets(p_orientation: int = 0)` 与 `get_occupied_cells(anchor_cell: Vector2i, p_orientation: int = 0)` 已冻结并落地于 `GridPlacedObject` 基类（单格默认 `[Vector2i.ZERO]`）；`anchor_cell` 是查询参数或由根 `position` 派生，不是持久化的第二位置事实。正式多格机关子类、多格旋转占用，以及关卡编辑方法 B 多格编辑尚未完整实现（方法 B 单格已完成）。
 
 多格机关目标上使用：
 
@@ -834,7 +838,7 @@ mixed_level_01.tscn
 
 # 22. 标准关卡制作流程
 
-> **状态：目标流程。** 其中复制完整关卡模板、运行 `LevelValidator` 等步骤当前未实现；`EmitterConfigNode`/`EmissionPreview` 已实现，方法 B（2D 视图直接拖动编辑与位置写回）尚未完整实现。节点拖动/复制/64 格吸附由 Godot 原生负责。张梓涵当前可在已有原型场景内进行美术替换与基础配置验证；以下为完整目标流程，待方法 B、`LevelValidator` 与完整关卡模板落地后方可完整执行。
+> **状态：基础已完成，多格/自动校验为目标。** 正式关卡模板（D5）、`LevelValidator` v0（D6）、方法 B 单格路径（2D 视图直接拖动编辑与位置写回）均已完成。多格对象完整编辑流程、Runtime 自动 Validation Gate（运行期自动调用 `LevelValidator`）仍为目标。节点拖动/复制/64 格吸附由 Godot 原生负责。张梓涵当前可在已实现模板与原型场景内进行美术替换与基础配置验证；以下为完整目标流程，待方法 B 多格编辑、Runtime 自动 Validation Gate 等落地后方可完整执行。
 
 ```text
 确定章节和机制
@@ -902,7 +906,7 @@ mixed_level_01.tscn
 
 # 24. 关卡运行校验
 
-> **状态：目标 / 未实现。** `LevelValidator` 当前未实现，**不能作为当前保存或验收的必跑步骤**。以下校验内容为长期设计，最终以真实实现为准。
+> **状态：v0 已实现 / 自动门未实现。** `LevelValidator` v0（D6，PR #45–#48）只读结构化校验已实现，可经测试/headless 运行；Runtime 自动 Validation Gate（保存或运行期自动调用）未实现，**不能作为当前保存或验收的自动必跑步骤**。以下校验内容为长期设计，最终以真实实现为准。
 
 保存关卡前目标上运行校验器。
 
@@ -1139,7 +1143,7 @@ Debugger错误
 
 # 32. 最终完成标准
 
-> 本节描述的是接口完成后的**目标最终标准**，其中方法 B（2D 视图直接拖动编辑与位置写回）、`LevelValidator` 关卡校验、`READY_TO_FIRE`/开始运行按钮、光粒运行时、三章节正式关卡制作等当前未实现。`GridPlacedObject` 位置契约、`EmitterConfigNode`/`EmissionPreview`、美术 Profile 插件已实现。节点拖动/复制/64 格吸附由 Godot 原生负责。张梓涵当前可执行的部分为已实现视觉接口的美术替换（含插件）、发射器配置与原型场景验证。
+> 本节描述的是接口完成后的**目标最终标准**，其中方法 B 多格编辑、Runtime 自动 Validation Gate（`LevelValidator` v0 已实现，但运行期自动调用未实现）、`READY_TO_FIRE`/开始运行入口、光粒运行时、三章节正式关卡制作等当前未实现（方法 B 单格、`LevelValidator` v0 已完成）。`GridPlacedObject` 位置契约、`EmitterConfigNode`/`EmissionPreview`、美术 Profile 插件已实现。节点拖动/复制/64 格吸附由 Godot 原生负责。张梓涵当前可执行的部分为已实现视觉接口的美术替换（含插件）、发射器配置与原型场景验证。
 
 最终编辑方式目标上必须达到：
 
