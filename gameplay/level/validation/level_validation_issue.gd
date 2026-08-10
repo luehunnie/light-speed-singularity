@@ -20,7 +20,9 @@ var _node_path: NodePath = NodePath()
 var _has_cell: bool = false
 ## 出问题的格（仅 has_cell=true 时有效；结构级问题保持 Vector2i.ZERO 占位）。
 var _cell: Vector2i = Vector2i.ZERO
-## 关联对象 ID；本批 cell/结构问题一律为空，预留给后续对象校验。
+## 关联对象 ID（稳定业务 ID，非 Node.name）。D6-B 起真实合同：
+## Emitter 无稳定业务 ID，故为空；Crystal 的 Issue 在 crystal_id 非空时填 crystal_id；
+## 结构/格层级且不归属稳定对象 ID 的 Issue 可为空。不得以 Node.name 作为业务 ID。
 var _object_id: StringName = &""
 
 
