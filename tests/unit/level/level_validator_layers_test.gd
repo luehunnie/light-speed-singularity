@@ -27,7 +27,7 @@ var _failures: PackedStringArray = PackedStringArray()
 var _checks: int = 0
 
 
-## SceneTree 初始化入口：顺序运行 18 组后统一报告并退出。
+## SceneTree 初始化入口：顺序运行 21 组后统一报告并退出。
 func _initialize() -> void:
 	_test_01_full_valid_pass()
 	_test_02_invalid_root()
