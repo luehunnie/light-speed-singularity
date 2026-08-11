@@ -1,7 +1,8 @@
 extends SceneTree
 
-## LevelRuntimeController 单元测试（拆分片 2/5 · Pulse 异步完成、generation 与过期回调）。
+## LevelRuntimeController 单元测试（拆分片 2/5 · Pulse 异步完成、generation 与过期回调；D7-2 经 READY_TO_FIRE 发射）。
 ## 覆盖：未完成脉冲进 MOVE_WINDOW、完成脉冲进 COMPLETED、COMPLETED 前取消拖拽、旧 generation 回调不结束新脉冲、R 使旧异步回调失效。
+## D7-2 起 SETUP 不可直接发射，发射用例先 begin_runtime 进入 READY_TO_FIRE 再 request_fire；reset 后再次发射同样需先 begin_runtime。
 ## 异步用例注入极短脉冲持续时间 0.0 并 await process_frame 推进；生产默认 1.0 秒不变。
 ## 桩与装配见 fixtures/runtime_controller_fixture.gd；由 Godot --script 运行，全部通过 quit(0)，任一失败 quit(1)。
 
@@ -45,6 +46,7 @@ func _run_all_tests() -> void:
 func _test_10_unfinished_pulse_enters_move_window() -> void:
 	const NAME: String = "10_未完成进入MOVE_WINDOW"
 	var env: _Fixture._Env = _fixture.make_env(Vector2i(1, 3), Vector2i.RIGHT, null)
+	env.rsc.begin_runtime()
 	env.controller.request_fire()
 	var refresh_before: int = env.sink.refresh_calls
 	await _fixture.wait_settled()
@@ -58,6 +60,7 @@ func _test_10_unfinished_pulse_enters_move_window() -> void:
 func _test_11_completed_pulse_enters_completed() -> void:
 	const NAME: String = "11_完成进入COMPLETED"
 	var env: _Fixture._Env = _fixture.make_env(Vector2i(1, 3), Vector2i.RIGHT, Vector2i(5, 3))
+	env.rsc.begin_runtime()
 	env.controller.request_fire()
 	await _fixture.wait_settled()
 	_check(NAME, env.rsc.get_current_state() == _RuntimeInteractionTypes.RunState.COMPLETED, "应进入 COMPLETED，实际 %s。" % [_state_label(env.rsc.get_current_state())])
@@ -69,6 +72,7 @@ func _test_11_completed_pulse_enters_completed() -> void:
 func _test_12_cancel_drag_before_completed() -> void:
 	const NAME: String = "12_COMPLETED前取消拖拽"
 	var env: _Fixture._Env = _fixture.make_env(Vector2i(1, 3), Vector2i.RIGHT, Vector2i(5, 3))
+	env.rsc.begin_runtime()
 	env.controller.request_fire()
 	# PULSE_ACTIVE 中模拟已开始拖拽（PULSE_ACTIVE 允许拖起），异步结束进 COMPLETED 前由控制器取消。
 	env.drag._stub_dragging = true
@@ -82,8 +86,10 @@ func _test_12_cancel_drag_before_completed() -> void:
 func _test_13_stale_generation_cannot_finish_new_pulse() -> void:
 	const NAME: String = "13_旧generation不结束新脉冲"
 	var env: _Fixture._Env = _fixture.make_env(Vector2i(1, 3), Vector2i.RIGHT, null)
+	env.rsc.begin_runtime()
 	env.controller.request_fire()  # gen=1, PULSE_ACTIVE
 	env.controller.reset_runtime()  # gen=2, SETUP，旧回调(1)将过期
+	env.rsc.begin_runtime()
 	env.controller.request_fire()  # gen=3, PULSE_ACTIVE，新回调(3)
 	await _fixture.wait_settled()
 	# 旧回调(1) 已过期返回；新回调(3) 结束未完成脉冲 -> MOVE_WINDOW。
@@ -95,6 +101,7 @@ func _test_13_stale_generation_cannot_finish_new_pulse() -> void:
 func _test_14_reset_invalidates_stale_callback() -> void:
 	const NAME: String = "14_R使旧回调失效"
 	var env: _Fixture._Env = _fixture.make_env(Vector2i(1, 3), Vector2i.RIGHT, Vector2i(5, 3))
+	env.rsc.begin_runtime()
 	env.controller.request_fire()  # gen=1, PULSE_ACTIVE，水晶已激活
 	env.controller.reset_runtime()  # gen=2, SETUP，旧回调(1)将过期
 	await _fixture.wait_settled()
@@ -119,6 +126,8 @@ func _state_label(state: int) -> String:
 	match state:
 		_RuntimeInteractionTypes.RunState.SETUP:
 			return "SETUP"
+		_RuntimeInteractionTypes.RunState.READY_TO_FIRE:
+			return "READY_TO_FIRE"
 		_RuntimeInteractionTypes.RunState.PULSE_ACTIVE:
 			return "PULSE_ACTIVE"
 		_RuntimeInteractionTypes.RunState.MOVE_WINDOW:

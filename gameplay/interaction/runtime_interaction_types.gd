@@ -8,20 +8,23 @@ extends RefCounted
 ## 不依赖 core_loop_prototype，也不依赖 Diagnostics；调用方通过 preload 路径引用本类后再访问嵌套枚举。
 ## 重要：每个成员的整数值已显式写出并被自检与存档/诊断边界隐式依赖，修改任意数值会破坏状态规则与存档/诊断兼容边界，禁止更改。
 
-## 当前原型的最小运行状态。
-## SETUP 表示尚未开始本次运行；PULSE_ACTIVE 表示普通脉冲仍在统一显示窗口内；
-## MOVE_WINDOW 表示脉冲结束但未通关，未来可在此提交有限移动；COMPLETED 表示通关结果已成立。
-## 本枚举只服务当前关卡控制器的运行阶段判定，不是完整 RunStateController。
+## 当前原型的运行状态（D7-2 起五态生命周期）。
+## SETUP 表示尚未开始本次运行；READY_TO_FIRE 表示已通过 Runtime Validation Gate 准备首次发射但脉冲尚未开始；
+## PULSE_ACTIVE 表示普通脉冲仍在统一显示窗口内；MOVE_WINDOW 表示脉冲结束但未通关，可在此提交有限移动；COMPLETED 表示通关结果已成立。
+## 本枚举服务 RunStateController 的运行阶段判定与跨模块共享契约。
 ## 数值被 core_loop_prototype 的状态机、runtime_move 自检与启动自检隐式依赖，修改会破坏状态规则与诊断兼容边界。
+## READY_TO_FIRE 数值 4 为 D7-2 新增，刻意不挤入旧 0~3 顺序以保护既有状态机/存档/诊断兼容边界，绝不为排列顺序把 0~3 重编号。
 enum RunState {
-	## 尚未开始本次运行；允许完整布置（拿取、首次放置、移动、回收、右键配置）且移动不计次。数值 0。
+	## 尚未开始本次运行；允许完整布置（拿取、首次放置、移动、回收、右键配置）且移动不计次；Space 发射禁止，须先经 Runtime Validation Gate 进入 READY_TO_FIRE。数值 0。
 	SETUP = 0,
-	## 普通脉冲仍在统一显示窗口内；允许拿取/首次放置/移动/回收，右键配置锁定，禁止 Space。数值 1。
+	## 普通脉冲仍在统一显示窗口内；允许拿取/首次放置/移动/回收（跨格消耗 runtime_move_limit），右键配置锁定，禁止 Space。数值 1。
 	PULSE_ACTIVE = 1,
-	## 脉冲结束但未通关；允许拿取/首次放置/移动/回收，右键配置锁定，已放置机关跨格成功移动消耗 runtime_move_limit。数值 2。
+	## 脉冲结束但未通关；允许拿取/首次放置/移动/回收（跨格消耗 runtime_move_limit），右键配置锁定，允许 Space 再次发射。数值 2。
 	MOVE_WINDOW = 2,
 	## 通关结果已成立；冻结全部关卡交互，只允许 R。数值 3。
 	COMPLETED = 3,
+	## 正式运行已通过 Runtime Validation Gate 准备首次发射但本次脉冲尚未开始；允许拿取/首次放置/移动/回收（跨格消耗 runtime_move_limit），右键配置锁定，允许 Space 发射。数值 4（D7-2 新增，独立于旧 0~3 排列以保护既有状态机/存档/诊断兼容边界）。
+	READY_TO_FIRE = 4,
 }
 
 ## 当前鼠标拖拽来源。

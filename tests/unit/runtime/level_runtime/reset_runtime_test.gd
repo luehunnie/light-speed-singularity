@@ -1,7 +1,8 @@
 extends SceneTree
 
-## LevelRuntimeController 单元测试（拆分片 3/5 · R 重置顺序及运行状态恢复）。
+## LevelRuntimeController 单元测试（拆分片 3/5 · R 重置顺序及运行状态恢复；D7-2 经 READY_TO_FIRE 发射）。
 ## 覆盖：R 重置目标、清玩家机关协调库存、清光路、清移动次数、回 SETUP、reset 后可再次发射。
+## D7-2 起 SETUP 不可直接发射，发射/脉冲用例先 begin_runtime 进入 READY_TO_FIRE；reset 后再次发射同样需先 begin_runtime。
 ## 只通过公开接口验证 R 完整重置顺序；桩与装配见 fixtures/runtime_controller_fixture.gd。
 ## 由 Godot --script 运行，全部通过 quit(0)，任一失败 quit(1)。
 
@@ -48,6 +49,7 @@ func _run_all_tests() -> void:
 func _test_15_reset_resets_objective() -> void:
 	const NAME: String = "15_R重置目标"
 	var env: _Fixture._Env = _fixture.make_env(Vector2i(1, 3), Vector2i.RIGHT, Vector2i(5, 3))
+	env.rsc.begin_runtime()
 	env.controller.request_fire()
 	_check(NAME, env.objective_controller.is_completed(), "发射后应先完成。")
 	env.controller.reset_runtime()
@@ -72,6 +74,7 @@ func _test_16_reset_clears_placed_and_reconciles_inventory() -> void:
 func _test_17_reset_clears_light_path() -> void:
 	const NAME: String = "17_R清光路"
 	var env: _Fixture._Env = _fixture.make_env(Vector2i(1, 3), Vector2i.RIGHT, null)
+	env.rsc.begin_runtime()
 	env.controller.request_fire()
 	_check(NAME, env.light_visual_controller.get_segment_count() > 0, "发射后应有光路。")
 	env.controller.reset_runtime()
@@ -82,6 +85,7 @@ func _test_17_reset_clears_light_path() -> void:
 func _test_18_reset_clears_runtime_moves() -> void:
 	const NAME: String = "18_R清移动次数"
 	var env: _Fixture._Env = _fixture.make_env(Vector2i(1, 3), Vector2i.RIGHT, null, 1)
+	env.rsc.begin_runtime()
 	env.rsc.begin_pulse()
 	env.controller.consume_runtime_move()
 	_check(NAME, env.controller.get_runtime_moves_used() == 1, "扣次后 used 期望 1。")
@@ -94,20 +98,23 @@ func _test_18_reset_clears_runtime_moves() -> void:
 func _test_19_reset_returns_to_setup() -> void:
 	const NAME: String = "19_R回SETUP"
 	var env: _Fixture._Env = _fixture.make_env(Vector2i(1, 3), Vector2i.RIGHT, null)
+	env.rsc.begin_runtime()
 	env.controller.request_fire()
 	_check(NAME, env.rsc.get_current_state() == _RuntimeInteractionTypes.RunState.PULSE_ACTIVE, "前置应 PULSE_ACTIVE。")
 	env.controller.reset_runtime()
 	_check(NAME, env.rsc.get_current_state() == _RuntimeInteractionTypes.RunState.SETUP, "R 后应回 SETUP。")
 
 
-## 24. reset 后可再次发射：R 后 SETUP，再次 request_fire 返回 true 并进入 PULSE_ACTIVE。
+## 24. reset 后可再次发射：R 后 SETUP，经 READY 再次 request_fire 返回 true 并进入 PULSE_ACTIVE。
 func _test_24_refire_after_reset() -> void:
 	const NAME: String = "24_reset后可再发射"
 	var env: _Fixture._Env = _fixture.make_env(Vector2i(1, 3), Vector2i.RIGHT, Vector2i(5, 3))
+	env.rsc.begin_runtime()
 	env.controller.request_fire()
 	await _fixture.wait_settled()
 	_check(NAME, env.rsc.get_current_state() == _RuntimeInteractionTypes.RunState.COMPLETED, "前置应 COMPLETED。")
 	env.controller.reset_runtime()
+	env.rsc.begin_runtime()
 	var ok: bool = env.controller.request_fire()
 	_check(NAME, ok, "R 后再次发射应返回 true。")
 	_check(NAME, env.rsc.get_current_state() == _RuntimeInteractionTypes.RunState.PULSE_ACTIVE, "应进入 PULSE_ACTIVE。")

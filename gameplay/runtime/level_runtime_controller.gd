@@ -21,6 +21,9 @@ const _ObjectiveController: GDScript = preload("res://gameplay/objectives/object
 const _PlacementController: GDScript = preload("res://gameplay/placement/placement_controller.gd")
 const _InventoryController: GDScript = preload("res://gameplay/placement/inventory_controller.gd")
 const _DragFlowController: GDScript = preload("res://gameplay/interaction/drag_flow_controller.gd")
+# D7-3 正式运行入口：运行期校验门（无状态薄门）与结构化校验结果；runtime → level/validation 依赖方向与 D7-1 Gate 一致。
+const _RuntimeValidationGate: GDScript = preload("res://gameplay/runtime/runtime_validation_gate.gd")
+const _LevelValidationResult: GDScript = preload("res://gameplay/level/validation/level_validation_result.gd")
 
 
 var _run_state_controller: _RunStateController
@@ -87,7 +90,7 @@ func request_fire() -> bool:
 		if OS.is_debug_build():
 			print_debug("LevelRuntimeController: 拖拽中拒绝发射。")
 		return false
-	# 2. 查询当前状态是否允许发射（SETUP/MOVE_WINDOW 可发射；PULSE_ACTIVE/COMPLETED 拒绝）。
+	# 2. 查询当前状态是否允许发射（READY_TO_FIRE/MOVE_WINDOW 可发射；SETUP/PULSE_ACTIVE/COMPLETED 拒绝）。
 	if not _run_state_controller.can_fire_light():
 		if OS.is_debug_build():
 			print_debug("LevelRuntimeController: 当前运行状态拒绝 Space 发射：%s。" % [_run_state_controller.get_current_state()])
@@ -122,6 +125,27 @@ func request_fire() -> bool:
 	# 11. 启动异步脉冲结束等待。
 	_finish_pulse_after_delay(current_generation)
 	return true
+
+
+## 请求正式开始运行（D7-3）：SETUP 下经 RuntimeValidationGate 校验关卡根，valid 时切换到 READY_TO_FIRE；invalid 保持 SETUP 并原样返回结构化结果供 UI 最小反馈。
+## [br]非 SETUP（READY_TO_FIRE/PULSE_ACTIVE/MOVE_WINDOW/COMPLETED）重复请求直接返回 null：不调 Gate、不切换状态、不发额外 state_changed（正常 UI 此时 Start Run 已隐藏/禁用）。
+## [br]输入：level_root 为当前关卡根 Node2D；非法根（null/非 Node2D）由 LevelValidator 以结构化 level_root_invalid ERROR 体现，本方法不替它前置判空或自愈。
+## [br]返回：SETUP 下返回 LevelValidationResult（valid=已进 READY_TO_FIRE / invalid=仍 SETUP）；非 SETUP 返回 null 表示被忽略。
+## [br]语义：valid = result.is_valid()==true（不存在任何 ERROR；仅 WARNING 无 ERROR 时仍为 true，严格遵循 LevelValidationResult.is_valid，不建立第二套严重度）。
+## [br]副作用：valid 时仅发生一次 SETUP→READY_TO_FIRE 转换（由 RunStateController.begin_runtime 经 state_changed 体现）；
+## [br]  invalid 与非 SETUP 均零玩法副作用：不自动 fire、不递增 pulse_generation、不产生 Ray、不激活水晶、不修改库存/占用/TileMap/固定对象、不消耗运行期移动次数。
+## [br]边界：Gate 无状态、每次调用独立构造（与 D7-1 一致）；本方法只决定“是否继续生命周期”，不复制 Validator 规则；按钮本身不发射，fire 仍走 request_fire。
+func request_begin_runtime(level_root: Node) -> _LevelValidationResult:
+	# 1. 非 SETUP 拒绝重复请求：不调 Gate、不改状态、不发额外 state_changed（正常 UI 此时 Start Run 已隐藏/禁用）。
+	if not _run_state_controller.can_begin_runtime():
+		return null
+	# 2. 无状态 Gate 原样返回结构化 LevelValidationResult；本控制器不复制 Validator 规则、不前置判空 level_root。
+	var result: _LevelValidationResult = _RuntimeValidationGate.new().validate_for_run_start(level_root)
+	# 3. valid（含仅 WARNING 无 ERROR）→ 一次 SETUP→READY_TO_FIRE 转换；invalid 保持 SETUP，结构化结果原样回 UI。
+	#    Gate 不切状态、begin_runtime 仍校验 SETUP（此时仍为 SETUP，转换必成），故整个请求至多一次状态转换。
+	if result.is_valid():
+		_run_state_controller.begin_runtime()
+	return result
 
 
 ## 逐格按 steps 顺序应用副作用：同一格先创建光路视觉再尝试激活水晶；不重新计算路径、不改占用/机关/RunState/库存。
