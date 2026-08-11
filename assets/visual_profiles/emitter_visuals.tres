@@ -2,11 +2,10 @@
 
 [ext_resource type="Script" uid="uid://djtcgpsdp3a5x" path="res://gameplay/visuals/object_visuals/object_visual_profile.gd" id="1_profile"]
 [ext_resource type="Script" uid="uid://b562k3phylvi3" path="res://gameplay/visuals/visual_state_texture.gd" id="2_state"]
-[ext_resource type="Texture2D" path="res://assets/art/emitter/emitter_basic.png" id="3_default_tex"]
+[ext_resource type="Texture2D" uid="uid://vqp602wbthfk" path="res://assets/art/emitter/emitter_basic.png" id="3_default_tex"]
 
 [sub_resource type="Resource" id="VisualStateTexture_default"]
 script = ExtResource("2_state")
-state_id = "default"
 world_texture = ExtResource("3_default_tex")
 
 [resource]

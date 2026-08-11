@@ -1,21 +1,21 @@
-[gd_resource type="Resource" script_class="ObjectVisualProfile" load_steps=7 format=3]
+[gd_resource type="Resource" script_class="ObjectVisualProfile" format=3 uid="uid://cwh8v45y2j3fw"]
 
 [ext_resource type="Script" uid="uid://djtcgpsdp3a5x" path="res://gameplay/visuals/object_visuals/object_visual_profile.gd" id="1_profile"]
 [ext_resource type="Script" uid="uid://b562k3phylvi3" path="res://gameplay/visuals/visual_state_texture.gd" id="2_state"]
-[ext_resource type="Texture2D" path="res://assets/art/mirror/mirror_slash.png" id="3_slash_tex"]
-[ext_resource type="Texture2D" path="res://assets/art/mirror/mirror_backslash.png" id="4_backslash_tex"]
+[ext_resource type="Texture2D" uid="uid://cy5vtv8ejuja7" path="res://assets/art/mirror/mirror_slash.png" id="3_slash_tex"]
+[ext_resource type="Texture2D" uid="uid://p28ynnk7qpaa" path="res://assets/art/mirror/mirror_backslash.png" id="4_backslash_tex"]
 
 [sub_resource type="Resource" id="VisualStateTexture_slash"]
 script = ExtResource("2_state")
-state_id = "slash"
+state_id = &"slash"
 world_texture = ExtResource("3_slash_tex")
 
 [sub_resource type="Resource" id="VisualStateTexture_backslash"]
 script = ExtResource("2_state")
-state_id = "backslash"
+state_id = &"backslash"
 world_texture = ExtResource("4_backslash_tex")
 
 [resource]
 script = ExtResource("1_profile")
-default_state_id = "slash"
-states = [SubResource("VisualStateTexture_slash"), SubResource("VisualStateTexture_backslash")]
+default_state_id = &"slash"
+states = Array[ExtResource("2_state")]([SubResource("VisualStateTexture_slash"), SubResource("VisualStateTexture_backslash")])
