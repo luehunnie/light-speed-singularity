@@ -18,7 +18,7 @@ extends RefCounted
 ## 明确不负责：
 ##   - 不持有长期业务状态：零字段、零缓存，不保存关卡根/RunState/场景节点引用，不跨调用记忆结果；
 ##   - 不复制 Validator 规则，不重新定义 valid/invalid 语义（沿用 LevelValidationResult.is_valid）；
-##   - 不实现 READY_TO_FIRE、不实现“开始运行”按钮、不改变当前四态；
+##   - 不实现 READY_TO_FIRE、不实现“开始运行”按钮、不改变当前五态；
 ##   - 校验成功本批也不自动进入 READY_TO_FIRE 或任何状态转换；
 ##   - 不触发 Ray、不保存场景、不自动修复、不读写库存/占用/水晶。
 ##

@@ -59,7 +59,7 @@ offset_left = 16.0
 offset_top = 16.0
 offset_right = 420.0
 offset_bottom = 48.0
-text = "Space：发射    R：重置"
+text = "点击「开始运行」进入运行状态    R：重置"
 
 [node name="CompleteLabel" type="Label" parent="CanvasLayer" unique_id=1847718236]
 visible = false

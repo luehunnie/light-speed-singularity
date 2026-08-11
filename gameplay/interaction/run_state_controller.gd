@@ -11,9 +11,9 @@ extends RefCounted
 ##
 ## 在当前系统中的位置：
 ## gameplay/interaction 下独立的 RefCounted 控制器，已接入 core_loop_prototype，是当前运行状态的唯一所有者。
-## core_loop_prototype 不再持有 current_run_state，核心不直接写状态，而是通过 begin_pulse()、finish_pulse()、
-## reset_to_setup() 请求转换；脉冲生成、异步脉冲结束与完整 R 运行编排由 LevelRuntimeController 负责，本类仅拥有四状态事实并执行合法状态转换。
-## 四态枚举 RunState 的权威仍属于 RuntimeInteractionTypes，本类不定义第二份枚举；当前不引入 READY_TO_FIRE 或任何第五态。
+## core_loop_prototype 不再持有 current_run_state，核心不直接写状态，而是通过 begin_runtime()、begin_pulse()、finish_pulse()、
+## reset_to_setup() 请求转换；脉冲生成、异步脉冲结束与完整 R 运行编排由 LevelRuntimeController 负责，本类仅拥有运行状态事实并执行合法状态转换。
+## RunState 枚举（D7-2 起五态）的权威仍属于 RuntimeInteractionTypes，本类不定义第二份枚举；新增 begin_runtime() 负责 SETUP→READY_TO_FIRE。
 ##
 ## 主要依赖：
 ## RuntimeInteractionTypes（RunState 枚举契约）与 RuntimeStateRules（纯状态规则单一来源），均通过 preload 引用。
@@ -25,12 +25,12 @@ extends RefCounted
 ## R 的完整运行期重置由 LevelRuntimeController 负责；RunStateController 只负责重置到 SETUP 的合法状态转换。
 ##
 ## 关键状态生命周期：
-## 初始状态默认 SETUP；begin_pulse 将 SETUP/MOVE_WINDOW 推进到 PULSE_ACTIVE；
+## 初始状态默认 SETUP；begin_runtime 将 SETUP 推进到 READY_TO_FIRE（D7-2 新增，须经 Runtime Validation Gate）；begin_pulse 将 READY_TO_FIRE/MOVE_WINDOW 推进到 PULSE_ACTIVE；
 ## finish_pulse 按 level_completed 将 PULSE_ACTIVE 推进到 MOVE_WINDOW 或 COMPLETED；
 ## reset_to_setup 从任意合法状态回到 SETUP（幂等：已为 SETUP 时不发信号）。
 ##
 ## 关键边界：
-## - 四态枚举权威仍在 RuntimeInteractionTypes，本类不重新定义枚举；当前不引入 READY_TO_FIRE 或任何第五态。
+## - RunState 枚举权威仍在 RuntimeInteractionTypes，本类不重新定义枚举；D7-2 已纳入 READY_TO_FIRE（数值 4，旧 0~3 不变）。
 ## - 信号在 _current_state 更新之后发出；非法转换不发信号、不改状态。
 ## - 构造函数对非法初始值只做防御性回退到 SETUP，不发信号，不是业务状态自愈。
 ## - reset_to_setup 的幂等行为在公开方法中显式处理，不走 _try_transition 的转换集合。
@@ -60,17 +60,17 @@ signal state_changed(
 
 ## 唯一运行状态事实。
 ## [br]职责：持有当前关卡的 RunState，是本类的唯一可变状态。
-## [br]合法取值：RuntimeInteractionTypes.RunState 的四个成员之一；由构造函数与受控转换维护不变量。
+## [br]合法取值：RuntimeInteractionTypes.RunState 的五个成员之一；由构造函数与受控转换维护不变量。
 ## [br]边界：不公开直接写入；外部只能通过查询接口读取、通过转换接口变更。
 var _current_state: RuntimeInteractionTypes.RunState
 
 
 ## 构造函数，初始化唯一运行状态。
 ## [br]职责：把 _current_state 设置为给定初始状态，非法值时安全回退到 SETUP。
-## [br]参数：initial_state 为可选初始 RunState，默认 SETUP；必须为四个合法枚举值之一。
+## [br]参数：initial_state 为可选初始 RunState，默认 SETUP；必须为五个合法枚举值之一。
 ## [br]返回：无；构造结果体现在 _current_state。
 ## [br]副作用：只写入 _current_state；不发出 state_changed 信号（构造不属于状态变化）。
-## [br]失败条件：initial_state 不属于 RunState 四个成员时 push_error 并回退到 SETUP，不抛异常、不发信号。
+## [br]失败条件：initial_state 不属于 RunState 五个成员时 push_error 并回退到 SETUP，不抛异常、不发信号。
 ## [br]边界：这只是构造防御，不是业务状态自动修复；合法初始值直接采用，不做转换校验。
 func _init(initial_state: RuntimeInteractionTypes.RunState = RuntimeInteractionTypes.RunState.SETUP) -> void:
 	if not _is_valid_state(initial_state):
@@ -91,11 +91,20 @@ func get_current_state() -> RuntimeInteractionTypes.RunState:
 
 ## 查询当前是否允许发射普通脉冲。
 ## [br]职责：转发到 RuntimeStateRules.can_fire_light，不复制权限判断。
-## [br]返回：true 表示 SETUP 或 MOVE_WINDOW 可发射；false 表示 PULSE_ACTIVE 或 COMPLETED 拒绝。
+## [br]返回：true 表示 READY_TO_FIRE 或 MOVE_WINDOW 可发射；false 表示 SETUP、PULSE_ACTIVE 或 COMPLETED 拒绝。
 ## [br]副作用：无；纯查询，不发信号、不写日志。
 ## [br]边界：只判定发射权限，不执行发射流程，不改变状态。
 func can_fire_light() -> bool:
 	return _RuntimeStateRules.can_fire_light(_current_state)
+
+
+## 查询当前是否允许请求进入正式运行就绪态。
+## [br]职责：转发到 RuntimeStateRules.can_begin_runtime，不复制权限判断。
+## [br]返回：true 表示当前为 SETUP，可请求 begin_runtime；其他状态返回 false。
+## [br]副作用：无；纯查询，不发信号、不写日志。
+## [br]边界：只判定 begin_runtime 的状态前提；不代表 Gate 校验通过，不切换状态。
+func can_begin_runtime() -> bool:
+	return _RuntimeStateRules.can_begin_runtime(_current_state)
 
 
 ## 查询当前是否允许粗粒度布局编辑（非 COMPLETED 冻结门）。
@@ -127,22 +136,36 @@ func is_current_pulse_active() -> bool:
 
 ## 查询当前是否处于运行期移动状态（会消耗运行期移动次数的状态）。
 ## [br]职责：转发到 RuntimeStateRules.is_runtime_move_state。
-## [br]返回：true 表示当前处于 PULSE_ACTIVE 或 MOVE_WINDOW；SETUP 与 COMPLETED 返回 false。
+## [br]返回：true 表示当前处于 READY_TO_FIRE、PULSE_ACTIVE 或 MOVE_WINDOW；SETUP 与 COMPLETED 返回 false。
 ## [br]副作用：无；纯查询。
 ## [br]边界：只判定状态归属，是否真正扣次由 RuntimeMoveRules 与调用方决定，本函数不执行状态切换。
 func is_runtime_move_state() -> bool:
 	return _RuntimeStateRules.is_runtime_move_state(_current_state)
 
 
-## 开始一次普通脉冲，将状态推进到 PULSE_ACTIVE。
-## [br]职责：在 SETUP 或 MOVE_WINDOW 下切换到 PULSE_ACTIVE。
+## 请求进入正式运行就绪态（READY_TO_FIRE）。
+## [br]职责：在 SETUP 下切换到 READY_TO_FIRE，作为经 Runtime Validation Gate 通过后的正式运行就绪入口。
 ## [br]返回：true 表示成功切换并已发出 state_changed；false 表示被拒绝。
 ## [br]副作用：成功时先更新 _current_state 再发出 state_changed；失败时不改状态、不发信号。
-## [br]失败条件：当前状态不是 SETUP 或 MOVE_WINDOW 时 push_error 并返回 false。
+## [br]失败条件：当前状态不是 SETUP 时 push_error 并返回 false（含 READY_TO_FIRE 重复请求，以及 PULSE_ACTIVE/MOVE_WINDOW/COMPLETED 来源）。
+## [br]边界：本类只负责 SETUP→READY_TO_FIRE 的合法状态转换；不执行 Gate 校验（Gate 由调用方在请求前调用）、
+## [br]不执行发射流程、不清理光路、不维护 pulse_generation 或 is_level_completed。
+func begin_runtime() -> bool:
+	if _current_state != _RuntimeInteractionTypes.RunState.SETUP:
+		push_error("RunStateController.begin_runtime 被拒绝：当前状态 %s 不允许进入 READY_TO_FIRE，仅允许 SETUP。" % _state_label(_current_state))
+		return false
+	return _try_transition(_RuntimeInteractionTypes.RunState.READY_TO_FIRE)
+
+
+## 开始一次普通脉冲，将状态推进到 PULSE_ACTIVE。
+## [br]职责：在 READY_TO_FIRE 或 MOVE_WINDOW 下切换到 PULSE_ACTIVE。
+## [br]返回：true 表示成功切换并已发出 state_changed；false 表示被拒绝。
+## [br]副作用：成功时先更新 _current_state 再发出 state_changed；失败时不改状态、不发信号。
+## [br]失败条件：当前状态不是 READY_TO_FIRE 或 MOVE_WINDOW 时 push_error 并返回 false（SETUP 须先经 begin_runtime 进入 READY_TO_FIRE）。
 ## [br]边界：只负责状态切换，不执行发射流程、不清理光路、不维护 pulse_generation 或 is_level_completed。
 func begin_pulse() -> bool:
-	if _current_state != _RuntimeInteractionTypes.RunState.SETUP and _current_state != _RuntimeInteractionTypes.RunState.MOVE_WINDOW:
-		push_error("RunStateController.begin_pulse 被拒绝：当前状态 %s 不允许开始脉冲，仅允许 SETUP 或 MOVE_WINDOW。" % _state_label(_current_state))
+	if _current_state != _RuntimeInteractionTypes.RunState.READY_TO_FIRE and _current_state != _RuntimeInteractionTypes.RunState.MOVE_WINDOW:
+		push_error("RunStateController.begin_pulse 被拒绝：当前状态 %s 不允许开始脉冲，仅允许 READY_TO_FIRE 或 MOVE_WINDOW。" % _state_label(_current_state))
 		return false
 	return _try_transition(_RuntimeInteractionTypes.RunState.PULSE_ACTIVE)
 
@@ -202,15 +225,15 @@ func _try_transition(new_state: RuntimeInteractionTypes.RunState) -> bool:
 ## 校验给定值是否为合法 RunState 枚举成员。
 ## [br]职责：封闭枚举成员判定，供构造函数防御性校验使用。
 ## [br]参数：state 为待校验的 RunState 值。
-## [br]返回：true 表示属于四个合法成员之一；false 表示非法。
+## [br]返回：true 表示属于五个合法成员之一；false 表示非法。
 ## [br]副作用：无；纯判断。
 ## [br]边界：因 GDScript 枚举底层为整数，需显式成员判定，不接受任意整数。
 func _is_valid_state(state: RuntimeInteractionTypes.RunState) -> bool:
-	return state == _RuntimeInteractionTypes.RunState.SETUP or state == _RuntimeInteractionTypes.RunState.PULSE_ACTIVE or state == _RuntimeInteractionTypes.RunState.MOVE_WINDOW or state == _RuntimeInteractionTypes.RunState.COMPLETED
+	return state == _RuntimeInteractionTypes.RunState.SETUP or state == _RuntimeInteractionTypes.RunState.PULSE_ACTIVE or state == _RuntimeInteractionTypes.RunState.MOVE_WINDOW or state == _RuntimeInteractionTypes.RunState.COMPLETED or state == _RuntimeInteractionTypes.RunState.READY_TO_FIRE
 
 
 ## 校验 previous → new 是否属于冻结的最小合法转换集合。
-## [br]职责：只允许 SETUP/MOVE_WINDOW → PULSE_ACTIVE、PULSE_ACTIVE → MOVE_WINDOW/COMPLETED。
+## [br]职责：只允许 SETUP→READY_TO_FIRE、READY_TO_FIRE/MOVE_WINDOW→PULSE_ACTIVE、PULSE_ACTIVE→MOVE_WINDOW/COMPLETED。
 ## [br]参数：previous 为切换前 RunState；new_state 为目标 RunState。
 ## [br]返回：true 表示属于冻结集合；false 表示非法。
 ## [br]副作用：无；纯判断。
@@ -219,7 +242,9 @@ func _can_transition(
 		previous: RuntimeInteractionTypes.RunState,
 		new_state: RuntimeInteractionTypes.RunState
 ) -> bool:
-	if previous == _RuntimeInteractionTypes.RunState.SETUP and new_state == _RuntimeInteractionTypes.RunState.PULSE_ACTIVE:
+	if previous == _RuntimeInteractionTypes.RunState.SETUP and new_state == _RuntimeInteractionTypes.RunState.READY_TO_FIRE:
+		return true
+	if previous == _RuntimeInteractionTypes.RunState.READY_TO_FIRE and new_state == _RuntimeInteractionTypes.RunState.PULSE_ACTIVE:
 		return true
 	if previous == _RuntimeInteractionTypes.RunState.MOVE_WINDOW and new_state == _RuntimeInteractionTypes.RunState.PULSE_ACTIVE:
 		return true
@@ -246,5 +271,7 @@ func _state_label(state: RuntimeInteractionTypes.RunState) -> String:
 			return "MOVE_WINDOW"
 		_RuntimeInteractionTypes.RunState.COMPLETED:
 			return "COMPLETED"
+		_RuntimeInteractionTypes.RunState.READY_TO_FIRE:
+			return "READY_TO_FIRE"
 		_:
 			return "未知状态"

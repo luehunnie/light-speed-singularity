@@ -3,11 +3,11 @@ extends Node2D
 ## 核心闭环原型关卡控制器（plan §4.2 / §5 / §6）。
 ## 职责：读取 fire_light / reset_level 输入，发起普通主发射源最小脉冲光线（Vector2i 逐格路径，无 Area2D/Tween/物理射线），
 ## 通过 OccupancyRegistry 解析单格镜面并改向、点亮普通独立水晶、保持关卡完成结果；实现最小镜面库存、拖拽放置/移动/回收与 SETUP 右键朝向配置。
-## 状态事实所有权：四态（SETUP/PULSE_ACTIVE/MOVE_WINDOW/COMPLETED）由 _run_state_controller 持有；pulse_generation、runtime_moves_used、
+## 状态事实所有权：五态（SETUP/READY_TO_FIRE/PULSE_ACTIVE/MOVE_WINDOW/COMPLETED）由 _run_state_controller 持有；pulse_generation、runtime_moves_used、
 ## 发射请求编排、异步脉冲结束与完整 R 重置顺序由 _level_runtime_controller 唯一持有；玩家机关映射 placed_tokens_by_id 与机关序号由 _placement_controller 唯一持有；
 ## 玩家机关库存剩余由 _inventory_controller 持有；目标完成事实（水晶激活、完成判断、运行期重置）由 _objective_controller 唯一持有。OccupancyRegistry 是格子占用唯一事实来源。
 ## 核心只保留接线、输入转发、右键镜面配置入口、节点工厂、UI 适配与启动自检入口；七项启动自检编排与摘要日志由 _startup_self_check_coordinator 整块负责。
-## 正式运行权限：SETUP 允许完整布置且移动不计次；PULSE_ACTIVE/MOVE_WINDOW 允许拿取/放置/移动/回收但右键配置锁定、PULSE_ACTIVE 禁止 Space；
+## 正式运行权限：SETUP 允许完整布置且移动不计次，但 Space 须先「开始运行」进入 READY_TO_FIRE 才可发射；READY_TO_FIRE/PULSE_ACTIVE/MOVE_WINDOW 允许拿取/放置/移动/回收但右键配置锁定，仅 READY_TO_FIRE/MOVE_WINDOW 可 Space 发射（SETUP/PULSE_ACTIVE/COMPLETED 禁止 Space）；
 ## 仅“已放置机关跨格直接移动”成功提交后消耗 runtime_move_limit 一次；COMPLETED 冻结全部交互，只允许 R。
 ## R 是完整关卡重置（由 _level_runtime_controller.reset_runtime 执行）：递增 pulse_generation 使旧异步失效 → 安全取消拖拽 → 清光路/水晶/完成状态 → 逐个注销玩家机关占用并退回库存 → 清零 runtime_moves_used → 回 SETUP；不删除发射器/墙体/水晶/静态内容。
 
@@ -42,6 +42,7 @@ const INVALID_CELL: Vector2i = Vector2i(-999999, -999999)
 @onready var runtime_objects: Node2D = $RuntimeObjects
 @onready var light_path_layer: Node2D = $LightPathLayer
 @onready var canvas_layer: CanvasLayer = $CanvasLayer
+@onready var hint_label: Label = $CanvasLayer/HintLabel
 @onready var complete_label: Label = $CanvasLayer/CompleteLabel
 @onready var inventory_bar: Control = $CanvasLayer/InventoryBar
 @onready var prototype_token_slot: _InventorySlotViewScript = $CanvasLayer/InventoryBar/MarginContainer/HBoxContainer/PrototypeTokenSlot
@@ -74,13 +75,17 @@ const _StartupSelfCheckCoordinator: GDScript = preload(
 )
 const _SingleCellMirrorScene: PackedScene = preload("res://gameplay/mechanisms/mirrors/single_cell_mirror.tscn")
 const _InventorySlotViewScript: GDScript = preload("res://gameplay/ui/inventory_slot_view.gd")
+# D7-3 正式「开始运行」UI 视图：拥有按钮/状态提示/invalid 最小反馈，只由真实 RunState 驱动；core_loop 只构造接线与公开转发。
+const _RunStartView: GDScript = preload("res://gameplay/ui/run_start_view.gd")
+# D7-3 start_run() 返回结构化 LevelValidationResult 供 UI 最小反馈（runtime → level/validation 依赖方向）。
+const _LevelValidationResult: GDScript = preload("res://gameplay/level/validation/level_validation_result.gd")
 # 普通光线路径视觉控制器：完整拥有光路视觉节点集合与四方向接线，核心只调用 show_step / clear_path。
 const _LightVisualController: GDScript = preload("res://gameplay/visuals/light_visual_controller.gd")
 # 运行交互共享类型契约（RunState / DragSource）。
 const _RuntimeInteractionTypes: GDScript = preload("res://gameplay/interaction/runtime_interaction_types.gd")
 # 运行期移动纯规则；正式玩法调用与 runtime_move 启动自检共用同一规则来源。
 const _RuntimeMoveRules: GDScript = preload("res://gameplay/placement/rules/runtime_move_rules.gd")
-# RunStateController：核心持有的唯一运行状态所有者，负责四态事实、最小合法转换与 state_changed 信号；不加入场景树、不设为 Autoload。
+# RunStateController：核心持有的唯一运行状态所有者，负责五态事实、最小合法转换与 state_changed 信号；不加入场景树、不设为 Autoload。
 const _RunStateController: GDScript = preload("res://gameplay/interaction/run_state_controller.gd")
 # 拖拽业务流程控制器：完整拥有一次拖拽的生命周期（拿取/预览/隐藏/提交/回收/取消/清理）；核心只转发指针位置、取消请求与场景适配 Callable。
 const _DragFlowController: GDScript = preload("res://gameplay/interaction/drag_flow_controller.gd")
@@ -118,7 +123,7 @@ var _player_interaction_controller: _PlayerInteractionController = _PlayerIntera
 ## 启动自检协调器：核心持有的唯一实例，整块负责七项启动自检编排与摘要日志；不作为 Node、不设为 Autoload。
 var _startup_self_check_coordinator: _StartupSelfCheckCoordinator = _StartupSelfCheckCoordinator.new()
 
-## 运行状态控制器：核心持有的唯一运行状态所有者，负责四态事实、最小合法转换与 state_changed 信号；核心不持有 current_run_state 副本。
+## 运行状态控制器：核心持有的唯一运行状态所有者，负责五态事实、最小合法转换与 state_changed 信号；核心不持有 current_run_state 副本。
 ## COMPLETED 前取消拖拽与 pulse_generation 异步回调保护由 LevelRuntimeController 完成；核心不持有 pulse_generation。不作为 Node、不设为 Autoload。
 var _run_state_controller: _RunStateController = _RunStateController.new()
 
@@ -145,6 +150,9 @@ var _fixed_emitter: _FixedEmitter = null
 
 ## 正式运行期编排控制器：_ready 中构造并 add_child；核心只调 request_fire/reset_runtime 与运行期移动次数查询/扣除委托，不持有 pulse_generation 或 runtime_moves_used。
 var _level_runtime_controller: _LevelRuntimeController = null
+
+## D7-3 正式「开始运行」UI 视图：拥有按钮/状态提示/invalid 最小反馈；只由真实 RunState 驱动，核心只构造接线并公开 start_run() 转发。
+var _run_start_view: _RunStartView = null
 
 
 ## 初始化核心闭环原型关卡：刷新机关栏 UI；仅调试构建执行七项启动自检与摘要日志，发布构建跳过，避免把调试断言作为运行期必需流程。
@@ -220,6 +228,11 @@ func _ready() -> void:
 	add_child(_level_runtime_controller)
 	_update_inventory_ui()
 	_update_runtime_move_ui()
+	# D7-3 正式「开始运行」UI：构造 RunStartView（拥有按钮/提示/invalid 最小反馈）挂到 CanvasLayer，
+	# 注入 start_run 公开回调与初始真实 RunState；后续刷新由 _on_run_state_changed 转发，禁止第二套“是否已开始”布尔。
+	_run_start_view = _RunStartView.new(Callable(self, "start_run"))
+	_run_start_view.setup(canvas_layer, hint_label)
+	_run_start_view.update_for_state(_get_current_run_state())
 	if OS.is_debug_build():
 		# 采集网格采样格（含 Registry 完整性前置断言）与库存一致性只读快照，交由协调器按固定顺序执行七项自检并写摘要日志。
 		var sample_cells: Array[Vector2i] = _collect_grid_coordinate_sample_cells()
@@ -287,12 +300,15 @@ func _input(event: InputEvent) -> void:
 			pass
 
 
-## state_changed 回调：只刷新机关栏 UI；不在此取消拖拽或修改 pulse_generation/水晶/光路/占用/完成事实。COMPLETED 前取消拖拽由 LevelRuntimeController 在请求转换前完成。
+## state_changed 回调：刷新机关栏 UI 与 Start Run UI；不在此取消拖拽或修改 pulse_generation/水晶/光路/占用/完成事实。COMPLETED 前取消拖拽由 LevelRuntimeController 在请求转换前完成。
 func _on_run_state_changed(
 		_previous_state: _RuntimeInteractionTypes.RunState,
 		_new_state: _RuntimeInteractionTypes.RunState
 ) -> void:
 	_update_inventory_ui()
+	if _run_start_view != null:
+		# D7-3：只由真实 RunState 驱动按钮显隐/提示/invalid 反馈，不读第二套“是否已开始”布尔。
+		_run_start_view.update_for_state(_new_state)
 
 
 ## 查询当前运行状态；纯读取转发 _run_state_controller.get_current_state()，用于把状态值传给玩法规则层，不把 Controller 实例传入规则层。
@@ -318,6 +334,20 @@ func _update_runtime_move_ui() -> void:
 ## 发射入口：转发到 LevelRuntimeController.request_fire；发射顺序、逐 step 视觉→水晶、异步脉冲结束与 generation 过期保护全部由控制器拥有，核心不保留第二套实现。
 func fire_light() -> void:
 	_level_runtime_controller.request_fire()
+
+
+## D7-3 正式「开始运行」入口：转发到 LevelRuntimeController.request_begin_runtime(self)；核心不复制 Gate/严重度/RunState 转换/Ray 规则。
+## [br]返回：SETUP 下返回结构化 LevelValidationResult（valid=已进 READY_TO_FIRE / invalid=仍 SETUP 供 UI 最小反馈）；非 SETUP 返回 null（被忽略，正常 UI 此时按钮已隐藏）。
+## [br]边界：按钮本身不发射；fire 仍走 fire_light()，且 fire_light 不隐式自动 Start Run。运行时初始化被中止（如 PARTICLE 未接运行时）时返回 null，不构造虚假开始。
+func start_run() -> _LevelValidationResult:
+	if _level_runtime_controller == null:
+		return null
+	var result: _LevelValidationResult = _level_runtime_controller.request_begin_runtime(self)
+	# 把结构化结果回写 RunStartView：invalid 时显示最小反馈；valid 时由后续 READY_TO_FIRE 状态刷新清除旧反馈。
+	# 按钮与程序化 start_run() 调用方共用此路径，core_loop 只做转发，不复制 Gate/严重度规则。
+	if _run_start_view != null:
+		_run_start_view.handle_start_run_result(result)
+	return result
 
 
 ## R 完整重置入口：转发到 LevelRuntimeController.reset_runtime；重置顺序、旧异步失效与移动次数清零全部由控制器拥有。

@@ -97,11 +97,51 @@ class _UiSink:
 		assert_calls += 1
 
 
+## 光线世界查询计数替身：extends 真实 LightWorldQuery（字符串路径，与 _StubDragFlow 同模式）以满足控制器与 RayExecutionModule 的 _LightWorldQuery 类型约束。
+## 用途：直接观测 RayExecutionModule.execute 是否被调用——该静态函数的唯一世界接触即传入的 world_query 参数，任意一次执行必至少调用 is_in_bounds 一次。
+## 故 total_query_calls()==0 等价于“Ray 执行函数从未被调用”，比“光段数 0”更直接：光段 0 可能来自 Ray 执行后无步，而查询计数 0 才能证明 Ray 根本没启动。
+## 每个 override 只计数后原样转发 super，返回值与裸 LightWorldQuery 完全一致，不引入第二套查询实现，对被测控制器透明。
+class _SpyLightWorldQuery extends "res://gameplay/world/light_world_query.gd":
+	var is_in_bounds_calls: int = 0
+	var is_wall_cell_calls: int = 0
+	var has_crystal_at_calls: int = 0
+	var get_light_mechanism_at_calls: int = 0
+
+	func _init(level_world_query: _LevelWorldQuery) -> void:
+		super._init(level_world_query)
+
+	## 边界查询：计数后转发，返回值不变。
+	func is_in_bounds(cell: Vector2i) -> bool:
+		is_in_bounds_calls += 1
+		return super.is_in_bounds(cell)
+
+	## 墙体查询：计数后转发，返回值不变。
+	func is_wall_cell(cell: Vector2i) -> bool:
+		is_wall_cell_calls += 1
+		return super.is_wall_cell(cell)
+
+	## 水晶查询：计数后转发，返回值不变。
+	func has_crystal_at(cell: Vector2i) -> bool:
+		has_crystal_at_calls += 1
+		return super.has_crystal_at(cell)
+
+	## 机关节点查询：计数后转发，返回值不变。
+	func get_light_mechanism_at(cell: Vector2i) -> Variant:
+		get_light_mechanism_at_calls += 1
+		return super.get_light_mechanism_at(cell)
+
+	## RayExecutionModule.execute 对本 world_query 的总查询次数；为 0 即证明 Ray 执行函数从未被调用。
+	func total_query_calls() -> int:
+		return is_in_bounds_calls + is_wall_cell_calls + has_crystal_at_calls + get_light_mechanism_at_calls
+
+
 ## 测试上下文：聚合一次用例所需的控制器与桩。
 class _Env:
 	var rsc: _RunStateController = null
 	var fixed_emitter: _FixedEmitter = null
 	var light_world_query: _LightWorldQuery = null
+	## Ray 查询计数替身；仅当 make_env(observe_ray_queries=true) 时非 null，供测试直接断言 RayExecutionModule.execute 是否被调用。
+	var light_world_query_spy: _SpyLightWorldQuery = null
 	var light_visual_controller: _LightVisualController = null
 	var objective_controller: _ObjectiveController = null
 	var placement_controller: _PlacementController = null
@@ -132,11 +172,13 @@ func _init(tree: SceneTree) -> void:
 
 
 ## 构造测试上下文：emitter_cell/emitter_dir 为发射器配置；crystal_cell 为水晶格（null 表示无水晶）；move_limit 为运行期移动上限。
+## observe_ray_queries=true 时注入 _SpyLightWorldQuery 替身（对控制器透明），测试经 env.light_world_query_spy 直接观测 Ray 是否执行；默认 false 不影响既有用例。
 func make_env(
 		emitter_cell: Vector2i,
 		emitter_dir: Vector2i,
 		crystal_cell: Variant,
-		move_limit: int = 1
+		move_limit: int = 1,
+		observe_ray_queries: bool = false
 ) -> _Env:
 	var env: _Env = _Env.new()
 	env.rsc = _RunStateController.new()
@@ -160,7 +202,13 @@ func make_env(
 		Callable(env.placement_controller, "get_placed_node")
 	)
 	env.placement_controller.set_level_world_query(level_query)
-	env.light_world_query = _LightWorldQuery.new(level_query)
+	if observe_ray_queries:
+		# 注入计数替身：extends LightWorldQuery 对控制器与 RayExecutionModule 透明，测试经 env.light_world_query_spy 直接观测 Ray 是否执行。
+		var ray_spy: _SpyLightWorldQuery = _SpyLightWorldQuery.new(level_query)
+		env.light_world_query = ray_spy
+		env.light_world_query_spy = ray_spy
+	else:
+		env.light_world_query = _LightWorldQuery.new(level_query)
 	env.visual_parent = Node2D.new()
 	_visual_parents.append(env.visual_parent)
 	env.light_visual_controller = _LightVisualController.new(env.visual_parent)

@@ -1,13 +1,13 @@
 class_name RuntimeStateCheck
 extends RefCounted
 
-## 运行状态纯规则启动期自检模块（Diagnostics 批次 4B-F3）。
+## 运行状态纯规则启动期自检模块（Diagnostics 批次 4B-F3；D7-2 扩展五态）。
 ##
 ## 职责：
 ## 把原核心闭环原型中的 _run_post_pulse_state_self_check() 测试案例抽离为独立、
 ## 无副作用、不访问场景树的纯函数式自检；覆盖 RuntimeStateRules 的脉冲结束目标状态推导
-## 与四条 RunState 下的五条纯权限规则（can_fire_light / can_edit_layout /
-## can_edit_configuration / configuration_locked / pulse_active），共 22 项案例。
+## 与五条 RunState 下的五条纯权限规则（can_fire_light / can_edit_layout /
+## can_edit_configuration / configuration_locked / pulse_active），共 27 项案例。
 ## 本模块只验证正式规则接口的事实输出，不复制任何状态判断规则，不执行任何状态切换事务。
 ##
 ## 在当前系统中的位置：
@@ -28,12 +28,13 @@ extends RefCounted
 ##   不访问 core_loop 私有字段、不访问场景树、不创建 Node、不执行 _set_run_state、不触发 UI/拖拽/状态事务。
 ## - 只验证纯状态规则：所有 RunState 输入均为本模块显式构造的测试数据，不来自真实运行状态。
 ## - 不使用 assert、push_error 或 push_warning；全部失败条件写入 details。
-## - 不因首个失败提前停止，尽可能执行全部 22 项案例并汇总全部失败。
+## - 不因首个失败提前停止，尽可能执行全部 27 项案例并汇总全部失败。
 ## - duration_usec 固定为 0：本批不测量耗时，耗时由后续 Runner 层统一采集。
 ## - 不使用文件系统、系统时间或随机数。
 ## - configuration_locked 期望通过 not _RuntimeStateRules.can_edit_configuration(state) 验证，
 ##   不要求 RuntimeStateRules 新增 is_configuration_locked 接口。
 ## - 依据 Diagnostics 红线，本类不参与玩法决策，不读取业务私有字段。
+## - D7-2 新增 READY_TO_FIRE（数值 4）案例，SETUP 的 can_fire_light 期望由 true 改为 false（SETUP 不再允许直接发射）。
 
 
 # 以 preload 引用脚本而非依赖全局 class_name 缓存，保证运行期可直接解析；
@@ -61,11 +62,11 @@ const _RuntimeStateRules: GDScript = preload(
 ## [br]返回：SelfCheckResult，见上方字段说明。
 ## [br]副作用：只调用 RuntimeStateRules 与 RuntimeInteractionTypes 的公开静态纯函数；
 ## [br]不访问场景树、不创建 Node、不读写真实玩法状态、不执行状态切换、不写文件、不写日志、不自动修复任何状态。
-## [br]失败语义：任一检查条件不满足即记入 details；不因首个失败提前停止，尽可能执行全部 22 项案例；
+## [br]失败语义：任一检查条件不满足即记入 details；不因首个失败提前停止，尽可能执行全部 27 项案例；
 ## [br]不使用 assert、push_error 或 push_warning。
-## [br]边界条件：只迁移原 _run_post_pulse_state_self_check 的 22 项案例（2 项脉冲结束目标状态 +
-## [br]四个 RunState × 五条规则），不新增 is_runtime_move_state、R 重置、状态切换事务或 UI 刷新测试，
-## [br]不新增 READY_TO_FIRE 等不存在状态或正式玩法新规则；configuration_locked 期望通过
+## [br]边界条件：覆盖 27 项案例（2 项脉冲结束目标状态 +
+## [br]五个 RunState × 五条规则），不新增 is_runtime_move_state、R 重置、状态切换事务或 UI 刷新测试；
+## [br]D7-2 起 READY_TO_FIRE 已为正式状态，纳入五态权限矩阵自检；configuration_locked 期望通过
 ## [br]not _RuntimeStateRules.can_edit_configuration(state) 验证，不复制状态判断规则。
 static func run() -> SelfCheckResult:
 	var details: PackedStringArray = PackedStringArray()
@@ -77,27 +78,37 @@ static func run() -> SelfCheckResult:
 			"post_pulse_state(false) 目标状态",
 			_RuntimeStateRules.get_post_pulse_state(false),
 			_RuntimeInteractionTypes.RunState.MOVE_WINDOW
-	)
+		)
 	_expect_state(
 			details,
 			"post_pulse_state(true) 目标状态",
 			_RuntimeStateRules.get_post_pulse_state(true),
 			_RuntimeInteractionTypes.RunState.COMPLETED
-	)
+		)
 
-	# --- 四个 RunState 分别验证五条纯权限规则（4 × 5 = 20 项）---
+	# --- 五个 RunState 分别验证五条纯权限规则（5 × 5 = 25 项）---
 	# 显式构造测试状态，不读取 core_loop.current_run_state；
-	# 每行期望值严格对应原 _run_post_pulse_state_self_check 的实际断言。
+	# 每行期望值严格对应 D7-2 五态权限合同（SETUP 不可发射；READY/MOVE 可发射；PULSE/COMPLETED 不可发射）。
 	_check_state_rules(
 			details,
 			_RuntimeInteractionTypes.RunState.SETUP,
 			"SETUP",
-			true,   # can_fire_light
+			false,  # can_fire_light
 			true,   # can_edit_layout
 			true,   # can_edit_configuration
 			false,  # configuration_locked
 			false   # pulse_active
-	)
+		)
+	_check_state_rules(
+			details,
+			_RuntimeInteractionTypes.RunState.READY_TO_FIRE,
+			"READY_TO_FIRE",
+			true,   # can_fire_light
+			true,   # can_edit_layout
+			false,  # can_edit_configuration
+			true,   # configuration_locked
+			false   # pulse_active
+		)
 	_check_state_rules(
 			details,
 			_RuntimeInteractionTypes.RunState.PULSE_ACTIVE,
@@ -107,7 +118,7 @@ static func run() -> SelfCheckResult:
 			false,  # can_edit_configuration
 			true,   # configuration_locked
 			true    # pulse_active
-	)
+		)
 	_check_state_rules(
 			details,
 			_RuntimeInteractionTypes.RunState.MOVE_WINDOW,
@@ -117,7 +128,7 @@ static func run() -> SelfCheckResult:
 			false,  # can_edit_configuration
 			true,   # configuration_locked
 			false   # pulse_active
-	)
+		)
 	_check_state_rules(
 			details,
 			_RuntimeInteractionTypes.RunState.COMPLETED,
@@ -127,9 +138,9 @@ static func run() -> SelfCheckResult:
 			false,  # can_edit_configuration
 			true,   # configuration_locked
 			false   # pulse_active
-	)
+		)
 
-	var summary: String = "运行状态规则自检：脉冲结束目标状态与四个 RunState 的五条纯权限规则共 22 项。"
+	var summary: String = "运行状态规则自检：脉冲结束目标状态与五个 RunState 的五条纯权限规则共 27 项。"
 	return SelfCheckResult.new(&"runtime_state_rules", details.is_empty(), summary, details, 0)
 
 
@@ -161,31 +172,31 @@ static func _check_state_rules(
 			"%s.can_fire_light" % [state_name],
 			_RuntimeStateRules.can_fire_light(state),
 			expect_fire
-	)
+		)
 	_expect_bool(
 			details,
 			"%s.can_edit_layout" % [state_name],
 			_RuntimeStateRules.can_edit_layout(state),
 			expect_edit_layout
-	)
+		)
 	_expect_bool(
 			details,
 			"%s.can_edit_configuration" % [state_name],
 			_RuntimeStateRules.can_edit_configuration(state),
 			expect_edit_config
-	)
+		)
 	_expect_bool(
 			details,
 			"%s.configuration_locked" % [state_name],
 			not _RuntimeStateRules.can_edit_configuration(state),
 			expect_locked
-	)
+		)
 	_expect_bool(
 			details,
 			"%s.pulse_active" % [state_name],
 			_RuntimeStateRules.is_pulse_active(state),
 			expect_pulse
-	)
+		)
 
 
 ## 比较一个布尔实际值与期望值，不一致时向 details 追加稳定中文明细。
@@ -246,5 +257,7 @@ static func _state_label(state: _RuntimeInteractionTypes.RunState) -> String:
 			return "MOVE_WINDOW"
 		_RuntimeInteractionTypes.RunState.COMPLETED:
 			return "COMPLETED"
+		_RuntimeInteractionTypes.RunState.READY_TO_FIRE:
+			return "READY_TO_FIRE"
 		_:
 			return "未知状态"

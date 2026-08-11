@@ -4,7 +4,7 @@ extends RefCounted
 ## 关卡目标完成事实唯一所有者（D3-D）。
 ## 职责：按 cell 激活普通独立水晶、判断当前目标是否全部完成、运行期重置水晶与完成事实。
 ## 依赖 LevelObjectRegistry（水晶按显式 crystal_id 与 cell 双向索引）；每次需要集合时通过 Registry 只读副本取得，不保存第二套水晶数组快照。
-## 不负责运行状态机、pulse_generation、光线传播、光路视觉、库存/放置/拖拽、发射器、UI、Diagnostics、场景树；四态仍由运行状态控制器唯一持有，本类不调用其接口。
+## 不负责运行状态机、pulse_generation、光线传播、光路视觉、库存/放置/拖拽、发射器、UI、Diagnostics、场景树；五态（SETUP/READY_TO_FIRE/PULSE_ACTIVE/MOVE_WINDOW/COMPLETED）仍由运行状态控制器唯一持有，本类不调用其接口。
 ## 完成规则：Registry 无水晶时永远未完成（空集合不误判完成）；所有已登记水晶激活后完成；任一未激活则未完成；重复激活安全无副作用；reset_runtime 后完成事实归 false。
 
 

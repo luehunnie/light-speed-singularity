@@ -10,7 +10,7 @@ extends RefCounted
 ## 不定义第二份 RunState 或 DragSource，不依赖 Diagnostics，不访问 Node、场景树、文件、时间或随机数。
 ## INVALID_CELL 由核心循环持有；本模块不定义、不复制，也不依赖其具体数值。core_loop_prototype 持有，不属于本模块；
 ## 本模块函数体不直接引用 INVALID_CELL，from_cell 仅作为普通 Vector2i 参与相等比较（INVENTORY 来源由调用方传入哨兵值）。
-## 已知临时边界：运行期回收后重新放置不消耗直接移动次数的边界不在本模块修正，规则与原实现严格等价，不增加额外规则。
+## 已知临时边界：D7-2 起 READY_TO_FIRE 与 PULSE_ACTIVE/MOVE_WINDOW 同属运行期计次状态（跨格移动消耗 runtime_move_limit，SETUP 不计次）；运行期回收后重新放置不消耗直接移动次数的边界不在本模块修正。
 
 const _RuntimeInteractionTypes: GDScript = preload(
 	"res://gameplay/interaction/runtime_interaction_types.gd"
@@ -31,17 +31,17 @@ static func compute_runtime_moves_remaining(move_limit: int, moves_used: int) ->
 ## 判断一次已放置机关拖拽松手是否应计入运行期移动次数（纯判断，无副作用）。
 ## [br]职责：判定“运行期状态 + 跨格”这一扣次前提。
 ## [br]输入：run_state 是提交时的运行状态，from_cell 是拖拽原始格，to_cell 是松手目标格。
-## [br]返回：true 仅当处于运行期状态（PULSE_ACTIVE 或 MOVE_WINDOW）且 from_cell 与 to_cell 不同。
+## [br]返回：true 仅当处于运行期状态（READY_TO_FIRE、PULSE_ACTIVE 或 MOVE_WINDOW）且 from_cell 与 to_cell 不同。
 ## [br]副作用：无；不读取或修改任何实例状态，不修改输入 Vector2i。
 ## [br]失败：不会失败；非运行期状态、原格松手均返回 false。
-## [br]边界：SETUP 跨格移动返回 false（不扣次），COMPLETED 返回 false，原格松手返回 false；
+## [br]边界：SETUP 跨格移动返回 false（不扣次），COMPLETED 返回 false，原格松手返回 false；READY_TO_FIRE/PULSE_ACTIVE/MOVE_WINDOW 跨格移动计次；
 ## 目标是否合法、占用原子更新是否成功等运行期事实由调用方在调用前确认，本函数只负责扣次前提。
 static func should_count_runtime_move(
 	run_state: _RuntimeInteractionTypes.RunState,
 	from_cell: Vector2i,
 	to_cell: Vector2i
 ) -> bool:
-	if run_state != _RuntimeInteractionTypes.RunState.PULSE_ACTIVE and run_state != _RuntimeInteractionTypes.RunState.MOVE_WINDOW:
+	if run_state != _RuntimeInteractionTypes.RunState.READY_TO_FIRE and run_state != _RuntimeInteractionTypes.RunState.PULSE_ACTIVE and run_state != _RuntimeInteractionTypes.RunState.MOVE_WINDOW:
 		return false
 	if to_cell == from_cell:
 		return false
@@ -51,14 +51,14 @@ static func should_count_runtime_move(
 ## 判断当前运行状态是否允许从世界拖起已放置机关（纯判断，无副作用）。
 ## [br]职责：判定拖起权限，与跨格移动提交权限分离。
 ## [br]输入：run_state 是当前运行状态。
-## [br]返回：true 表示当前不是 COMPLETED：SETUP、PULSE_ACTIVE、MOVE_WINDOW 均允许拖起；COMPLETED 与未知值返回 false。
+## [br]返回：true 表示当前不是 COMPLETED：SETUP、READY_TO_FIRE、PULSE_ACTIVE、MOVE_WINDOW 均允许拖起；COMPLETED 与未知值返回 false。
 ## [br]副作用：无；不读取或修改任何实例状态。
 ## [br]失败：不会失败；未知枚举值落入默认分支返回 false。
 ## [br]边界：remaining=0 禁止提交跨格移动（由 can_commit_placed_move 负责），但不禁止拖起，
 ## 因为拖起还承担回收和取消；从机关栏拿取与回收另由专用函数判断。
 static func can_begin_placed_drag(run_state: _RuntimeInteractionTypes.RunState) -> bool:
 	match run_state:
-		_RuntimeInteractionTypes.RunState.SETUP, _RuntimeInteractionTypes.RunState.PULSE_ACTIVE, _RuntimeInteractionTypes.RunState.MOVE_WINDOW:
+		_RuntimeInteractionTypes.RunState.SETUP, _RuntimeInteractionTypes.RunState.READY_TO_FIRE, _RuntimeInteractionTypes.RunState.PULSE_ACTIVE, _RuntimeInteractionTypes.RunState.MOVE_WINDOW:
 			return true
 		_:
 			return false
@@ -67,14 +67,14 @@ static func can_begin_placed_drag(run_state: _RuntimeInteractionTypes.RunState) 
 ## 判断当前运行状态是否允许从机关栏拿取新机关（纯判断，无副作用）。
 ## [br]职责：判定库存拿取/首次放置权限。
 ## [br]输入：run_state 是当前运行状态。
-## [br]返回：true 表示当前不是 COMPLETED：SETUP、PULSE_ACTIVE、MOVE_WINDOW 均允许拿取；COMPLETED 与未知值返回 false。
+## [br]返回：true 表示当前不是 COMPLETED：SETUP、READY_TO_FIRE、PULSE_ACTIVE、MOVE_WINDOW 均允许拿取；COMPLETED 与未知值返回 false。
 ## [br]副作用：无；不读取或修改任何实例状态，不修改库存。
 ## [br]失败：不会失败；未知枚举值落入默认分支返回 false。
 ## [br]边界：拿取/首次放置不消耗 runtime_moves_used（直接移动次数只限制已有机关从世界格 A 直接移动到世界格 B）；
 ## 运行期回收后重新放置不消耗直接移动次数属已知临时边界，本模块不修正。
 static func can_take_from_inventory_for_state(run_state: _RuntimeInteractionTypes.RunState) -> bool:
 	match run_state:
-		_RuntimeInteractionTypes.RunState.SETUP, _RuntimeInteractionTypes.RunState.PULSE_ACTIVE, _RuntimeInteractionTypes.RunState.MOVE_WINDOW:
+		_RuntimeInteractionTypes.RunState.SETUP, _RuntimeInteractionTypes.RunState.READY_TO_FIRE, _RuntimeInteractionTypes.RunState.PULSE_ACTIVE, _RuntimeInteractionTypes.RunState.MOVE_WINDOW:
 			return true
 		_:
 			return false
@@ -83,14 +83,14 @@ static func can_take_from_inventory_for_state(run_state: _RuntimeInteractionType
 ## 判断当前运行状态是否允许把已放置机关拖回机关栏回收（纯判断，无副作用）。
 ## [br]职责：判定回收权限。
 ## [br]输入：run_state 是当前运行状态。
-## [br]返回：true 表示当前不是 COMPLETED：SETUP、PULSE_ACTIVE、MOVE_WINDOW 均允许回收；COMPLETED 与未知值返回 false。
+## [br]返回：true 表示当前不是 COMPLETED：SETUP、READY_TO_FIRE、PULSE_ACTIVE、MOVE_WINDOW 均允许回收；COMPLETED 与未知值返回 false。
 ## [br]副作用：无；不读取或修改任何实例状态，不修改库存，不注销占用。
 ## [br]失败：不会失败；未知枚举值落入默认分支返回 false。
 ## [br]边界：回收不消耗 runtime_moves_used，只影响下一次发射；
 ## 运行期回收后重新放置不消耗直接移动次数属已知临时边界，本模块不修正。
 static func can_recycle_placed_token_for_state(run_state: _RuntimeInteractionTypes.RunState) -> bool:
 	match run_state:
-		_RuntimeInteractionTypes.RunState.SETUP, _RuntimeInteractionTypes.RunState.PULSE_ACTIVE, _RuntimeInteractionTypes.RunState.MOVE_WINDOW:
+		_RuntimeInteractionTypes.RunState.SETUP, _RuntimeInteractionTypes.RunState.READY_TO_FIRE, _RuntimeInteractionTypes.RunState.PULSE_ACTIVE, _RuntimeInteractionTypes.RunState.MOVE_WINDOW:
 			return true
 		_:
 			return false
@@ -99,7 +99,7 @@ static func can_recycle_placed_token_for_state(run_state: _RuntimeInteractionTyp
 ## 判断当前运行状态是否允许正式提交一次已放置机关跨格移动（纯判断，无副作用）。
 ## [br]职责：移动提交前的第二次校验核心。
 ## [br]输入：run_state 是提交时的运行状态，moves_remaining 是提交时剩余运行期移动次数，from_cell/to_cell 是原始格与目标格。
-## [br]返回：true 仅当 from_cell != to_cell，且状态为 SETUP，或处于 PULSE_ACTIVE/MOVE_WINDOW 且 moves_remaining > 0；COMPLETED 与未知值返回 false。
+## [br]返回：true 仅当 from_cell != to_cell，且状态为 SETUP，或处于 READY_TO_FIRE/PULSE_ACTIVE/MOVE_WINDOW 且 moves_remaining > 0；COMPLETED 与未知值返回 false。
 ## [br]副作用：无；不读取或修改任何实例状态，不修改输入 Vector2i。
 ## [br]失败：不会失败；原格松手永远返回 false。
 ## [br]边界：目标格合法性、占用原子更新等运行期事实由调用方在调用前确认；
@@ -115,7 +115,7 @@ static func can_commit_placed_move(
 	match run_state:
 		_RuntimeInteractionTypes.RunState.SETUP:
 			return true
-		_RuntimeInteractionTypes.RunState.PULSE_ACTIVE, _RuntimeInteractionTypes.RunState.MOVE_WINDOW:
+		_RuntimeInteractionTypes.RunState.READY_TO_FIRE, _RuntimeInteractionTypes.RunState.PULSE_ACTIVE, _RuntimeInteractionTypes.RunState.MOVE_WINDOW:
 			return moves_remaining > 0
 		_:
 			return false

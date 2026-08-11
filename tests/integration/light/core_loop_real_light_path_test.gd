@@ -1,10 +1,12 @@
 extends SceneTree
 
-## 真实光路端到端集成回归测试（阶段 1 D3C-3）。
-## 实例化真实 core_loop_prototype.tscn，挂入 SceneTree 触发真实 _ready，经公开入口 fire_light()/reset_runtime()
-## 触发发射与重置，观察 LightPathLayer 下光路段投影。权威传播算法（逐格推进/边界/墙体/镜面）由
+## 真实光路端到端集成回归测试（阶段 1 D3C-3；D7-3 起经正式 start_run()→READY→fire_light() 公开入口）。
+## 实例化真实 core_loop_prototype.tscn，挂入 SceneTree 触发真实 _ready，经公开入口 start_run()/fire_light()/reset_runtime()
+## 触发 Start Run→READY→发射与重置，观察 LightPathLayer 下光路段投影。权威传播算法（逐格推进/边界/墙体/镜面）由
 ## RayExecutionModule 单测负责，本测试只验证场景配置→FixedEmitter 启动快照→运行编排→视觉投影的端到端接线，
-## 不重复算法单测。光路段为 LightPathLayer 直接子节点且 position=cell_to_world(step.cell)，
+## 不重复算法单测。D7-2 起 SETUP 禁火，发射前必须先 start_run() 经 RuntimeValidationGate 进入 READY_TO_FIRE；
+## 禁止私有 begin_runtime 白盒或 SETUP 直射保绿。R 后必须重新 start_run() 才能再次发射（见用例 6）。
+## 光路段为 LightPathLayer 直接子节点且 position=cell_to_world(step.cell)，
 ## 路径格由 global_position 反查、首段方向由首格-发射器格推断，均走公开节点路径。
 ## 异步边界：脉冲视觉持续生产常量 1.0s，发射后立即断言；释放前等待 >1.0s 让脉冲结束协程在活动控制器上恢复。
 ## 由 Godot --script 运行，全部通过 quit(0)，任一失败 quit(1)。
@@ -102,6 +104,7 @@ func _settle_and_free(node: Node2D, fired: bool) -> void:
 func _test_01_default_path(scene: PackedScene) -> void:
 	const NAME: String = "01_默认真实路径"
 	var node: Node2D = await _ready_instance(scene)
+	node.start_run()
 	node.fire_light()
 	var lpl: Node2D = _lpl(node)
 	var cells: Array[Vector2i] = _path_cells(node)
@@ -137,6 +140,7 @@ func _test_02_moved_emitter(scene: PackedScene) -> void:
 	if fe != null:
 		_check(NAME, fe.get_cell() == MOVED, "FixedEmitter 快照格期望 %s，实际 %s。" % [MOVED, fe.get_cell()])
 		_check(NAME, fe.get_direction() == Vector2i.RIGHT, "FixedEmitter 快照方向期望 RIGHT，实际 %s。" % [fe.get_direction()])
+	node.start_run()
 	node.fire_light()
 	var cells: Array[Vector2i] = _path_cells(node)
 	if _check(NAME, cells.size() > 0, "移动后应生成路径。"):
@@ -171,6 +175,7 @@ func _test_03_eight_directions(scene: PackedScene) -> void:
 		root.add_child(node)
 		await process_frame
 		var vec: Vector2i = _EmitterConfigNode.ray_direction_to_vector(dir)
+		node.start_run()
 		node.fire_light()
 		var cells: Array[Vector2i] = _path_cells(node)
 		var label: String = "方向%d(%s)" % [dir, vec]
@@ -191,6 +196,7 @@ func _test_04_visual_rotation_isolation(scene: PackedScene) -> void:
 		return
 	# _ready 已按 RIGHT 把 rotation 置 0；人为改成与 RIGHT 不一致的角度。
 	visual.rotation = PI / 2.0
+	node.start_run()
 	node.fire_light()
 	var cells: Array[Vector2i] = _path_cells(node)
 	_check(NAME, _first_direction(node, cells) == Vector2i.RIGHT, "视觉旋转后首段方向仍应 RIGHT，实际 %s。" % [_first_direction(node, cells)])
@@ -220,6 +226,7 @@ func _test_05_preview_isolation(scene: PackedScene) -> void:
 	_check(NAME, preview.get_parent() == emitter, "EmissionPreview 应为 Emitter 直属子节点。")
 	_check(NAME, not lpl.is_ancestor_of(preview), "EmissionPreview 不应在 LightPathLayer 下。")
 	_check(NAME, lpl.get_child_count() == 0, "发射前 LightPathLayer 应无正式段，实际 %d。" % [lpl.get_child_count()])
+	node.start_run()
 	node.fire_light()
 	# 发射后：正式段已生成，Preview 仍非 LightPathLayer 子节点，不计入段数。
 	_check(NAME, preview.get_parent() == emitter, "发射后 EmissionPreview 仍应为 Emitter 子节点。")
@@ -239,6 +246,7 @@ func _test_06_reset_clears_path(scene: PackedScene) -> void:
 	var node: Node2D = await _ready_instance(scene)
 	var emitter: _EmitterConfigNode = _emitter(node)
 	var lpl: Node2D = _lpl(node)
+	node.start_run()
 	node.fire_light()
 	_check(NAME, lpl != null and lpl.get_child_count() == 3, "发射后正式段数期望 3，实际 %d。" % [lpl.get_child_count() if lpl != null else -1])
 	node.reset_runtime()
@@ -250,6 +258,12 @@ func _test_06_reset_clears_path(scene: PackedScene) -> void:
 		_check(NAME, emitter.get_ray_direction_vector() == Vector2i.RIGHT, "R 后 Emitter 方向应保持 RIGHT。")
 		var preview: _EmissionPreview = emitter.get_node_or_null("EmissionPreview") as _EmissionPreview
 		_check(NAME, preview != null and preview.get_parent() == emitter, "R 后 EmissionPreview 应仍为 Emitter 子节点，不受路径清理管理。")
+	# D7-3 R-lock：R 后回 SETUP，direct fire 必须被拒绝；重新 start_run→READY→fire 才再次成功。
+	node.fire_light()
+	_check(NAME, lpl != null and lpl.get_child_count() == 0, "R 后未重新 Start Run，direct fire 应被拒绝（光段 0），实际 %d。" % [lpl.get_child_count() if lpl != null else -1])
+	node.start_run()
+	node.fire_light()
+	_check(NAME, lpl != null and lpl.get_child_count() == 3, "R 后重新 Start Run→READY→fire 应再次成功（光段 3），实际 %d。" % [lpl.get_child_count() if lpl != null else -1])
 	await _settle_and_free(node, true)
 
 

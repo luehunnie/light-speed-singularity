@@ -175,6 +175,7 @@ func _test_06_no_runstate_change() -> void:
 	_check(G, sink.count == 0, "Gate 调用不应触发 state_changed，实际 %d 次。" % sink.count)
 	# PULSE_ACTIVE 态：失败调用后不被复位（证明不会把非 SETUP 态悄悄改回）。
 	var rsc2: _RunStateController = _RunStateController.new()
+	rsc2.begin_runtime()  # D7-2 适配：SETUP→PULSE_ACTIVE 已禁止，经 READY_TO_FIRE 进入（仅改既有用例前置，未追加测试组）。
 	rsc2.begin_pulse()
 	_check(G, rsc2.get_current_state() == _RuntimeInteractionTypes.RunState.PULSE_ACTIVE, "前置应 PULSE_ACTIVE。")
 	if invalid_root != null:
