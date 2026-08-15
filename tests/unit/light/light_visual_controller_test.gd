@@ -14,6 +14,8 @@ const _LightVisualController: GDScript = preload("res://gameplay/visuals/light_v
 const _LightSegmentViewScript: GDScript = preload("res://gameplay/visuals/light_segments/light_segment_view.gd")
 const _LightSegmentVisualProfile: GDScript = preload("res://gameplay/visuals/light_segments/light_segment_visual_profile.gd")
 const _GridCoordinateRules: GDScript = preload("res://gameplay/grid/grid_coordinate_rules.gd")
+const _RayEmissionDriver: GDScript = preload("res://gameplay/runtime/ray_emission_driver.gd")
+const _RayExecutionResult: GDScript = preload("res://gameplay/light/ray_execution_result.gd")
 
 
 ## 累积失败项（每项为“[组名] 原因”）。
@@ -44,6 +46,8 @@ func _initialize() -> void:
 	_test_18_no_crystal_access()
 	_test_19_no_state_mutation()
 	_test_20_wiring_visual_before_crystal()
+	_test_21_reflection_step_two_half_segments()
+	_test_22_driver_reflection_cell_renders_corner()
 	_report()
 	quit(0 if _failures.is_empty() else 1)
 
@@ -327,6 +331,106 @@ func _test_20_wiring_visual_before_crystal() -> void:
 		_check(NAME, body.find("add_light_visual") == -1, "不得在 _apply_ray_execution_result 保留 add_light_visual 第二套实现。")
 
 
+## 21. 反射格两段半光束（D7-R5 反射格视觉修复）：show_reflection_step 在同一格创建两段半段视图——
+##     入射半段方向 = -incoming、出射半段方向 = outgoing；两段位置同为该格中心；计入 emission 桶与总数；clear_emission 一并清理。
+func _test_21_reflection_step_two_half_segments() -> void:
+	const NAME: String = "21_反射格两段半光束"
+	var env: Dictionary = _make_controller()
+	var controller: _LightVisualController = env["controller"]
+	var ok: bool = controller.show_reflection_step(1, 5, Vector2i(3, 3), Vector2i.RIGHT, Vector2i.UP)
+	_check(NAME, ok, "show_reflection_step 返回期望 true。")
+	_check(NAME, controller.get_segment_count() == 2, "反射格应创建 2 段（入射半段 + 出射半段），实际 %d。" % [controller.get_segment_count()])
+	_check(NAME, controller.get_emission_segment_count(1) == 2, "emission1 片段数期望 2。")
+	_check(NAME, controller.get_emission_generation(1) == 5, "emission1 generation metadata 期望 5。")
+	var views: Array = controller.get_segments_for_emission(1)
+	if _check(NAME, views.size() == 2, "片段副本 size 期望 2。"):
+		var incoming_half: _LightSegmentViewScript = views[0]
+		var outgoing_half: _LightSegmentViewScript = views[1]
+		var cell_world: Vector2 = _GridCoordinateRules.cell_to_world(Vector2i(3, 3))
+		_check(NAME, incoming_half._direction == Vector2i(-1, 0),
+			"入射半段方向期望 -incoming=(-1,0)，实际 %s。" % [str(incoming_half._direction)])
+		_check(NAME, outgoing_half._direction == Vector2i(0, -1),
+			"出射半段方向期望 outgoing=(0,-1)，实际 %s。" % [str(outgoing_half._direction)])
+		_check(NAME, incoming_half.position == cell_world, "入射半段位置期望格中心 %s。" % [str(cell_world)])
+		_check(NAME, outgoing_half.position == cell_world, "出射半段位置期望格中心 %s。" % [str(cell_world)])
+	# clear_emission 一并清理两段半段。
+	controller.clear_emission(1)
+	_check(NAME, controller.get_segment_count() == 0, "clear_emission 后片段数期望 0。")
+	(env["parent"] as Node2D).free()
+
+
+## 22. RayEmissionDriver 反射格拐角接线（D7-R5 反射格视觉修复）：相邻 step 进入方向不同的格（镜面格）
+##     由 driver 改画两段半光束（show_reflection_step），其余格照常 show_step；水晶仍按 step 顺序处理。
+##     用替身视觉记录器直接驱动 _apply_ray_execution_result（不进 dispatch / 不建 timer），锁定 driver 对 steps 的视觉分派。
+func _test_22_driver_reflection_cell_renders_corner() -> void:
+	const NAME: String = "22_driver反射格拐角"
+	var recorder: FakeVisualRecorder = FakeVisualRecorder.new()
+	var objective: FakeObjectiveRecorder = FakeObjectiveRecorder.new()
+	var driver = _RayEmissionDriver.new(recorder, objective, null, 16, 0.0, Callable(), Callable())
+	# 手工构造传播结果：(2,3) RIGHT → (3,3) RIGHT（镜面格，下一步进入方向变 UP = 本格改向）→ (3,2) UP。
+	var result = _RayExecutionResult.new()
+	result.add_step(Vector2i(2, 3), Vector2i.RIGHT, false)
+	result.add_step(Vector2i(3, 3), Vector2i.RIGHT, true)
+	result.add_step(Vector2i(3, 2), Vector2i.UP, false)
+	driver.call("_apply_ray_execution_result", result, 1, 5)
+	_check(NAME, recorder.full_calls.size() == 2, "非反射格应照常 show_step 2 次，实际 %d。" % recorder.full_calls.size())
+	if recorder.full_calls.size() == 2:
+		_check(NAME, recorder.full_calls[0]["cell"] == Vector2i(2, 3) and recorder.full_calls[0]["direction"] == Vector2i.RIGHT,
+			"首格应为 (2,3)+RIGHT 全段。")
+		_check(NAME, recorder.full_calls[1]["cell"] == Vector2i(3, 2) and recorder.full_calls[1]["direction"] == Vector2i.UP,
+			"末格应为 (3,2)+UP 全段。")
+	_check(NAME, recorder.reflection_calls.size() == 1, "反射格应恰好 show_reflection_step 1 次，实际 %d。" % recorder.reflection_calls.size())
+	if recorder.reflection_calls.size() == 1:
+		var call: Dictionary = recorder.reflection_calls[0]
+		_check(NAME, call["cell"] == Vector2i(3, 3), "反射格应为镜面格 (3,3)。")
+		_check(NAME, call["incoming"] == Vector2i.RIGHT, "反射格入射方向期望 RIGHT。")
+		_check(NAME, call["outgoing"] == Vector2i.UP, "反射格出射方向期望 UP。")
+		_check(NAME, call["emission_id"] == 1 and call["generation"] == 5, "反射段应携带 emission/generation metadata。")
+	# 水晶格仍按 step 处理（(3,3) has_crystal=true）。
+	_check(NAME, objective.activated_cells.size() == 1 and objective.activated_cells[0] == Vector2i(3, 3),
+		"镜面格水晶应仍被处理，实际 %s。" % [str(objective.activated_cells)])
+	# 无反射路径（方向全程一致）不触发 show_reflection_step。
+	var recorder2: FakeVisualRecorder = FakeVisualRecorder.new()
+	var driver2 = _RayEmissionDriver.new(recorder2, FakeObjectiveRecorder.new(), null, 16, 0.0, Callable(), Callable())
+	var result2 = _RayExecutionResult.new()
+	result2.add_step(Vector2i(2, 3), Vector2i.RIGHT, false)
+	result2.add_step(Vector2i(3, 3), Vector2i.RIGHT, false)
+	driver2.call("_apply_ray_execution_result", result2, 1, 5)
+	_check(NAME, recorder2.reflection_calls.is_empty() and recorder2.full_calls.size() == 2,
+		"方向不变的路径不应产生反射段（2 全段，0 反射段）。")
+
+
+## 替身视觉记录器：记录 show_step / show_reflection_step 调用（cell/direction/emission/generation），供组 22 断言分派。
+class FakeVisualRecorder:
+	extends RefCounted
+
+	var full_calls: Array = []
+	var reflection_calls: Array = []
+
+	func show_step(emission_id: int, generation: int, cell: Vector2i, direction: Vector2i) -> bool:
+		full_calls.append({"emission_id": emission_id, "generation": generation, "cell": cell, "direction": direction})
+		return true
+
+	func show_reflection_step(
+			emission_id: int, generation: int, cell: Vector2i,
+			incoming_direction: Vector2i, outgoing_direction: Vector2i
+	) -> bool:
+		reflection_calls.append({
+			"emission_id": emission_id, "generation": generation, "cell": cell,
+			"incoming": incoming_direction, "outgoing": outgoing_direction})
+		return true
+
+
+## 替身目标记录器：记录 try_activate_crystal_at 的格（供组 22 断言反射格水晶处理不被影响）。
+class FakeObjectiveRecorder:
+	extends RefCounted
+
+	var activated_cells: Array = []
+
+	func try_activate_crystal_at(cell: Vector2i) -> void:
+		activated_cells.append(cell)
+
+
 ## 四方向映射共用断言：show_step 后片段 _direction 等于传入方向，且该方向映射到预期形态状态。
 func _check_mapping(group_name: String, direction: Vector2i, expected_state: StringName) -> void:
 	var env: Dictionary = _make_controller()
@@ -351,7 +455,7 @@ func _check(group_name: String, ok: bool, detail: String) -> bool:
 
 ## 输出测试摘要并退出。
 func _report() -> void:
-	var group_count: int = 20
+	var group_count: int = 22
 	var passed_checks: int = _checks - _failures.size()
 	print("==== LightVisualController 测试摘要（M4-E2 per-emission）====")
 	print("测试组数：%d" % group_count)

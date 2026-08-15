@@ -173,6 +173,29 @@ func get_bound_runtime_count() -> int:
 	return _runtime_to_emission.size()
 
 
+## 全部活动 emission_id 列表（D7-R1 只读诊断；按 allocate 插入顺序）。
+## [br]返回独立 Array[int] 副本：调用方修改返回值不影响 _emissions；不暴露内部 Dictionary。
+## [br]边界：纯只读；R 后（clear）返回空数组；不排序、不去重（键唯一保证无重复）。
+func get_active_emission_ids() -> Array[int]:
+	var ids: Array[int] = []
+	for key: Variant in _emissions.keys():
+		ids.append(int(key))
+	return ids
+
+
+## 指定 emission 当前绑定的光粒 runtime_id 列表（D7-R1 只读诊断）。
+## [br]返回独立 Array[int] 副本：调用方修改返回值不影响该 emission record 的 runtime_ids；
+## [br]emission 未登记 / 已 finish 返回空数组；RAY emission 恒为空数组。
+## [br]边界：纯只读；不 mark_finished、不解绑、不回拨。
+func get_emission_runtime_ids(emission_id: int) -> Array[int]:
+	var ids: Array[int] = []
+	if not _emissions.has(emission_id):
+		return ids
+	for runtime_id: Variant in _emissions[emission_id]["runtime_ids"]:
+		ids.append(int(runtime_id))
+	return ids
+
+
 ## 清空全部活动 emission 与 runtime 反向索引（R 完整重置时由 LRC 调用）；计数器不回拨（R 后不复用 emission_id）。
 ## [br]副作用：_emissions.clear()；_runtime_to_emission.clear()；_next_emission_id 保持不变。
 ## [br]边界：不结算生命周期、不改 RunState、不触视觉；幂等（空表时只空遍历）。

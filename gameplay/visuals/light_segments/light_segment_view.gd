@@ -40,6 +40,9 @@ const FALLBACK_THICKNESS_PX: int = 16
 
 # 当前传播方向，仅用于选择四方向纹理，不参与传播逻辑。默认 RIGHT。
 var _direction: Vector2i = Vector2i.RIGHT
+# 半段光束模式（D7-R5 反射格视觉修复）：true 时 fallback 占位光束从格中心画到 direction 指向的格边（半段），
+# 而非贯穿整格。仅影响 fallback 占位几何；有正式纹理时仍显示 64×64 纹理画布（正式反射角美术留后续美术接入）。
+var _half_beam: bool = false
 # 当前光线颜色，同时调制正式纹理 self_modulate 与占位块 color。默认保持旧占位视觉的黄色。
 var _light_color: Color = Color(1.0, 0.95, 0.2, 0.75)
 
@@ -67,6 +70,19 @@ func set_profile(next_profile: _LightSegmentVisualProfile) -> void:
 ## [br]边界条件：本函数不修改光传播逻辑、不调用反射；非法方向会令 profile.get_texture_for_direction() 返回 null，从而回退到占位块。
 func set_direction(next_direction: Vector2i) -> void:
 	_direction = next_direction
+	_half_beam = false
+	refresh_visual()
+
+
+## 设置当前传播方向为半段光束并立即刷新视觉（D7-R5 反射格视觉修复）。
+## [br]next_direction 为半段指向：占位光束从本节点原点（格中心）画到 next_direction 指向的格边（正交半格 / 斜向半对角）。
+## [br]反射格由控制器以两段半光束拼出拐角（入射半段指向 -incoming、出射半段指向 outgoing），
+##   使光束在镜面格中心转折，不再贯穿镜面或留下半格断口。
+## [br]无返回值；副作用是写入 _direction / _half_beam=true 并调用 refresh_visual()。
+## [br]边界条件：本函数不修改光传播逻辑；半段几何只作用于 fallback 占位块，不改逻辑格 64×64。
+func set_direction_half(next_direction: Vector2i) -> void:
+	_direction = next_direction
+	_half_beam = true
 	refresh_visual()
 
 
@@ -100,11 +116,14 @@ func refresh_visual() -> void:
 	if _artwork == null or _placeholder_block == null:
 		return
 
-	# fallback 占位光束几何按当前方向重算（正交/斜向长度不同，厚度恒 16，rotation=angle(direction)）。
+	# fallback 占位光束几何按当前方向重算（正交/斜向长度不同，厚度恒 16，rotation=angle(direction)；
+	# 半段模式（D7-R5）从格中心画到 direction 指向的格边）。
 	# 无论是否最终显示占位块都先算，保证无纹理时几何正确、且方向变化后占位块不残留旧朝向。
-	_apply_placeholder_geometry(_direction)
+	_apply_placeholder_geometry(_direction, _half_beam)
 
-	var texture: Texture2D = _resolve_texture()
+	# 半段模式（D7-R5）只具备 fallback 占位几何：有纹理时也不显示 64×64 整格纹理（否则反射格拐角重新退化为贯穿整格），
+	# 正式反射角美术接入前显式回退占位块；全段模式按 profile 正常解析纹理。
+	var texture: Texture2D = null if _half_beam else _resolve_texture()
 	# 每次刷新显式重设全部相关属性，避免从有纹理切换到无纹理时残留旧图片。
 	# self_modulate 与占位块 color 都始终跟随 light_color，保证正式纹理与占位块共用同一光线颜色。
 	_artwork.self_modulate = _light_color
@@ -129,20 +148,31 @@ func _resolve_texture() -> Texture2D:
 	return visual_profile.get_texture_for_direction(_direction)
 
 
-## 按 fallback 厚度与方向重算占位光束几何并写入 PlaceholderBlock（D7-4 B4b-2）。
+## 按 fallback 厚度与方向重算占位光束几何并写入 PlaceholderBlock（D7-4 B4b-2；D7-R5 加 from_center 半段模式——从格中心画到 direction 指向的格边，供反射格拐角两段拼合）。
 ## [br]职责：把 PlaceholderBlock 布为以本节点原点（格中心）为中心、沿 direction 方向的窄光束——
 ##   正交方向长度 = CELL_SIZE（覆盖一格、相邻格在共享边中点相接）；斜向长度 = CELL_SIZE*√2（角到角、相邻斜格在共享角相接，视觉连续）；
 ##   厚度恒 FALLBACK_THICKNESS_PX(16)；rotation = Vector2(direction).angle()（与 ParticleView 同一八方向角度来源）。
 ## [br]本函数无返回值；副作用是写 PlaceholderBlock 的 offset_* / pivot_offset / rotation。
 ## [br]边界条件：逻辑格仍 64×64——本函数只决定 fallback 占位光束的可见窄边与朝向，不触碰 Artwork 64×64 画布，不改光传播逻辑；
 ##   方向非法（如 ZERO）时 angle()==0，光束呈水平，不报错（与光路方向始终合法八方向不冲突，仅视觉保守）。
-func _apply_placeholder_geometry(direction: Vector2i) -> void:
+func _apply_placeholder_geometry(direction: Vector2i, from_center: bool = false) -> void:
 	# 斜向（两分量均非 0）光束需更长以角到角连续；正交覆盖一格即可。
 	var is_diagonal: bool = direction.x != 0 and direction.y != 0
 	var beam_length: float = float(_GridMetrics.CELL_SIZE) * (sqrt(2.0) if is_diagonal else 1.0)
-	var half_length: float = beam_length / 2.0
 	var half_thickness: float = float(FALLBACK_THICKNESS_PX) / 2.0
-	# 以格中心（本节点原点）为中心的窄光束：offsets 对称、pivot_offset 置中使 rotation 绕格中心。
+	if from_center:
+		# 半段（D7-R5 反射格拐角）：矩形从本节点原点（格中心，旋转锚点）沿本地 +x 延伸 beam_length/2，
+		# rotation 把 +x 转到 direction——光束从格中心画到 direction 指向的格边（正交半格 / 斜向半对角）。
+		# rect 左上角位于格中心上方 (0, -half_thickness)；pivot 置于格中心 (0, 0)（pivot_offset 相对 rect 左上角）。
+		_placeholder_block.offset_left = 0.0
+		_placeholder_block.offset_right = beam_length / 2.0
+		_placeholder_block.offset_top = -half_thickness
+		_placeholder_block.offset_bottom = half_thickness
+		_placeholder_block.pivot_offset = Vector2(0.0, half_thickness)
+		_placeholder_block.rotation = Vector2(direction).angle()
+		return
+	# 全段：以格中心（本节点原点）为中心的窄光束：offsets 对称、pivot_offset 置中使 rotation 绕格中心。
+	var half_length: float = beam_length / 2.0
 	_placeholder_block.offset_left = -half_length
 	_placeholder_block.offset_right = half_length
 	_placeholder_block.offset_top = -half_thickness

@@ -80,6 +80,10 @@ const _InventorySlotViewScript: GDScript = preload("res://gameplay/ui/inventory_
 const _RunStartView: GDScript = preload("res://gameplay/ui/run_start_view.gd")
 # M4-E4 形态切换提示 UI（用户冻结视觉）：Q 成功切换时屏幕上方居中提示 1 秒；core_loop 只构造接线。
 const _FormSwitchToastView: GDScript = preload("res://gameplay/ui/form_switch_toast_view.gd")
+# D7-R1 Runtime 只读采样器（Runtime → Sampler → RuntimeSnapshotData）与 Debug-only 游戏内控制台；
+# 均只读诊断链路，核心只构造接线（控制台仅 Debug 构造，Release 零接线）。
+const _RuntimeSnapshotSampler: GDScript = preload("res://gameplay/diagnostics/snapshot/runtime_snapshot_sampler.gd")
+const _DebugConsoleView: GDScript = preload("res://gameplay/diagnostics/console/debug_console_view.gd")
 # D7-3 start_run() 返回结构化 LevelValidationResult 供 UI 最小反馈（runtime → level/validation 依赖方向）。
 const _LevelValidationResult: GDScript = preload("res://gameplay/level/validation/level_validation_result.gd")
 # 普通光线路径视觉控制器：完整拥有光路视觉节点集合与四方向接线，核心只调用 show_step / clear_path。
@@ -164,6 +168,12 @@ var _run_start_view: _RunStartView = null
 
 ## M4-E4 形态切换提示 UI：Q 成功切换时由本核心把新形态交给它显示（上方居中 1 秒）；被拒 Q 不触发。
 var _form_switch_toast_view: _FormSwitchToastView = null
+
+## D7-R1 Runtime 只读采样器（Debug 构造）：经 LRC 只读诊断出口 + 各 RefCounted 控制器只读访问器采样。
+var _runtime_snapshot_sampler: _RuntimeSnapshotSampler = null
+
+## D7-R1 Debug-only 游戏内控制台（仅 Debug 构造；只读 + 手动快照触发；Release 不存在本实例）。
+var _debug_console_view: _DebugConsoleView = null
 
 ## 关卡 Q 形态切换开关（M4-E4）：_ready 中由 EmitterConfigNode 启动快照读取一次，注入 LevelRuntimeController；运行期不再监听配置变化。
 var _allow_form_switch: bool = false
@@ -257,6 +267,20 @@ func _ready() -> void:
 	# M4-E4 形态切换提示 UI：挂到同一 CanvasLayer；只显示成功切换结果（被拒 Q 由 _switch_light_form 不触发体现）。
 	_form_switch_toast_view = _FormSwitchToastView.new()
 	_form_switch_toast_view.setup(canvas_layer)
+	# D7-R1 Debug 诊断链路：Runtime 只读采样器 + Debug-only 控制台（F3 开关）；仅 Debug 构造，Release 零接线。
+	# 采样器/控制台均只读（不推进 Tick、不改 RunState/emission/cooldown）；写盘仅控制台显式按钮手动触发。
+	if OS.is_debug_build():
+		_runtime_snapshot_sampler = _RuntimeSnapshotSampler.new(
+			Callable(_level_runtime_controller, "get_runtime_diagnostics_snapshot"),
+			_run_state_controller,
+			_fixed_emitter,
+			_objective_controller,
+			_level_object_registry,
+			_inventory_controller,
+			_placement_controller
+		)
+		_debug_console_view = _DebugConsoleView.new(Callable(_runtime_snapshot_sampler, "sample"))
+		_debug_console_view.setup(canvas_layer)
 	if OS.is_debug_build():
 		# 采集网格采样格（含 Registry 完整性前置断言）与库存一致性只读快照，交由协调器按固定顺序执行七项自检并写摘要日志。
 		var sample_cells: Array[Vector2i] = _collect_grid_coordinate_sample_cells()

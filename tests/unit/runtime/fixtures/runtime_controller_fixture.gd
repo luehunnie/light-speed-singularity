@@ -169,6 +169,8 @@ class _FakeCooldownClock:
 class _Env:
 	var rsc: _RunStateController = null
 	var fixed_emitter: _FixedEmitter = null
+	## 关卡稳定对象索引（D7-R1 采样器测试只读引用；与 objective 同一实例）。
+	var registry: _LevelObjectRegistry = null
 	var light_world_query: _LightWorldQuery = null
 	## Ray 查询计数替身；仅当 make_env(observe_ray_queries=true) 时非 null，供测试直接断言 RayExecutionModule.execute 是否被调用。
 	var light_world_query_spy: _SpyLightWorldQuery = null
@@ -237,6 +239,7 @@ func make_env(
 		var cell: Vector2i = crystal_cell
 		var crystal: BasicCrystal = make_crystal(&"c001", cell)
 		registry.register_crystal(&"c001", cell, crystal)
+	env.registry = registry
 	env.objective_controller = _ObjectiveController.new(registry)
 	var level_query: _LevelWorldQuery = _LevelWorldQuery.new(
 		_MAP_BOUNDS, walls, emitter_cell, registry, env.occupancy,

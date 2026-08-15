@@ -15,7 +15,7 @@ const _ParticleRuntimeState: GDScript = preload(
 	"res://gameplay/particle/particle_runtime_state.gd"
 )
 
-const _GROUP_COUNT: int = 6
+const _GROUP_COUNT: int = 7
 
 var _failures: PackedStringArray = PackedStringArray()
 var _checks: int = 0
@@ -28,6 +28,7 @@ func _initialize() -> void:
 	_test_09_crystal_only_event()
 	_test_10_speed_mechanism_delta()
 	_test_11_executor_no_state_mutation()
+	_test_12_mirror_reflection_move()
 	_report()
 	quit(0 if _failures.is_empty() else 1)
 
@@ -145,6 +146,30 @@ func _test_11_executor_no_state_mutation() -> void:
 	_check(G, r.has_crystal == true, "has_crystal 应为 true。")
 	_check_snapshot_equals(G, before, _snapshot_state(s), "evaluate_step 后 state 应零变化")
 	_check(G, s.is_active() == true, "executor 不应 terminate state，active 仍 true。")
+
+
+## 12. 镜面反射 MOVE（D7-R5 GUI 验收修复）：next_cell 放 FakeReflectMechanism（SLASH）→ MOVE + entered=镜面格 +
+##     outgoing_direction=反射方向 + speed_delta=0；next_step_blocked 前瞻沿反射方向计算（反射后正上方为墙 → true）。
+func _test_12_mirror_reflection_move() -> void:
+	const G: String = "12_镜面反射MOVE"
+	var q: _Fake = _Fake.new()
+	var m = _Fake.FakeReflectMechanism.new()
+	m.slash = true
+	q.add_mechanism(Vector2i(1, 0), m)
+	q.add_wall(Vector2i(1, -1))  # 镜面格反射出射 UP 后的正下一格 → 前瞻应为 true
+	var ex = _new_executor()
+	var s: _ParticleRuntimeState = _ParticleRuntimeState.create_emitted(
+		1, 0, Vector2i(0, 0), Vector2i(1, 0), 0)
+	var r = ex.evaluate_step(s, q)
+	_check(G, r.outcome == _Executor.Outcome.MOVE, "镜面格 outcome 期望 MOVE（光粒进入镜面格并改向）。")
+	_check(G, r.entered_cell == Vector2i(1, 0), "镜面格 entered_cell 期望 (1,0)。")
+	_check(G, r.outgoing_direction == Vector2i(0, -1),
+		"SLASH 镜入射 RIGHT 出射期望 UP(0,-1)，实际 (%d,%d)。" % [r.outgoing_direction.x, r.outgoing_direction.y])
+	_check(G, r.speed_delta == 0, "镜面格 speed_delta 期望 0（改向不改速）。")
+	_check(G, r.next_step_blocked == true,
+		"反射方向前瞻：镜面格 + UP(1,-1) 为墙，next_step_blocked 期望 true，实际 %s。" % [str(r.next_step_blocked)])
+	_check(G, m.call_count == 1, "reflect_direction 应被调用 1 次，实际 %d。" % m.call_count)
+	_check(G, m.last_seen_direction == Vector2i(1, 0), "入射方向应原样传入镜面 (1,0)。")
 
 
 ## 拍摄 state 逻辑事实快照。

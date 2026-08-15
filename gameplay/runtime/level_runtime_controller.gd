@@ -45,6 +45,8 @@ const _EmitterFireCooldown: GDScript = preload("res://gameplay/mechanisms/emitte
 const _ParticleTickDriver: GDScript = preload("res://gameplay/runtime/particle_tick_driver.gd")
 # M4-E3 自然职责拆分：零副作用发射预检（拖拽/状态/0.5s cooldown/形态/方向 → immutable 快照）；LRC 只保留事务编排。
 const _FireRequestPreflight: GDScript = preload("res://gameplay/runtime/fire_request_preflight.gd")
+# D7-R1 Runtime 只读诊断出口：detached 运行期事实快照构造器（不含 Diagnostics 依赖；LRC 仅一条只读转发）。
+const _RuntimeDiagnosticsSnapshotBuilder: GDScript = preload("res://gameplay/runtime/runtime_diagnostics_snapshot_builder.gd")
 
 
 var _run_state_controller: _RunStateController
@@ -439,6 +441,25 @@ func get_particle_generation() -> int:
 ## gameplay Tick 真值仍为 scheduler._current_tick 整数递增，现实 0.1s 间隔只驱动其递增频率。
 func get_particle_tick() -> int:
 	return _particle_scheduler.get_current_tick()
+
+
+## 组装一份 detached 运行期事实快照（D7-R1 只读诊断；零副作用）。
+## [br]委派 RuntimeDiagnosticsSnapshotBuilder.build：读取本控制器私有事实（generation / 移动次数 / allow_form_switch）+
+##   registry / cooldown / scheduler / light_visual_controller 只读访问器，返回纯值 Dictionary 供 Diagnostics 侧采样。
+## [br]边界：本方法只读——不推进 Tick、不 finish emission、不重置 / 消费 cooldown、不动视觉、不改 RunState；
+##   返回 Dictionary 与内部真值完全 detached，调用方修改零影响。
+func get_runtime_diagnostics_snapshot() -> Dictionary:
+	return _RuntimeDiagnosticsSnapshotBuilder.build(
+		_active_emission_registry,
+		_emitter_fire_cooldown,
+		_particle_scheduler,
+		_light_visual_controller,
+		_runtime_generation,
+		_runtime_moves_used,
+		get_runtime_moves_remaining(),
+		_runtime_move_limit,
+		_allow_form_switch
+	)
 
 
 ## 按 runtime_id 取活动光粒的只读快照（B3b-1.1 只读边界收口；B3b-2.1 MF-3 起直接转发调度器 detached snapshot；未登记或已移出返回 null）。

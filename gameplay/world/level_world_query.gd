@@ -136,3 +136,24 @@ func is_valid_placement_cell(
 	if is_occupied_by_other(cell, ignored_id):
 		return false
 	return true
+
+
+## 判断一组格是否整体为合法多格放置集（D7-R4 多格最小路径）：非空、格间无重复，且每格均满足 is_valid_placement_cell
+## （Terrain 内 → LegalArea 内 → 非 Wall → 无固定对象 → 无动态占用），任一格非法则整体非法。
+## [br]ignored_id 为移动/旋转中的多格机关自身 ID，允许其忽略自身既有占用格（旋转保持锚点时锚点格仍被自身占用）。
+## [br]不解释 anchor/方向/footprint 语义：绝对格列表由调用方经对象自身 get_occupied_cells(anchor, orientation) 展开；
+## 单格机关可继续使用 is_valid_placement_cell，长度 1 的格集与其等价。
+func is_valid_placement_cell_set(
+		cells: Array[Vector2i],
+		ignored_id: StringName = &""
+) -> bool:
+	if cells.is_empty():
+		return false
+	var seen: Dictionary = {}
+	for cell: Vector2i in cells:
+		if seen.has(cell):
+			return false
+		seen[cell] = true
+		if not is_valid_placement_cell(cell, ignored_id):
+			return false
+	return true

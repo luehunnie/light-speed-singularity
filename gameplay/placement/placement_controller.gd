@@ -261,6 +261,17 @@ func _is_valid_placement_cell(cell: Vector2i, ignored_id: StringName) -> bool:
 	return _level_world_query.is_valid_placement_cell(cell, ignored_id)
 
 
+## 多格放置合法性格点（D7-R4 多格最小路径）：非空、格间无重复、每格均满足单格合法性判定；
+## 委托 LevelWorldQuery.is_valid_placement_cell_set，ignored_id 允许移动/旋转中的多格机关忽略自身既有占用。
+## [br]只做合法性判断：不登记占用、不创建节点、不扣库存；未来多格机关流程在合法性通过后
+## 经 OccupancyRegistry.register_cells / move_cells 原子提交占用事实。LevelWorldQuery 未注入时返回 false。
+func is_valid_placement_cells(cells: Array[Vector2i], ignored_id: StringName = &"") -> bool:
+	if _level_world_query == null:
+		push_error("PlacementController: LevelWorldQuery 未注入，无法校验多格放置合法性。")
+		return false
+	return _level_world_query.is_valid_placement_cell_set(cells, ignored_id)
+
+
 ## 安全销毁节点；只对有效 Node 调 queue_free，非节点或已失效安全忽略。
 func _destroy_token(token: Variant) -> void:
 	if is_instance_valid(token) and token is Node:

@@ -45,7 +45,7 @@ enum TerminationReason {
 ## 单步求值纯结果（只读数据载体）。
 ## [br]outcome：MOVE / TERMINATE。
 ## [br]entered_cell：MOVE 时为成功进入的 next_cell；TERMINATE 时为被阻挡的 next_cell（INACTIVE 时为原 cell），仅 MOVE 时是“已进入”事实。
-## [br]outgoing_direction：MOVE 时为 Adapter 给出的离开方向（本批恒为入射方向）；TERMINATE 时为入射方向。
+## [br]outgoing_direction：MOVE 时为 Adapter 给出的离开方向（镜面机关按正式规则改向；其余机关为入射方向）；TERMINATE 时为入射方向。
 ## [br]speed_delta：MOVE 时为机关速度增量；TERMINATE 时为 0。
 ## [br]has_crystal：MOVE 时为是否踩到水晶（仅事件意义，不点亮）；TERMINATE 时为 false。
 ## [br]termination_reason：MOVE 时 NONE；TERMINATE 时为具体原因。
