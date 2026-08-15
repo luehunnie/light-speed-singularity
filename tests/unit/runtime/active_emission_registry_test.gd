@@ -12,7 +12,7 @@ extends SceneTree
 const _Registry: GDScript = preload("res://gameplay/runtime/active_emission_registry.gd")
 const _LightEmissionTypes: GDScript = preload("res://gameplay/light/light_emission_types.gd")
 
-const _GROUP_COUNT: int = 16
+const _GROUP_COUNT: int = 17
 
 var _failures: PackedStringArray = PackedStringArray()
 var _checks: int = 0
@@ -35,6 +35,7 @@ func _initialize() -> void:
 	_test_14_clear_clears_bidirectional_mapping()
 	_test_15_duplicate_bind_idempotent()
 	_test_16_cross_emission_rebind_rejected_zero_side_effect()
+	_test_17_readonly_emission_enumeration()
 	_report()
 	quit(0 if _failures.is_empty() else 1)
 
@@ -310,6 +311,29 @@ func _test_16_cross_emission_rebind_rejected_zero_side_effect() -> void:
 	_check(G, r.get_emission_runtime_count(eB) == 0, "unbind 201 后 B 的 forward count 0，无 stale。")
 	_check(G, r.find_emission_for_runtime(201) == 0, "unbind 后反向已删。")
 	_check(G, r.get_bound_runtime_count() == 0, "bound_runtime_count 期望 0。")
+
+
+## 17. D7-R1 只读枚举：get_active_emission_ids 按 allocate 顺序；get_emission_runtime_ids 返回独立副本；未登记/finish/clear 边界。
+func _test_17_readonly_emission_enumeration() -> void:
+	const G: String = "17_只读枚举访问器"
+	var r: _Registry = _Registry.new()
+	_check(G, r.get_active_emission_ids().is_empty(), "初始枚举应为空。")
+	_check(G, r.get_emission_runtime_ids(99).is_empty(), "未登记 emission 的 runtime 枚举应为空。")
+	var e1: int = r.allocate(2, _LightEmissionTypes.LightForm.RAY)
+	var e2: int = r.allocate(2, _LightEmissionTypes.LightForm.PARTICLE)
+	r.bind_particle_runtime(e2, 5)
+	r.bind_particle_runtime(e2, 6)
+	var ids: Array[int] = r.get_active_emission_ids()
+	_check(G, ids == [e1, e2], "枚举应按 allocate 顺序 [1,2]，实际 %s。" % str(ids))
+	var runtime_ids: Array[int] = r.get_emission_runtime_ids(e2)
+	_check(G, runtime_ids == [5, 6], "e2 runtime 枚举应为 [5,6]，实际 %s。" % str(runtime_ids))
+	runtime_ids.append(7)
+	_check(G, r.get_emission_runtime_ids(e2).size() == 2, "修改返回副本不得影响 registry 内部 runtime_ids。")
+	r.mark_finished(e2)
+	_check(G, r.get_emission_runtime_ids(e2).is_empty(), "finish 后该 emission runtime 枚举应为空。")
+	_check(G, r.get_active_emission_ids() == [e1], "finish 后枚举只剩 e1。")
+	r.clear()
+	_check(G, r.get_active_emission_ids().is_empty(), "clear 后枚举应为空。")
 
 
 # ===== 断言与报告 =====

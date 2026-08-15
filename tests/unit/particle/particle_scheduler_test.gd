@@ -21,7 +21,7 @@ const _Fake: GDScript = preload(
 	"res://tests/unit/particle/fixtures/fake_particle_world_query.gd"
 )
 
-const _GROUP_COUNT: int = 19
+const _GROUP_COUNT: int = 20
 
 var _failures: PackedStringArray = PackedStringArray()
 var _checks: int = 0
@@ -47,6 +47,7 @@ func _initialize() -> void:
 	_test_28_generation_external_ownership()
 	_test_29_snapshot_contract()
 	_test_30_multi_emit_same_generation_coexist()
+	_test_31_mirror_reflection_applied_to_state()
 	_report()
 	quit(0 if _failures.is_empty() else 1)
 
@@ -499,6 +500,39 @@ func _test_30_multi_emit_same_generation_coexist() -> void:
 	_check(G, s.begin_generation(1), "begin_generation(1) 应成功。")
 	_check(G, s.get_active_count() == 0, "begin_generation 后两颗全清空，active 期望 0。")
 	_check(G, s.get_particle_state_snapshot(0) == null and s.get_particle_state_snapshot(1) == null, "begin_generation 后两颗 snapshot 均应为 null。")
+
+
+## 31. 镜面反射端到端（D7-R5 GUI 验收修复）：SLASH 镜在 (1,0)，光粒 (0,0) RIGHT 发射——
+##     tick4 MOVE 进镜面格且 BatchEvent.direction=UP(0,-1)（反射方向，非入射）；state.direction 同步改向；
+##     反射后 next_move_tick 按出射方向 Tick 计算（4+4=8）；tick8 光粒进入 (1,-1)（沿反射方向传播，非穿镜直行）。
+func _test_31_mirror_reflection_applied_to_state() -> void:
+	const G: String = "31_镜面反射端到端"
+	var q: _Fake = _Fake.new()
+	var m = q.FakeReflectMechanism.new()
+	m.slash = true
+	q.add_mechanism(Vector2i(1, 0), m)
+	var s: _Scheduler = _Scheduler.new(q)
+	s.begin_generation(0)
+	var rid: int = s.emit_particle(Vector2i(0, 0), Vector2i(1, 0))
+	_check(G, rid >= 0, "emit 应成功。")
+	var events_mirror = _advance_to_tick(s, s.get_current_generation(), 4)
+	_check(G, events_mirror.size() == 1, "tick4 应恰有一个 MOVE 事件，实际 %d。" % events_mirror.size())
+	if not events_mirror.is_empty():
+		_check(G, events_mirror[0].entered_cell == Vector2i(1, 0), "tick4 entered_cell 期望镜面格 (1,0)。")
+		_check(G, events_mirror[0].direction == Vector2i(0, -1),
+			"镜面格 MOVE direction 期望反射方向 UP(0,-1)，实际 (%d,%d)。" % [events_mirror[0].direction.x, events_mirror[0].direction.y])
+		_check(G, events_mirror[0].next_move_tick == 8, "反射后 next_move_tick 期望 4+4=8（出射正交 STANDARD），实际 %d。" % events_mirror[0].next_move_tick)
+	var st = s.get_particle_state_snapshot(rid)
+	_check(G, st != null and st["direction"] == Vector2i(0, -1), "state.direction 应已改向 UP(0,-1)。")
+	_check(G, st != null and st["cell"] == Vector2i(1, 0), "state.cell 期望镜面格 (1,0)。")
+	# 沿反射方向继续传播：tick8 进入 (1,-1)（镜面格上方），而非穿镜直行 (2,0)。
+	var events_after = _advance_to_tick(s, s.get_current_generation(), 8)
+	_check(G, events_after.size() == 1, "tick8 应恰有一个 MOVE 事件，实际 %d。" % events_after.size())
+	if not events_after.is_empty():
+		_check(G, events_after[0].entered_cell == Vector2i(1, -1),
+			"反射后下一步 entered_cell 期望 (1,-1)（沿 UP 传播），实际 (%d,%d)。" % [events_after[0].entered_cell.x, events_after[0].entered_cell.y])
+	st = s.get_particle_state_snapshot(rid)
+	_check(G, st != null and st["cell"] == Vector2i(1, -1), "最终 state.cell 期望 (1,-1)。")
 
 
 ## 单项断言。

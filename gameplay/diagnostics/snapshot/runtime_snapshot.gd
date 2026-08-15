@@ -16,9 +16,9 @@ extends RefCounted
 ## RuntimeLogger 接线、SelfCheckRunner、DiagnosticsController 与核心循环接线仍属后续批次。
 ##
 ## 主要依赖：
-## 依赖 RuntimeSnapshotData（批次 3A 数据契约）、CrystalSnapshotState（批次 3A）、
-## SelfCheckResult（批次 1B）、RuntimeSnapshotJsonResult（批次 3B 序列化结果契约）、
-## RuntimeSnapshotWriteResult（本批次落盘结果契约），以及 Godot 内建 JSON 序列化与 FileAccess/DirAccess 接口。
+## 依赖 RuntimeSnapshotData（D7-R1 Snapshot v1 升级后数据契约）、CrystalSnapshotState、
+## EmissionSnapshotState、ParticleSnapshotState、RuntimeSnapshotJsonResult（序列化结果契约）、
+## RuntimeSnapshotWriteResult（落盘结果契约），以及 Godot 内建 JSON 序列化与 FileAccess/DirAccess 接口。
 ## 不依赖场景树、节点、Time、RuntimeLogger 或玩法对象；save() 仅通过 Godot 内建 FileAccess/DirAccess
 ## 写入 user://diagnostics/snapshots 目录树。
 ##
@@ -34,8 +34,8 @@ extends RefCounted
 ##   不抛异常、不修改 snapshot 与玩法状态；落盘失败只以中文错误返回，不递归记录自身错误。
 ## - save() 成功落盘后调用 _converge_snapshot_retention 收敛历史快照数量与容量；清理只 push_warning，
 ##   不把已成功的 save() 改成失败，不删除刚保存的当前文件，不删除无关文件，不接入 RuntimeLogger。
-## - StringName 转普通 String、Vector2i 转 {"x":int,"y":int}、Rect2i 拆为 position/size、
-##   PackedStringArray 转普通字符串数组，确保输出树中不含 Godot 专有或 RefCounted 对象。
+## - StringName 转普通 String、Vector2i 转 {"x":int,"y":int}、
+##   确保输出树中不含 Godot 专有或 RefCounted 对象。
 ## - JSON 文本由 JSON.stringify 生成，不手工拼接，转义由序列化器负责。
 ## - 同一份快照重复序列化得到相同 JSON 文本：不引入当前时间或随机值，
 ##   数组顺序保持调用方快照中的原顺序。
@@ -49,6 +49,7 @@ extends RefCounted
 
 ## 快照 JSON 结构版本号。
 ## 当前冻结为 1；后续结构变更时递增，以便旧消费者识别版本。
+## D7-R1 说明：接线前的占位契约从未在生产落盘（无任何 save() 调用方），v1 即首个真实采样 schema。
 const SCHEMA_VERSION: int = 1
 
 
@@ -112,17 +113,27 @@ static func _build_root(snapshot: RuntimeSnapshotData) -> Dictionary[String, Var
     root["schema_version"] = SCHEMA_VERSION
     root["timestamp_unix_msec"] = snapshot.timestamp_unix_msec
     # StringName 必须转普通 String，否则 JSON 树中会残留 StringName 无法稳定序列化。
+    # unavailable 政策：level_id 无正式来源时为空字符串，不得用 Node.name 顶替。
+    root["level_id"] = String(snapshot.level_id)
     root["run_state"] = String(snapshot.run_state)
     root["is_completed"] = snapshot.is_completed
-    root["emitter"] = _emitter_to_json(snapshot.emitter_cell, snapshot.emitter_direction)
-    root["map_bounds"] = _rect2i_to_json(snapshot.map_bounds)
-    root["wall_cells"] = _vector2i_list_to_json(snapshot.wall_cells)
-    root["light_path_count"] = snapshot.light_path_count
-    root["inventory_remaining"] = snapshot.inventory_remaining
-    root["placed_mechanism_count"] = snapshot.placed_mechanism_count
+    root["runtime_generation"] = snapshot.runtime_generation
     root["runtime_move_count"] = snapshot.runtime_move_count
+    root["runtime_moves_remaining"] = snapshot.runtime_moves_remaining
+    root["runtime_move_limit"] = snapshot.runtime_move_limit
+    root["emitter"] = _emitter_to_json(snapshot)
+    root["fire_cooldown_ready"] = snapshot.fire_cooldown_ready
+    root["active_emission_count"] = snapshot.active_emission_count
+    root["emissions"] = _emissions_to_json(snapshot.emission_states)
+    root["particles"] = _particles_to_json(snapshot.particle_states)
+    root["particle_tick"] = snapshot.particle_tick
+    root["particle_active_count"] = snapshot.particle_active_count
+    root["ray_segment_count"] = snapshot.ray_segment_count
+    root["inventory_remaining"] = snapshot.inventory_remaining
+    root["inventory_total"] = snapshot.inventory_total
+    root["placed_mechanism_count"] = snapshot.placed_mechanism_count
     root["crystals"] = _crystals_to_json(snapshot.crystal_states)
-    root["occupancy_consistency"] = _self_check_to_json(snapshot.occupancy_consistency)
+    root["snapshot_duration_usec"] = snapshot.snapshot_duration_usec
     return root
 
 
@@ -131,11 +142,54 @@ static func _build_root(snapshot: RuntimeSnapshotData) -> Dictionary[String, Var
 ## [br]p_direction 为发射器朝向向量。
 ## [br]返回 Dictionary[String, Variant]：含 cell 与 direction 两个 {"x":int,"y":int} 子对象。
 ## [br]本函数无副作用：不修改输入，不访问文件或场景树。
-static func _emitter_to_json(p_cell: Vector2i, p_direction: Vector2i) -> Dictionary[String, Variant]:
+static func _emitter_to_json(snapshot: RuntimeSnapshotData) -> Dictionary[String, Variant]:
     var emitter: Dictionary[String, Variant] = {}
-    emitter["cell"] = _vector2i_to_json(p_cell)
-    emitter["direction"] = _vector2i_to_json(p_direction)
+    emitter["cell"] = _vector2i_to_json(snapshot.emitter_cell)
+    emitter["direction"] = _vector2i_to_json(snapshot.emitter_direction)
+    emitter["form"] = snapshot.emitter_form
+    emitter["allow_form_switch"] = snapshot.allow_form_switch
     return emitter
+
+
+## 将活动 emission 快照列表转换为 JSON 兼容数组，保持原顺序。
+## [br]返回 Array[Variant]：每个元素含 emission_id、generation、form、runtime_ids 四字段，顺序与输入一致。
+## [br]本函数无副作用：只读取输入，不修改原数组或 emission 对象。
+static func _emissions_to_json(p_emissions: Array) -> Array[Variant]:
+    var out: Array[Variant] = []
+    for index: int in range(p_emissions.size()):
+        var emission: Variant = p_emissions[index]
+        var record: Dictionary[String, Variant] = {}
+        record["emission_id"] = emission.emission_id
+        record["generation"] = emission.generation
+        record["form"] = emission.form
+        var runtime_ids: Array[Variant] = []
+        for runtime_id: int in emission.runtime_ids:
+            runtime_ids.append(runtime_id)
+        record["runtime_ids"] = runtime_ids
+        out.append(record)
+    return out
+
+
+## 将活动光粒快照列表转换为 JSON 兼容数组，保持原顺序。
+## [br]返回 Array[Variant]：每个元素含 runtime_id、emission_id、generation、cell、direction、speed_tier、
+## step_started_tick、next_move_tick、active 九字段；Vector2i 转为 {"x":int,"y":int}。
+## [br]本函数无副作用：只读取输入，不修改原数组或光粒对象。
+static func _particles_to_json(p_particles: Array) -> Array[Variant]:
+    var out: Array[Variant] = []
+    for index: int in range(p_particles.size()):
+        var particle: Variant = p_particles[index]
+        var record: Dictionary[String, Variant] = {}
+        record["runtime_id"] = particle.runtime_id
+        record["emission_id"] = particle.emission_id
+        record["generation"] = particle.generation
+        record["cell"] = _vector2i_to_json(particle.cell)
+        record["direction"] = _vector2i_to_json(particle.direction)
+        record["speed_tier"] = particle.speed_tier
+        record["step_started_tick"] = particle.step_started_tick
+        record["next_move_tick"] = particle.next_move_tick
+        record["active"] = particle.active
+        out.append(record)
+    return out
 
 
 ## 将 Vector2i 转换为 JSON 兼容对象。
@@ -146,30 +200,6 @@ static func _vector2i_to_json(p_value: Vector2i) -> Dictionary[String, Variant]:
     var out: Dictionary[String, Variant] = {}
     out["x"] = p_value.x
     out["y"] = p_value.y
-    return out
-
-
-## 将 Rect2i 拆分为 JSON 兼容对象。
-## [br]p_value 为待转换的整数矩形。
-## [br]返回 Dictionary[String, Variant]：含 position 与 size 两个 {"x":int,"y":int} 子对象，
-## [br]避免 JSON 树中残留 Rect2i。
-## [br]本函数无副作用：不修改输入。
-static func _rect2i_to_json(p_value: Rect2i) -> Dictionary[String, Variant]:
-    var out: Dictionary[String, Variant] = {}
-    out["position"] = _vector2i_to_json(p_value.position)
-    out["size"] = _vector2i_to_json(p_value.size)
-    return out
-
-
-## 将 Vector2i 列表转换为 JSON 兼容数组，保持原顺序。
-## [br]p_values 为待转换的墙体格列表。
-## [br]返回 Array[Variant]：每个元素为 {"x":int,"y":int}，顺序与输入一致。
-## [br]本函数无副作用：只读取输入，不修改原数组。
-static func _vector2i_list_to_json(p_values: Array[Vector2i]) -> Array[Variant]:
-    var out: Array[Variant] = []
-    for index: int in range(p_values.size()):
-        # 保持调用方快照中的原顺序，确保重复序列化文本一致。
-        out.append(_vector2i_to_json(p_values[index]))
     return out
 
 
@@ -196,32 +226,6 @@ static func _crystal_to_json(p_crystal: CrystalSnapshotState) -> Dictionary[Stri
     out["cell"] = _vector2i_to_json(p_crystal.cell)
     out["is_activated"] = p_crystal.is_activated
     out["state_label"] = String(p_crystal.state_label)
-    return out
-
-
-## 将占用一致性自检结果转换为 JSON 兼容对象。
-## [br]p_result 为待转换的自检结果（已通过校验，非空）。
-## [br]返回 Dictionary[String, Variant]：含 check_id、passed、summary、details、duration_usec 五个字段，
-## [br]StringName 转 String，PackedStringArray 转普通字符串数组。
-## [br]本函数无副作用：只读取输入，不修改原对象。
-static func _self_check_to_json(p_result: SelfCheckResult) -> Dictionary[String, Variant]:
-    var out: Dictionary[String, Variant] = {}
-    out["check_id"] = String(p_result.check_id)
-    out["passed"] = p_result.passed
-    out["summary"] = p_result.summary
-    out["details"] = _packed_strings_to_json(p_result.details)
-    out["duration_usec"] = p_result.duration_usec
-    return out
-
-
-## 将 PackedStringArray 转换为 JSON 兼容字符串数组，保持原顺序。
-## [br]p_values 为待转换的字符串数组。
-## [br]返回 Array[Variant]：元素为普通 String，顺序与输入一致。
-## [br]本函数无副作用：只读取输入，不修改原数组。
-static func _packed_strings_to_json(p_values: PackedStringArray) -> Array[Variant]:
-    var out: Array[Variant] = []
-    for index: int in range(p_values.size()):
-        out.append(p_values[index])
     return out
 
 

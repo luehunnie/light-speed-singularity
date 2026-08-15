@@ -2,19 +2,22 @@ class_name OccupancyRegistry
 extends RefCounted
 
 ## 核心闭环原型轻量占用表。
-## 职责：登记、查询和清除当前关卡中的单格机关占用格。
+## 职责：登记、查询和清除当前关卡中的机关占用格（单格与最小多格契约均支持，D7-R4）。
 ## 位置：由核心闭环原型关卡控制器持有，为后续镜面、拖拽合法性和运行期移动
-## 提供统一的“格子—机关”事实来源；当前核心闭环原型只做单格占用的基础读写。
+## 提供统一的“格子—机关”事实来源。
 ## 依赖：Vector2i 格子坐标与 StringName 机关唯一 ID。
-## 不负责：拖拽输入、光传播反射、通关判断、视觉动画、多格机关、
-## 地图边界校验（边界由关卡控制器在登记前把关）、Tick 批次提交。
+## 多格边界（D7-R4 最小通用契约）：只按“机关 ID + 绝对格列表”登记事实，不解释
+## anchor/方向/footprint 语义（由调用方经对象自身 get_occupied_cells(anchor, orientation)
+## 展开）；register_cells/move_cells 为原子多格提交，任一冲突整体拒绝、不写任何数据。
+## 不负责：拖拽输入、光传播反射、通关判断、视觉动画、地图边界校验
+## （边界由关卡控制器在登记前把关）、Tick 批次提交。
 
 
 ## 格子坐标 → 占用该格的机关 ID；未登记的格子不存在于表中。
 ## 与 occupied_cells_by_id 互为反向索引，两者必须始终同步。
 var mechanism_at: Dictionary[Vector2i, StringName] = {}
 
-## 机关 ID → 该机关占用的格子列表（单格机关长度恒为 1）。
+## 机关 ID → 该机关占用的格子列表（单格机关长度 1，多格机关长度 ≥ 1）。
 ## 与 mechanism_at 互为反向索引；任一方变更都必须同步另一方。
 ## 注：Godot 4.6 不支持嵌套类型集合，故值类型用 Array，实际只存 Array[Vector2i]。
 var occupied_cells_by_id: Dictionary[StringName, Array] = {}
@@ -92,6 +95,111 @@ func move_single_cell(mechanism_id: StringName, source_cell: Vector2i, target_ce
 	mechanism_at.erase(source_cell)
 	mechanism_at[target_cell] = mechanism_id
 	cells[0] = target_cell
+	return true
+
+
+## 多格机关占用原子登记（D7-R4 最小通用契约）：只按“机关 ID + 绝对格列表”登记事实，不解释 anchor/方向/footprint
+## （由调用方经对象自身 get_occupied_cells(anchor, orientation) 展开为绝对格列表后传入）。
+## [br]cells 必须非空且内部无重复格；单格机关可继续使用 register_single_cell，列表长度 1 的 register_cells 与其等价。
+## [br]空 ID / 空列表 / 列表内重复格属非法输入，push_error 并返回 false；
+## 任一格已被其他机关占用、或该 ID 已登记（单格或多格）返回 false 且不写任何数据（整体原子拒绝，无半写入）。
+## [br]成功时同时更新 mechanism_at 与 occupied_cells_by_id，保持双向一致。
+func register_cells(mechanism_id: StringName, cells: Array[Vector2i]) -> bool:
+	# 先做全部合法性检查，确认无冲突后才动数据，避免半写入。
+	if mechanism_id == &"":
+		push_error("OccupancyRegistry: 多格登记机关 ID 不能为空。")
+		return false
+	if cells.is_empty():
+		push_error("OccupancyRegistry: 多格登记格列表不能为空。")
+		return false
+	if _has_duplicate_cells(cells):
+		push_error("OccupancyRegistry: 多格登记格列表存在重复格。")
+		return false
+	# 同一机关未清理旧占用就再次登记 → 拒绝，保护原占用不被破坏。
+	if occupied_cells_by_id.has(mechanism_id):
+		return false
+	# 任一格已被其他机关占用 → 拒绝，不覆盖既有占用。
+	for cell: Vector2i in cells:
+		if mechanism_at.has(cell):
+			return false
+
+	# 检查全部通过，开始原子更新：先逐格写格子→ID，再写 ID→格子列表。
+	for cell: Vector2i in cells:
+		mechanism_at[cell] = mechanism_id
+	# 存入副本，避免调用方后续修改原数组影响内部事实。
+	occupied_cells_by_id[mechanism_id] = cells.duplicate()
+	return true
+
+
+## 多格机关占用原子迁移（D7-R4 最小通用契约）：支持平移与旋转，源/目标允许部分重叠
+## （旋转保持锚点时锚点格同属源与目标，视为自身占用不构成冲突）。
+## [br]source_cells 必须与该机关当前占用集合完全一致（顺序无关）；target_cells 必须非空、无重复，
+## 且不得与 source_cells 为同一集合（无变化迁移拒绝，与 move_single_cell 同格拒绝语义一致）；
+## 任一 target 格被其他机关占用即拒绝。
+## [br]任一校验失败返回 false 且内部事实完全不变（整体原子拒绝）；全部通过后一次性更新正反向索引。
+func move_cells(
+		mechanism_id: StringName,
+		source_cells: Array[Vector2i],
+		target_cells: Array[Vector2i]
+) -> bool:
+	# 校验阶段：全部通过前不触碰任何数据，杜绝半写入。
+	if mechanism_id == &"":
+		push_error("OccupancyRegistry: 多格原子移动机关 ID 不能为空。")
+		return false
+	if not occupied_cells_by_id.has(mechanism_id):
+		push_error("OccupancyRegistry: 多格原子移动源机关未登记：%s" % [mechanism_id])
+		return false
+	if source_cells.is_empty() or target_cells.is_empty():
+		push_error("OccupancyRegistry: 多格原子移动源/目标格列表不能为空。")
+		return false
+	if _has_duplicate_cells(source_cells) or _has_duplicate_cells(target_cells):
+		push_error("OccupancyRegistry: 多格原子移动源/目标格列表存在重复格。")
+		return false
+	var current_cells: Array[Vector2i] = occupied_cells_by_id[mechanism_id]
+	if not _is_same_cell_set(current_cells, source_cells):
+		push_error("OccupancyRegistry: 源格列表与机关 %s 当前占用不一致。" % [mechanism_id])
+		return false
+	for cell: Vector2i in source_cells:
+		if mechanism_at.get(cell, &"") != mechanism_id:
+			push_error("OccupancyRegistry: 源格正向索引与机关不一致：%s。" % [mechanism_id])
+			return false
+	if _is_same_cell_set(source_cells, target_cells):
+		push_error("OccupancyRegistry: 多格原子移动目标格集合与源格集合相同。")
+		return false
+	# 目标格占用检查：占用者为其他机关 → 冲突拒绝；占用者为本机关则必属 source（集合一致性已保证），
+	# 先整体注销再整体写入即可天然兼容旋转重叠格，无需特判。
+	for cell: Vector2i in target_cells:
+		var owner_id: StringName = mechanism_at.get(cell, &"")
+		if owner_id != &"" and owner_id != mechanism_id:
+			push_error("OccupancyRegistry: 目标格已被机关 %s 占用。" % [owner_id])
+			return false
+
+	# 全部校验通过，一次性原子更新正反向索引。
+	for cell: Vector2i in source_cells:
+		mechanism_at.erase(cell)
+	for cell: Vector2i in target_cells:
+		mechanism_at[cell] = mechanism_id
+	occupied_cells_by_id[mechanism_id] = target_cells.duplicate()
+	return true
+
+
+## 判断格列表内是否存在重复格（私有纯判断，不修改输入）。
+func _has_duplicate_cells(cells: Array[Vector2i]) -> bool:
+	var seen: Dictionary = {}
+	for cell: Vector2i in cells:
+		if seen.has(cell):
+			return true
+		seen[cell] = true
+	return false
+
+
+## 判断两个格列表是否为同一集合（顺序无关、大小相等、元素互相包含；私有纯判断，不修改输入）。
+func _is_same_cell_set(a: Array[Vector2i], b: Array[Vector2i]) -> bool:
+	if a.size() != b.size():
+		return false
+	for cell: Vector2i in a:
+		if not b.has(cell):
+			return false
 	return true
 
 

@@ -75,6 +75,58 @@ func show_step(emission_id: int, generation: int, cell: Vector2i, incoming_direc
 	return true
 
 
+## 为指定 emission 的反射格创建两段半光束视觉（D7-R5 反射格视觉修复）。
+## [br]镜面格（本格进入方向与离开方向不同）不再画贯穿整格的入射段——那会使光束视觉上穿过镜面格远端，
+##   且与下一格全段之间留半格断口；改为两段半光束在同一格中心拼出拐角：
+##   入射半段（指向 -incoming_direction，覆盖入射边→格中心）+ 出射半段（指向 outgoing_direction，覆盖格中心→出射边）。
+## [br]emission_id / generation 语义与 show_step 相同（per-emission ownership；generation 仅作 version metadata 原样存储）。
+## [br]cell 为反射格；incoming_direction 为进入该格方向；outgoing_direction 为离开该格方向（均八方向）。
+## [br]返回 true 表示两段均已创建并记录；任一实例化失败 push_error 并返回 false（已创建的一段仍归属本 emission，由 clear_* 统一清理）。
+## [br]边界：本函数只创建视觉，不判断 cell 是否真有镜面（改向判定由调用方据传播结果做出）；不做去重；不清其它 emission 视觉。
+func show_reflection_step(
+		emission_id: int,
+		generation: int,
+		cell: Vector2i,
+		incoming_direction: Vector2i,
+		outgoing_direction: Vector2i
+) -> bool:
+	var created: bool = true
+	# 入射半段：指向 -incoming（半段几何从格中心画到入射边），与出射半段在格中心相接。
+	created = _append_half_segment(
+		emission_id, generation, cell, Vector2i(
+			-incoming_direction.x, -incoming_direction.y)) and created
+	# 出射半段：指向 outgoing（从格中心画到出射边），与下一格全段在共享边中点相接。
+	created = _append_half_segment(
+		emission_id, generation, cell, outgoing_direction) and created
+	return created
+
+
+## 实例化一段半光束并登记到指定 emission 桶（show_reflection_step 内部共享实现）。
+## [br]half_direction 为半段指向（见 LightSegmentView.set_direction_half）；返回是否创建成功。
+func _append_half_segment(
+		emission_id: int,
+		generation: int,
+		cell: Vector2i,
+		half_direction: Vector2i
+) -> bool:
+	var view: _LightSegmentViewScript = _LightSegmentViewScene.instantiate()
+	if not is_instance_valid(view):
+		push_error("LightVisualController: 反射格半段实例化失败 @ emission=%d %s" % [emission_id, cell])
+		return false
+	# 冻结算子顺序（与 show_step 一致）：实例化 → profile → 半段方向 → 颜色 → 定位 → add_child。
+	view.set_profile(_profile)
+	view.set_direction_half(half_direction)
+	view.set_light_color(_light_color)
+	view.position = _GridCoordinateRules.cell_to_world(cell)
+	_visual_parent.add_child(view)
+	if not _emission_segments.has(emission_id):
+		_emission_segments[emission_id] = []
+		_emission_generation[emission_id] = generation
+	_emission_segments[emission_id].append(view)
+	_total_segment_count += 1
+	return true
+
+
 ## 清除指定 emission 的全部光路视觉节点（M4-E2 per-emission ownership）；某 Ray finish 只清自身，不影响其它 active emission。
 ## [br]emission_id 为 allocate 返回值；未登记 / 已清的 emission 安全 no-op（emission_id 全局唯一跨 R 不复用，故 clear_emission(old_id) 在新 epoch 天然 no-op）。
 ## [br]副作用：free 该 emission 全部片段、erase 本桶与 generation metadata、total_segment_count 扣减。

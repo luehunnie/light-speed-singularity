@@ -30,6 +30,7 @@ func _initialize() -> void:
 	_test_07_artwork_profile_overrides_fallback()
 	_test_08_diagonal_length_corner_to_corner()
 	_test_09_source_does_not_touch_ray_gameplay()
+	_test_10_half_beam_from_center_geometry()
 	_report()
 	quit(0 if _failures.is_empty() else 1)
 
@@ -198,6 +199,43 @@ func _test_09_source_does_not_touch_ray_gameplay() -> void:
 
 # ===== 断言与报告 =====
 
+
+## 10.（D7-R5 反射格拐角）半段光束几何：set_direction_half 后光束从格中心（节点原点）画到 direction 指向的格边——
+##     正交半段长 CELL_SIZE/2=32、斜向半段长 CELL_SIZE*√2/2；厚度恒 16；rect 锚在格中心（offset_left=0、pivot=(0,8)）；
+##     rotation 仍 = Vector2(direction).angle()；随后 set_direction 恢复全段（_half_beam 复位，不再残留半段几何）。
+func _test_10_half_beam_from_center_geometry() -> void:
+	const NAME: String = "10_半段光束几何"
+	# 正交半段：长 CELL_SIZE/2、厚度 16、锚点在格中心。
+	var view: _ViewScript = _make_view()
+	view.set_direction_half(Vector2i.UP)
+	var pb: ColorRect = view.get_node_or_null("PlaceholderBlock")
+	var size: Vector2 = _placeholder_size(view)
+	_check(NAME, is_equal_approx(size.x, float(_GridMetrics.CELL_SIZE) / 2.0), "UP 半段长度期望 CELL_SIZE/2=32，实际 %f。" % [size.x])
+	_check(NAME, is_equal_approx(size.y, 16.0), "UP 半段厚度期望 16，实际 %f。" % [size.y])
+	_check(NAME, is_zero_approx(pb.offset_left), "半段 rect 应从格中心起（offset_left=0），实际 %f。" % [pb.offset_left])
+	_check(NAME, is_equal_approx(pb.pivot_offset.x, 0.0) and is_equal_approx(pb.pivot_offset.y, 8.0),
+		"半段 pivot 应位于格中心 (0,8)（rect 左上角为 (0,-8)），实际 %s。" % [str(pb.pivot_offset)])
+	_check(NAME, is_equal_approx(_placeholder_rotation(view), Vector2(Vector2i.UP).angle()), "UP 半段 rotation 期望 angle((0,-1))。")
+	view.free()
+	# 斜向半段：长 CELL_SIZE*√2/2（格中心到格角）。
+	for d: Vector2i in [Vector2i(1, -1), Vector2i(-1, 1)]:
+		var dview: _ViewScript = _make_view()
+		dview.set_direction_half(d)
+		var dsize: Vector2 = _placeholder_size(dview)
+		_check(NAME, is_equal_approx(dsize.x, float(_GridMetrics.CELL_SIZE) * sqrt(2.0) / 2.0),
+			"斜向 %s 半段长度期望 CELL_SIZE*√2/2≈%f，实际 %f（格中心到格角）。" % [str(d), float(_GridMetrics.CELL_SIZE) * sqrt(2.0) / 2.0, dsize.x])
+		_check(NAME, is_equal_approx(_placeholder_rotation(dview), Vector2(d).angle()), "斜向 %s 半段 rotation 期望 angle(%s)。" % [str(d), str(d)])
+		dview.free()
+	# 全段恢复：set_direction 后不再残留半段几何（对称 offsets、长度回到整格）。
+	var rview: _ViewScript = _make_view()
+	rview.set_direction_half(Vector2i.RIGHT)
+	rview.set_direction(Vector2i.RIGHT)
+	var rpb: ColorRect = rview.get_node_or_null("PlaceholderBlock")
+	var rsize: Vector2 = _placeholder_size(rview)
+	_check(NAME, is_equal_approx(rsize.x, float(_GridMetrics.CELL_SIZE)), "恢复全段后长度期望 CELL_SIZE=64，实际 %f。" % [rsize.x])
+	_check(NAME, is_equal_approx(rpb.offset_left, -32.0), "恢复全段后 offset_left 期望 -32（对称居中），实际 %f。" % [rpb.offset_left])
+	rview.free()
+
 ## 单项断言：累计计数，失败时追加“[组名] 原因”到失败列表。返回 ok 供调用方决定后续依赖断言。
 func _check(name: String, ok: bool, detail: String) -> bool:
 	_checks += 1
@@ -208,7 +246,7 @@ func _check(name: String, ok: bool, detail: String) -> bool:
 
 ## 输出测试摘要并退出。
 func _report() -> void:
-	var group_count: int = 9
+	var group_count: int = 10
 	var passed_checks: int = _checks - _failures.size()
 	print("==== LightSegmentView fallback 16px 光束几何专项测试摘要（D7-4 B4b-2）====")
 	print("测试组数：%d" % group_count)

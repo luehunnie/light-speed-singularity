@@ -15,7 +15,7 @@ const _ParticleRuntimeState: GDScript = preload(
 	"res://gameplay/particle/particle_runtime_state.gd"
 )
 
-const _GROUP_COUNT: int = 5
+const _GROUP_COUNT: int = 7
 
 var _failures: PackedStringArray = PackedStringArray()
 var _checks: int = 0
@@ -27,6 +27,7 @@ func _initialize() -> void:
 	_test_03_minus_one_modifier()
 	_test_04_direction_passed_to_mechanism()
 	_test_05_no_state_mutation()
+	_test_06_mirror_reflect_direction()
 	_report()
 	quit(0 if _failures.is_empty() else 1)
 
@@ -117,6 +118,45 @@ func _test_05_no_state_mutation() -> void:
 	var adapter_instance = _Adapter.new()
 	_check(G, not adapter_instance.has_method("apply_move"), "Adapter 不应暴露 apply_move。")
 	_check(G, not adapter_instance.has_method("terminate"), "Adapter 不应暴露 terminate。")
+
+
+## 6. 镜面反射（D7-R5 GUI 验收修复）：has_method("reflect_direction") 机关按正式规则改向、speed_delta=0；
+##    入射方向原样传入机关；反射返回 ZERO（非法入射哨兵）安全降级保持入射方向。
+func _test_06_mirror_reflect_direction() -> void:
+	const G: String = "06_镜面反射"
+	# SLASH "/" 镜：入射 RIGHT(1,0) → 出射 UP(0,-1)。
+	var m_slash = _Fake.FakeReflectMechanism.new()
+	m_slash.slash = true
+	var e_slash = _Adapter.adapt(m_slash, Vector2i(1, 0))
+	_check(G, e_slash.continue_motion == true, "镜面 continue_motion 期望 true。")
+	_check(G, e_slash.outgoing_direction == Vector2i(0, -1),
+		"SLASH 镜入射 RIGHT 出射期望 UP(0,-1)，实际 (%d,%d)。" % [e_slash.outgoing_direction.x, e_slash.outgoing_direction.y])
+	_check(G, e_slash.speed_delta == 0, "镜面 speed_delta 期望 0（改向不改速）。")
+	_check(G, m_slash.call_count == 1, "reflect_direction 应被调用 1 次，实际 %d。" % m_slash.call_count)
+	_check(G, m_slash.last_seen_direction == Vector2i(1, 0), "入射方向应原样传入镜面。")
+
+	# BACKSLASH "\" 镜：入射 RIGHT(1,0) → 出射 DOWN(0,1)。
+	var m_back = _Fake.FakeReflectMechanism.new()
+	m_back.slash = false
+	var e_back = _Adapter.adapt(m_back, Vector2i(1, 0))
+	_check(G, e_back.outgoing_direction == Vector2i(0, 1),
+		"BACKSLASH 镜入射 RIGHT 出射期望 DOWN(0,1)，实际 (%d,%d)。" % [e_back.outgoing_direction.x, e_back.outgoing_direction.y])
+
+	# 斜向入射：SLASH 镜入射 DOWN_RIGHT(1,1) → 出射 UP_LEFT(-1,-1)。
+	var e_diag = _Adapter.adapt(m_slash, Vector2i(1, 1))
+	_check(G, e_diag.outgoing_direction == Vector2i(-1, -1),
+		"SLASH 镜入射 DOWN_RIGHT 出射期望 UP_LEFT(-1,-1)，实际 (%d,%d)。" % [e_diag.outgoing_direction.x, e_diag.outgoing_direction.y])
+
+	# 非法入射哨兵（ZERO 反射）：安全降级保持入射方向，不猜测光学行为。
+	var m_zero = _Fake.FakeReflectMechanism.new()
+	m_zero.zero_on_any = true
+	var e_zero = _Adapter.adapt(m_zero, Vector2i(1, 0))
+	_check(G, e_zero.continue_motion == true, "ZERO 反射 continue_motion 期望 true（安全降级）。")
+	_check(G, e_zero.outgoing_direction == Vector2i(1, 0), "ZERO 反射 outgoing_direction 期望保持入射 (1,0)。")
+	_check(G, e_zero.speed_delta == 0, "ZERO 反射 speed_delta 期望 0。")
+
+	# 结构证明：FakeReflectMechanism 无 get_speed_modifier，镜面判定不依赖速度机关契约。
+	_check(G, not m_slash.has_method("get_speed_modifier"), "FakeReflectMechanism 不应暴露 get_speed_modifier（证明只认反射契约）。")
 
 
 ## 拍摄 state 逻辑事实快照。

@@ -1,251 +1,281 @@
 class_name RuntimeSnapshotData
 extends RefCounted
 
-## 运行期快照数据公共数据契约。
+## 运行期快照数据公共数据契约（D7-R1 Snapshot v1：升级到 M4 后 multi-emission Runtime 语义）。
 ##
 ## 职责：
-## 保存某一运行时刻的只读事实摘要（时间戳、运行状态、是否完成、发射器、地图边界、墙体格、
-## 光路数、库存、已放置机构数、运行期移动次数、水晶状态列表、占用一致性自检结果），
-## 并提供只读校验与独立深复制；供后续 RuntimeSnapshot 序列化为 JSON 快照使用。
+## 保存某一运行时刻的只读事实摘要（时间戳、level_id、运行状态、是否完成、runtime_generation、运行期移动次数、
+## cooldown 摘要、发射器 cell/direction/form/allow_form_switch、活动 emission 列表、活动光粒列表、Particle tick、
+## Ray 段数、库存与已放置机构摘要、水晶状态列表、采样耗时），并提供只读校验与独立深复制；
+## 供 RuntimeSnapshot 序列化为 JSON 快照使用。
 ##
 ## 在当前系统中的位置：
-## gameplay/diagnostics 下运行期快照数据层（批次 3A 只实现快照数据契约与校验）。
-## 本批不实现 runtime_snapshot.gd、JSON.stringify、FileAccess、user://diagnostics/snapshots/ 写入、
-## 轮转限制、RuntimeLogger 接线、SelfCheckRunner、DiagnosticsController，也不接入核心循环。
+## gameplay/diagnostics 下运行期快照数据层；由 RuntimeSnapshotSampler 只读采样构造（D7-R1 起接入真实 Runtime）。
 ##
 ## 主要依赖：
-## 依赖 CrystalSnapshotState（同批次水晶状态契约）与 SelfCheckResult（批次 1B 自检结果契约），
-## 以及 Godot 内建类型（int、StringName、bool、Vector2i、Rect2i、Array[Vector2i]、PackedStringArray）。
+## CrystalSnapshotState、EmissionSnapshotState、ParticleSnapshotState（同目录快照子契约）；
 ## 不依赖场景树、节点、核心循环私有变量、玩法对象或文件系统。
 ##
 ## 明确不负责：
-## 采集数据（数据由调用方主动提供）、序列化为 JSON、写入文件、轮转、判断关卡是否完成、
-## 修复水晶/库存/占用/移动次数、聚合日志。这些属于后续批次或调用方的职责。
+## 采集数据（由 RuntimeSnapshotSampler 负责）、序列化为 JSON、写入文件、轮转、判断关卡是否完成、
+## 修复水晶/库存/移动次数、聚合日志。
 ##
 ## 关键边界：
 ## - 本类只保存调用方主动提供的只读摘要：不接收 Node/Object 后反射字段、不遍历场景树、
-##   不直接读取核心循环私有变量、不使用 Dictionary 代替强类型契约、不使用 Variant 逃避已知类型。
-## - 构造时必须复制 wall_cells、深复制 crystal_states、复制 occupancy_consistency，
-##   不保存调用方的可变引用，避免后续修改原数组/原对象污染快照。
-## - validate() 一次返回全部中文错误，不提前返回、不修改数据、不 push_error、不抛异常、
-##   不修复状态、不访问文件系统。
-## - occupancy_consistency 复用现有 SelfCheckResult，但构造时复制其字段与 details，避免共享可变引用。
-## - 本数据契约不在内部判断关卡是否完成；is_completed 仅如实记录调用方提供的事实。
+##   不直接读取核心循环私有变量、不使用 Node.name / instance_id 冒充业务身份。
+## - level_id 无正式来源时必须为空（unavailable 政策），不得拿 Node.name 顶替。
+## - 构造时深复制 emission_states / particle_states / crystal_states，不保存调用方可变引用。
+## - validate() 一次返回全部中文错误，不提前返回、不修改数据、不 push_error、不抛异常。
 ## - 依据 Diagnostics 红线，本类不参与玩法决策，不读取业务私有字段。
+## - v1 schema 冻结字段见 RuntimeSnapshot._build_root；结构变更须递增 SCHEMA_VERSION。
 
 
-## 快照产生时刻的 Unix 毫秒时间戳。
-## 由上层调用方传入（通常来自 Time.get_ticks_msec 或系统时间），必须非负。
+# 光形态枚举唯一公共来源（preload 引用，用于 emitter_form 校验；不依赖任何运行期对象）。
+const _LightEmissionTypes: GDScript = preload("res://gameplay/light/light_emission_types.gd")
+
+
+## 快照产生时刻的 Unix 毫秒时间戳。必须非负。
 var timestamp_unix_msec: int
 
-## 快照对应运行状态，使用稳定 StringName，例如 &"EDITING" 或 &"RUNNING"。
-## 不得为空；用于在快照中标识采集时的运行状态。
+## 正式 level_id；当前无正式来源，恒为空（unavailable 政策），不得用 Node.name 顶替。
+var level_id: StringName
+
+## 快照对应运行状态，使用稳定 StringName（SETUP/READY_TO_FIRE/PULSE_ACTIVE/MOVE_WINDOW/COMPLETED）。不得为空。
 var run_state: StringName
 
-## 快照采集时关卡是否已完成。
-## 如实记录调用方提供的事实；本契约不在内部据此判断关卡完成，仅保存布尔值。
+## 快照采集时关卡是否已完成（ObjectiveController 事实）。仅如实记录，本契约不据此判断。
 var is_completed: bool
 
-## 发射器所在逻辑格坐标。
-## 允许任意 Vector2i；仅记录发射器位置事实。
-var emitter_cell: Vector2i
+## Runtime/reset epoch token（M4-E1 语义：仅 SETUP→READY 与 R 递增；同 epoch 多次发射共享同一值）。必须非负。
+var runtime_generation: int
 
-## 发射器朝向，使用 Vector2i 表示方向向量。
-## 不得为零向量；x/y 分量绝对值均不得超过 1（合法方向为四向或对角八向的单位向量）。
-var emitter_direction: Vector2i
-
-## 关卡地图边界，使用逻辑格坐标的整数矩形。
-## size.x 与 size.y 均必须大于 0；仅记录边界事实。
-var map_bounds: Rect2i
-
-## 墙体所在逻辑格列表。
-## 构造时被复制，调用方之后修改原数组不影响本快照；元素为 Vector2i 值语义，无需逐项深复制。
-var wall_cells: Array[Vector2i]
-
-## 快照采集时光路数量，必须非负。
-## 仅记录事实，不参与光传播判定。
-var light_path_count: int
-
-## 快照采集时剩余库存数量，必须非负。
-## 仅记录事实，不修改库存。
-var inventory_remaining: int
-
-## 快照采集时已放置机构数量，必须非负。
-## 仅记录事实，不修改放置状态。
-var placed_mechanism_count: int
-
-## 快照采集时运行期移动次数，必须非负。
-## 仅记录事实，不扣除或重置移动次数。
+## 快照采集时已使用运行期移动次数。必须非负。
 var runtime_move_count: int
 
-## 水晶状态列表，元素类型为 CrystalSnapshotState。
-## 构造时逐项深复制，调用方之后修改原数组或原水晶对象不影响本快照。
+## 快照采集时剩余运行期移动次数（max(limit - used, 0)）。必须非负。
+var runtime_moves_remaining: int
+
+## 运行期移动次数上限（构造注入的配置值）。必须非负。
+var runtime_move_limit: int
+
+## 发射器所在逻辑格坐标。
+var emitter_cell: Vector2i
+
+## 发射器朝向（单位向量；不得为零，分量绝对值不超过 1）。
+var emitter_direction: Vector2i
+
+## 发射器当前光形态（LightEmissionTypes.LightForm 数值，RAY=0 / PARTICLE=1；Q 只影响后续发射）。
+var emitter_form: int
+
+## 关卡 Q 形态切换开关（关卡配置只读事实；false 时 Q 无效）。
+var allow_form_switch: bool
+
+## 主发射器 0.5s cooldown 是否 ready（RAY/PARTICLE 共用；成功发射后 0.5s 内 false）。
+var fire_cooldown_ready: bool
+
+## 当前活动 emission 数量。必须非负，且等于 emission_states.size()。
+var active_emission_count: int
+
+## 活动 emission 快照列表（按 allocate 顺序）；构造时逐项深复制。
+var emission_states: Array[EmissionSnapshotState]
+
+## 活动光粒快照列表（含所属 emission_id 关联）；构造时逐项深复制。
+var particle_states: Array[ParticleSnapshotState]
+
+## 当前 Particle 绝对整数 Tick。必须非负。
+var particle_tick: int
+
+## 当前活动光粒数量（scheduler 真值）。必须非负。
+var particle_active_count: int
+
+## 当前 Ray 光路段总数（LightVisualController 只读事实）。必须非负。
+var ray_segment_count: int
+
+## 快照采集时剩余库存数量。必须非负。
+var inventory_remaining: int
+
+## 库存总量（InventoryController 只读事实）。必须非负。
+var inventory_total: int
+
+## 快照采集时已放置机构数量。必须非负。
+var placed_mechanism_count: int
+
+## 水晶状态列表，元素类型为 CrystalSnapshotState。构造时逐项深复制。
 var crystal_states: Array[CrystalSnapshotState]
 
-## 占用一致性自检结果，类型为 SelfCheckResult。
-## 构造时复制其字段与 details，不保存调用方的可变引用；不得为 null。
-var occupancy_consistency: SelfCheckResult
+## 本次采样（Runtime→Sampler→Data）耗时（微秒；最小性能观测，不参与玩法）。必须非负。
+var snapshot_duration_usec: int
 
 
-## 构造一份运行期快照数据。
-## [br]p_timestamp_unix_msec 为 Unix 毫秒时间戳，必须非负。
-## [br]p_run_state 为运行状态，不得为空。
-## [br]p_is_completed 表示关卡是否完成，如实记录。
-## [br]p_emitter_cell 为发射器逻辑格坐标。
-## [br]p_emitter_direction 为发射器朝向，不得为零且分量绝对值不超过 1。
-## [br]p_map_bounds 为地图边界，size 各分量必须大于 0。
-## [br]p_wall_cells 为墙体格列表，传入后会被复制。
-## [br]p_light_path_count 为光路数，必须非负。
-## [br]p_inventory_remaining 为剩余库存，必须非负。
-## [br]p_placed_mechanism_count 为已放置机构数，必须非负。
-## [br]p_runtime_move_count 为运行期移动次数，必须非负。
-## [br]p_crystal_states 为水晶状态列表，传入后逐项深复制。
-## [br]p_occupancy_consistency 为占用一致性自检结果，传入后复制其字段与 details；允许 null（validate 会报告）。
-## [br]本函数仅赋值字段并完成必要复制，不做校验也不输出错误；校验统一由 validate() 负责。
-## [br]边界条件：即使传入非法值或 null 也不抛异常，留给 validate() 一次报告全部问题。
-## [br]副作用：复制 wall_cells、深复制 crystal_states、复制 occupancy_consistency，调用方之后修改原数据不影响本快照。
+## 构造一份运行期快照数据；仅赋值并完成必要深复制，校验统一由 validate() 负责。
+## [br]边界条件：即使传入非法值也不抛异常，留给 validate() 一次报告全部问题。
+## [br]副作用：深复制 emission_states、particle_states、crystal_states，调用方之后修改原数组不影响本快照。
 func _init(
 		p_timestamp_unix_msec: int,
+		p_level_id: StringName,
 		p_run_state: StringName,
 		p_is_completed: bool,
+		p_runtime_generation: int,
+		p_runtime_move_count: int,
+		p_runtime_moves_remaining: int,
+		p_runtime_move_limit: int,
 		p_emitter_cell: Vector2i,
 		p_emitter_direction: Vector2i,
-		p_map_bounds: Rect2i,
-		p_wall_cells: Array[Vector2i],
-		p_light_path_count: int,
+		p_emitter_form: int,
+		p_allow_form_switch: bool,
+		p_fire_cooldown_ready: bool,
+		p_active_emission_count: int,
+		p_emission_states: Array[EmissionSnapshotState],
+		p_particle_states: Array[ParticleSnapshotState],
+		p_particle_tick: int,
+		p_particle_active_count: int,
+		p_ray_segment_count: int,
 		p_inventory_remaining: int,
+		p_inventory_total: int,
 		p_placed_mechanism_count: int,
-		p_runtime_move_count: int,
 		p_crystal_states: Array[CrystalSnapshotState],
-		p_occupancy_consistency: SelfCheckResult
+		p_snapshot_duration_usec: int
 ) -> void:
 	timestamp_unix_msec = p_timestamp_unix_msec
+	level_id = p_level_id
 	run_state = p_run_state
 	is_completed = p_is_completed
+	runtime_generation = p_runtime_generation
+	runtime_move_count = p_runtime_move_count
+	runtime_moves_remaining = p_runtime_moves_remaining
+	runtime_move_limit = p_runtime_move_limit
 	emitter_cell = p_emitter_cell
 	emitter_direction = p_emitter_direction
-	map_bounds = p_map_bounds
-	# 复制墙体格数组：Vector2i 为值语义，assign 即独立复制，避免共享调用方可变引用。
-	wall_cells.assign(p_wall_cells)
-	light_path_count = p_light_path_count
-	inventory_remaining = p_inventory_remaining
-	placed_mechanism_count = p_placed_mechanism_count
-	runtime_move_count = p_runtime_move_count
-	# 深复制水晶状态列表：逐项调用 duplicate_state，避免共享调用方原数组与原水晶对象。
+	emitter_form = p_emitter_form
+	allow_form_switch = p_allow_form_switch
+	fire_cooldown_ready = p_fire_cooldown_ready
+	active_emission_count = p_active_emission_count
+	# 深复制三类子契约列表：逐项 duplicate_state 生成独立副本；null 元素原样保留交由 validate 报告。
+	emission_states = _copy_emission_states(p_emission_states)
+	particle_states = _copy_particle_states(p_particle_states)
 	crystal_states = _copy_crystal_states(p_crystal_states)
-	# 复制占用一致性自检结果：构造新 SelfCheckResult 并复制其字段与 details，避免共享可变引用。
-	occupancy_consistency = _copy_occupancy(p_occupancy_consistency)
+	particle_tick = p_particle_tick
+	particle_active_count = p_particle_active_count
+	ray_segment_count = p_ray_segment_count
+	inventory_remaining = p_inventory_remaining
+	inventory_total = p_inventory_total
+	placed_mechanism_count = p_placed_mechanism_count
+	snapshot_duration_usec = p_snapshot_duration_usec
 
 
-## 复制水晶状态列表的私有辅助函数。
-## [br]p_source 为源水晶状态列表。
-## [br]返回新的 Array[CrystalSnapshotState]：逐项调用 duplicate_state 生成独立副本；
-## [br]遇到 null 元素时原样保留 null（不抛异常），交由 validate() 报告，以避免在构造期中断。
-## [br]副作用：无；不修改源数组，不访问节点或文件系统。
-## [br]失败条件：源元素为 null 时不复制而保留 null，由 validate() 报告。
+## 深复制活动 emission 快照列表的私有辅助；null 元素原样保留（交由 validate 报告，不在构造期中断）。
+func _copy_emission_states(p_source: Array[EmissionSnapshotState]) -> Array[EmissionSnapshotState]:
+	var copy: Array[EmissionSnapshotState] = []
+	for index: int in range(p_source.size()):
+		var state: EmissionSnapshotState = p_source[index]
+		copy.append(null if state == null else state.duplicate_state())
+	return copy
+
+
+## 深复制活动光粒快照列表的私有辅助；null 元素原样保留（交由 validate 报告，不在构造期中断）。
+func _copy_particle_states(p_source: Array[ParticleSnapshotState]) -> Array[ParticleSnapshotState]:
+	var copy: Array[ParticleSnapshotState] = []
+	for index: int in range(p_source.size()):
+		var state: ParticleSnapshotState = p_source[index]
+		copy.append(null if state == null else state.duplicate_state())
+	return copy
+
+
+## 深复制水晶状态列表的私有辅助；null 元素原样保留（交由 validate 报告，不在构造期中断）。
 func _copy_crystal_states(p_source: Array[CrystalSnapshotState]) -> Array[CrystalSnapshotState]:
 	var copy: Array[CrystalSnapshotState] = []
 	for index: int in range(p_source.size()):
-		var source_state: CrystalSnapshotState = p_source[index]
-		# null 元素无法复制：原样保留，由 validate() 报告，避免构造期抛异常。
-		if source_state == null:
-			copy.append(null)
-		else:
-			copy.append(source_state.duplicate_state())
+		var state: CrystalSnapshotState = p_source[index]
+		copy.append(null if state == null else state.duplicate_state())
 	return copy
-
-
-## 复制占用一致性自检结果的私有辅助函数。
-## [br]p_source 为源 SelfCheckResult，允许为 null。
-## [br]返回新的 SelfCheckResult，其字段与 details 与源相等但独立；
-## [br]源为 null 时返回 null（交由 validate() 报告），以避免在构造期中断。
-## [br]副作用：无；不修改源对象，不访问节点或文件系统。
-## [br]边界条件：SelfCheckResult._init 内部会复制传入的 PackedStringArray details，因此副本与源不共享明细引用。
-func _copy_occupancy(p_source: SelfCheckResult) -> SelfCheckResult:
-	# 源为 null 时无法复制：返回 null，由 validate() 报告，避免构造期抛异常。
-	if p_source == null:
-		return null
-	return SelfCheckResult.new(
-		p_source.check_id,
-		p_source.passed,
-		p_source.summary,
-		p_source.details,
-		p_source.duration_usec
-	)
 
 
 ## 只读校验当前快照数据的字段完整性。
-## [br]本函数无参数。
 ## [br]返回 PackedStringArray，包含全部发现的中文错误；无问题时返回空数组。
 ## [br]本函数无副作用：不修改数据、不 push_error、不抛异常、不修复状态、不访问文件系统。
-## [br]边界条件：必须一次返回全部问题，不因第一项错误提前返回；
-## [br]emitter_cell 等坐标字段不限制正负；emitter_direction 必须非零且分量绝对值不超过 1；
-## [br]crystal_states 中 null 元素逐一报告；occupancy_consistency 为 null 时报告且不再汇总其子错误。
+## [br]边界条件：必须一次返回全部问题；emission/particle/crystal 子契约逐项汇总子错误。
 func validate() -> PackedStringArray:
 	var problems: PackedStringArray = []
-	# 时间戳为负属于非法输入：Unix 毫秒时间戳必须非负。
 	if timestamp_unix_msec < 0:
 		problems.append("RuntimeSnapshotData：timestamp_unix_msec 为负，必须为非负 Unix 毫秒时间戳。")
-	# run_state 为空会导致快照无法标识采集时的运行状态。
+	# level_id 允许为空：无正式来源时按 unavailable 政策保持空，此处不报告（不得用 Node.name 顶替）。
 	if run_state == &"":
 		problems.append("RuntimeSnapshotData：run_state 为空，必须填写运行状态。")
-	# 发射器朝向为零向量属于非法方向。
-	if emitter_direction == Vector2i.ZERO:
-		problems.append("RuntimeSnapshotData：emitter_direction 为零向量，必须为非零方向。")
-	# 方向分量绝对值超过 1 不是合法的单位方向（四向或对角八向）。
-	if absi(emitter_direction.x) > 1 or absi(emitter_direction.y) > 1:
-		problems.append("RuntimeSnapshotData：emitter_direction 分量绝对值超过 1，必须为单位方向向量。")
-	# 地图边界尺寸必须为正：宽或高为零/负属于非法边界。
-	if map_bounds.size.x <= 0 or map_bounds.size.y <= 0:
-		problems.append("RuntimeSnapshotData：map_bounds 尺寸非正，size.x 与 size.y 均必须大于 0。")
-	# 各计数必须非负：负值属于非法输入。
-	if light_path_count < 0:
-		problems.append("RuntimeSnapshotData：light_path_count 为负，必须非负。")
-	if inventory_remaining < 0:
-		problems.append("RuntimeSnapshotData：inventory_remaining 为负，必须非负。")
-	if placed_mechanism_count < 0:
-		problems.append("RuntimeSnapshotData：placed_mechanism_count 为负，必须非负。")
+	if runtime_generation < 0:
+		problems.append("RuntimeSnapshotData：runtime_generation 为负，必须为非负 epoch token。")
 	if runtime_move_count < 0:
 		problems.append("RuntimeSnapshotData：runtime_move_count 为负，必须非负。")
-	# 逐项校验水晶状态：null 元素逐一报告，非空元素汇总其子错误。
-	for index: int in range(crystal_states.size()):
-		var state: CrystalSnapshotState = crystal_states[index]
-		if state == null:
-			problems.append("RuntimeSnapshotData：crystal_states 第 %d 项为 null，元素不得为 null。" % [index + 1])
-		else:
-			# 汇总该水晶状态的子错误，前缀标注来源索引以便定位。
-			for sub_problem: String in state.validate():
-				problems.append("RuntimeSnapshotData：crystal_states 第 %d 项：%s" % [index + 1, sub_problem])
-	# 占用一致性自检结果不能为 null：为 null 时报告且不汇总子错误（无对象可校验）。
-	if occupancy_consistency == null:
-		problems.append("RuntimeSnapshotData：occupancy_consistency 为 null，必须提供 SelfCheckResult。")
-	else:
-		# 汇总占用一致性自检结果的子错误，前缀标注来源。
-		for sub_problem: String in occupancy_consistency.validate():
-			problems.append("RuntimeSnapshotData：occupancy_consistency：%s" % [sub_problem])
+	if runtime_moves_remaining < 0:
+		problems.append("RuntimeSnapshotData：runtime_moves_remaining 为负，必须非负。")
+	if runtime_move_limit < 0:
+		problems.append("RuntimeSnapshotData：runtime_move_limit 为负，必须非负。")
+	if emitter_direction == Vector2i.ZERO:
+		problems.append("RuntimeSnapshotData：emitter_direction 为零向量，必须为非零方向。")
+	if absi(emitter_direction.x) > 1 or absi(emitter_direction.y) > 1:
+		problems.append("RuntimeSnapshotData：emitter_direction 分量绝对值超过 1，必须为单位方向向量。")
+	if emitter_form != _LightEmissionTypes.LightForm.RAY and emitter_form != _LightEmissionTypes.LightForm.PARTICLE:
+		problems.append("RuntimeSnapshotData：emitter_form 数值 %d 不在 RAY/PARTICLE 合法集合内。" % emitter_form)
+	if active_emission_count < 0:
+		problems.append("RuntimeSnapshotData：active_emission_count 为负，必须非负。")
+	if active_emission_count != emission_states.size():
+		problems.append("RuntimeSnapshotData：active_emission_count（%d）与 emission_states.size()（%d）不一致。" % [active_emission_count, emission_states.size()])
+	if particle_tick < 0:
+		problems.append("RuntimeSnapshotData：particle_tick 为负，必须非负。")
+	if particle_active_count < 0:
+		problems.append("RuntimeSnapshotData：particle_active_count 为负，必须非负。")
+	if ray_segment_count < 0:
+		problems.append("RuntimeSnapshotData：ray_segment_count 为负，必须非负。")
+	if inventory_remaining < 0:
+		problems.append("RuntimeSnapshotData：inventory_remaining 为负，必须非负。")
+	if inventory_total < 0:
+		problems.append("RuntimeSnapshotData：inventory_total 为负，必须非负。")
+	if placed_mechanism_count < 0:
+		problems.append("RuntimeSnapshotData：placed_mechanism_count 为负，必须非负。")
+	if snapshot_duration_usec < 0:
+		problems.append("RuntimeSnapshotData：snapshot_duration_usec 为负，必须非负。")
+	# 汇总三类子契约错误，前缀标注来源索引以便定位。
+	_append_sub_problems(problems, "emission_states", emission_states)
+	_append_sub_problems(problems, "particle_states", particle_states)
+	_append_sub_problems(problems, "crystal_states", crystal_states)
 	return problems
 
 
-## 返回当前快照数据的全新独立深副本。
-## [br]本函数无参数。
-## [br]返回新的 RuntimeSnapshotData，标量与坐标字段相等，wall_cells、crystal_states、
-## [br]occupancy_consistency 均为独立深复制；修改副本不影响本对象。
-## [br]本函数无副作用：不修改本对象、不 push_error、不抛异常、不访问节点或文件系统。
-## [br]边界条件：通过构造函数完成复制，构造函数内部已复制 wall_cells、深复制 crystal_states、复制 occupancy_consistency。
+## 汇总子契约校验错误的私有辅助；null 元素与子错误均前缀标注来源索引。
+func _append_sub_problems(p_problems: PackedStringArray, p_field: String, p_states: Array) -> void:
+	for index: int in range(p_states.size()):
+		var state: Variant = p_states[index]
+		if state == null:
+			p_problems.append("RuntimeSnapshotData：%s 第 %d 项为 null，元素不得为 null。" % [p_field, index + 1])
+			continue
+		for sub_problem: String in state.validate():
+			p_problems.append("RuntimeSnapshotData：%s 第 %d 项：%s" % [p_field, index + 1, sub_problem])
+
+
+## 返回当前快照数据的全新独立深副本（通过构造函数完成深复制）。
 func duplicate_data() -> RuntimeSnapshotData:
-	var copy: RuntimeSnapshotData = RuntimeSnapshotData.new(
+	return RuntimeSnapshotData.new(
 		timestamp_unix_msec,
+		level_id,
 		run_state,
 		is_completed,
+		runtime_generation,
+		runtime_move_count,
+		runtime_moves_remaining,
+		runtime_move_limit,
 		emitter_cell,
 		emitter_direction,
-		map_bounds,
-		wall_cells,
-		light_path_count,
+		emitter_form,
+		allow_form_switch,
+		fire_cooldown_ready,
+		active_emission_count,
+		emission_states,
+		particle_states,
+		particle_tick,
+		particle_active_count,
+		ray_segment_count,
 		inventory_remaining,
+		inventory_total,
 		placed_mechanism_count,
-		runtime_move_count,
 		crystal_states,
-		occupancy_consistency
+		snapshot_duration_usec
 	)
-	return copy

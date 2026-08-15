@@ -79,3 +79,29 @@ class FakeSpeedMechanism:
 		call_count += 1
 		last_seen_direction = incoming_direction
 		return delta
+
+
+## 测试用镜面机关（D7-R5 反射修复；不继承 SingleCellMirror，只实现公共方法契约）。
+## 仅暴露 reflect_direction(Vector2i) -> Vector2i，证明 Adapter / Executor / Scheduler
+## 不依赖 SingleCellMirror 类名，只依赖公共方法契约（与正式 SingleCellMirror 反射公式同源）。
+class FakeReflectMechanism:
+	extends RefCounted
+
+	## 反射公式选择：0 = SLASH（(-y,-x)），1 = BACKSLASH（(y,x)）。
+	var slash: bool = true
+	## 非法入射时返回 ZERO 的开关（模拟 SingleCellMirror 对非法方向的哨兵返回）。
+	var zero_on_any: bool = false
+	## reflect_direction 被调用次数。
+	var call_count: int = 0
+	## 最近一次收到的入射方向。
+	var last_seen_direction: Vector2i = Vector2i.ZERO
+
+	## 按与 SingleCellMirror.reflect_direction_for_orientation 相同的双面反射公式返回出射方向。
+	func reflect_direction(incoming_direction: Vector2i) -> Vector2i:
+		call_count += 1
+		last_seen_direction = incoming_direction
+		if zero_on_any:
+			return Vector2i.ZERO
+		if slash:
+			return Vector2i(-incoming_direction.y, -incoming_direction.x)
+		return Vector2i(incoming_direction.y, incoming_direction.x)

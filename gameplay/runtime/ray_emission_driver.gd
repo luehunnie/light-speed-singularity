@@ -105,9 +105,24 @@ func dispatch(
 ## 逐格按 steps 顺序应用副作用：同一格先创建光路视觉（per-emission，携带 emission_id/generation）再尝试激活水晶；不重新计算路径、不改占用/机关/RunState/库存。
 ## [br]emission_id 使本段视觉归属本次 Ray emission（新 Ray 不清旧 Ray；本 Ray finish 只清自身）；generation 为 visual version metadata（非 gameplay 真值）。
 ## [br]顺序冻结：show_step 必须早于 try_activate_crystal_at（与旧 fire_light 循环一致；源码扫描测试锁定本顺序）。
+## [br]反射格（D7-R5 视觉修复）：某格的进入方向与下一步的进入方向不同 = 该格机关改向（镜面）——
+##   本格改画两段半光束（入射半段 + 出射半段，经 show_reflection_step 在格中心拼出拐角），
+##   不再画贯穿整格的入射段（旧画法使光束视觉上穿过镜面格远端、且拐角处留半格断口，用户 GUI 验收截图暴露）。
+##   改向判定纯读相邻 step 事实（steps[i].incoming_direction != steps[i+1].incoming_direction），不重查机关、不复制反射算法。
 func _apply_ray_execution_result(result: _RayExecutionResult, emission_id: int, generation: int) -> void:
-	for step in result.steps:
-		_light_visual_controller.show_step(emission_id, generation, step.cell, step.incoming_direction)
+	for i: int in range(result.steps.size()):
+		var step = result.steps[i]
+		# 下一步进入方向与本步不同 = 本格为反射格（机关已在本格改向，出射方向从下一步起生效）。
+		var next_incoming: Vector2i = (
+			result.steps[i + 1].incoming_direction
+			if i + 1 < result.steps.size()
+			else step.incoming_direction
+		)
+		if next_incoming != step.incoming_direction:
+			_light_visual_controller.show_reflection_step(
+				emission_id, generation, step.cell, step.incoming_direction, next_incoming)
+		else:
+			_light_visual_controller.show_step(emission_id, generation, step.cell, step.incoming_direction)
 		if step.has_crystal:
 			_objective_controller.try_activate_crystal_at(step.cell)
 
