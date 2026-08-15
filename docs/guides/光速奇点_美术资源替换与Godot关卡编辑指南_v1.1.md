@@ -5,7 +5,7 @@
 > 适用角色：美术与关卡制作人员
 > 适用环境：Godot 4.6.1 Standard
 > 项目路径：`E:\godot_project\light-speed-singularity`
-> 文档定位：本指南同时包含**当前可操作流程**和**未来目标流程**。当前可用能力包括：已实现的视觉接口（`VisualStateTexture`、`ObjectVisualProfile`、`ObjectVisualView`、`InventorySlotView`、`LightSegmentVisualProfile`、`LightSegmentView`）、`GridPlacedObject` 位置契约（`position` 为事实、`cell` 派生）、`EmitterConfigNode`/`EmissionPreview`，以及唯一的美术 Profile 编辑器插件 `addons/light_speed_art_profile/`。未实现的目标流程（方法 B 即 2D 视图直接拖动编辑与位置写回、`LevelValidator`、完整关卡模板、`FixedEmitter` 独立预制场景与统一 `EmissionRequest`、`READY_TO_FIRE`、开始运行按钮、光粒运行时编辑、一键创建独立 Profile 副本）**不得作为张梓涵当前的验收前置条件**。
+> 文档定位：本指南同时包含**当前可操作流程**和**未来目标流程**。当前可用能力包括：已实现的视觉接口（`VisualStateTexture`、`ObjectVisualProfile`、`ObjectVisualView`、`InventorySlotView`、`LightSegmentVisualProfile`、`LightSegmentView`）、`GridPlacedObject` 位置契约（`position` 为事实、`cell` 派生）、`EmitterConfigNode`/`EmissionPreview`，以及唯一的美术 Profile 编辑器插件 `addons/light_speed_art_profile/`。未实现的目标流程（方法 B 多格、`FixedEmitter` 独立预制场景与统一 `EmissionRequest`、一键创建独立 Profile 副本）**不得作为张梓涵当前的验收前置条件**。（~~方法 B 单格、`LevelValidator` v0、完整关卡模板、`READY_TO_FIRE` 与开始运行按钮、光粒运行时~~ 均已实现：D5/D6、D7-2/D7-3、D7-4。）
 
 ---
 
@@ -14,7 +14,7 @@
 本指南区分两类内容：
 
 - **当前可用**：基于已实现视觉接口（`VisualStateTexture`、`ObjectVisualProfile`、`ObjectVisualView`、`InventorySlotView`、`LightSegmentVisualProfile`、`LightSegmentView`）、`GridPlacedObject` 位置契约、`EmitterConfigNode`/`EmissionPreview`、现有原型场景，以及唯一的美术 Profile 编辑器插件 `addons/light_speed_art_profile/` 的流程，张梓涵现在就可以执行；
-- **目标 / 未实现**：方法 B 多格编辑与父节点移动一致性完整流程、Runtime 自动 Validation Gate、`FixedEmitter` 独立预制场景与统一 `EmissionRequest`、`READY_TO_FIRE`、正式“开始运行”入口、光粒（Particle）运行时编辑、Particle 八方向、一键创建独立 Profile 副本等，属于未来目标，当前不具备可依赖的代码或字段。（方法 B 单格路径、`LevelValidator` v0、正式关卡模板、Godot 原生 GUI 关卡编辑基础、墙体方向编辑均已完成。）
+- **目标 / 未实现**：方法 B 多格编辑与父节点移动一致性完整流程、`FixedEmitter` 独立预制场景与统一 `EmissionRequest`、一键创建独立 Profile 副本等，属于未来目标，当前不具备可依赖的代码或字段。（方法 B 单格路径、`LevelValidator` v0 与 Runtime 自动 Validation Gate（D7-1/D7-3）、正式关卡模板、Godot 原生 GUI 关卡编辑基础、墙体方向编辑、`READY_TO_FIRE` 与正式“开始运行”入口（D7-2/D7-3）、光粒运行时与 Particle 八方向（D7-4）均已完成。）
 
 契约存在不等于代码已经实现。已实现视觉接口的路径、`class_name`、基类和公开方法以真实代码为准（详见《永久视觉与关卡编辑接口设计 v1.1》§6、§7–§10、§14.4、§15）。
 
@@ -34,12 +34,12 @@
 | 编辑器 64 格吸附 | 当前可用（Godot 原生） | 节点拖动、复制、64×64 网格吸附、position Undo/Redo 均由 Godot 原生负责 |
 | 方法 B（2D 视图直接拖动编辑） | 单格已完成 / 多格为目标 | 单格拖动写回逻辑 cell 已完成（D5）；多格对象编辑、父节点移动一致性完整流程仍为目标 |
 | `LevelObjectRegistry`（完整扫描） | 部分实现 | 水晶按 `crystal_id` 与 cell 双向索引已实现；扫描/多类型对象注册仍为目标 |
-| `LevelValidator` | v0 已实现 / 自动门未实现 | v0 只读校验已实现（D6，PR #45–#48）；Runtime 自动 Validation Gate（运行期/编辑器自动调用）未实现，不作为保存时自动校验必跑步骤 |
+| `LevelValidator` | v0 已实现 / 自动门已实现 | v0 只读校验已实现（D6，PR #45–#48）；Runtime 自动 Validation Gate 已实现（D7-1 `RuntimeValidationGate` 经 D7-3 Start Run 正式调用）；编辑器保存时自动校验仍非必跑步骤 |
 | 正式关卡模板 | 已实现（基础） | `levels/templates/level_template.tscn` 四层 `TileMapLayer`（D5，PR #35–#44）；多格对象完整编辑流程仍为目标 |
-| `FixedEmitter` 独立预制场景与统一 `EmissionRequest` | 目标 / 未实现 | 运行期 cell/direction 与 `FireRequest` 已实现；`fixed_emitter.tscn`/统一 `EmissionRequest`/光粒运行时仍为目标 |
-| `READY_TO_FIRE` | 目标 / 未实现 | 不在当前验收项 |
-| 开始运行按钮 | 目标 / 未实现 | 不在当前验收项 |
-| 光粒运行时编辑与验收 | 目标 / 未实现 | 不在当前验收项 |
+| `FixedEmitter` 独立预制场景与统一 `EmissionRequest` | 目标 / 未实现 | 运行期 cell/direction/form 与 `FireRequest` 已实现，光粒运行时已实现（D7-4）；`fixed_emitter.tscn`/统一 `EmissionRequest` 仍为目标 |
+| `READY_TO_FIRE` | 已实现（D7-2/D7-3） | 五态 `READY_TO_FIRE=4` + `begin_runtime` 正式入口，不改变美术验收项 |
+| 开始运行按钮 | 已实现（D7-3） | `gameplay/ui/run_start_view`，不改变美术验收项 |
+| 光粒运行时编辑与验收 | 已实现（D7-4/M4-E4） | `ParticleDirection` 八方向 + `Q` 形态切换（`allow_form_switch`）；美术素材验收以真实代码为准 |
 | 一键创建独立 Profile 副本 | 目标 / 未实现 | 共享 Profile 自动实例化尚未实现 |
 
 ---
@@ -461,12 +461,12 @@ backslash_texture
 
 # 10. 发射器美术和配置
 
-> **状态：部分实现。** `FixedEmitter`（`gameplay/mechanisms/emitters/fixed_emitter.gd`）为运行期 cell/direction 唯一所有者，由核心 `_ready` 从 `EmitterConfigNode` 启动快照构造，`build_fire_request` 构建 `FireRequest`。`EmitterConfigNode`（`@tool`，`extends GridPlacedObject`）已实现，是发射器关卡配置唯一来源：`default_light_form`、`ray_default_direction`（光线八方向）、`particle_default_direction`（光粒四方向；当前实现，PARTICLE 八方向为最终目标尚未实现）、`visual_profile: ObjectVisualProfile`、`editor_preview_visible`。`EmissionPreview` 已实现，跟随 Emitter 移动和方向变化，仅编辑器预览，不参与玩法判定，不复制完整传播算法。`LightPathLayer` 独立、固定原点，只承载运行时真实光路，已在核心原型场景存在。结构 `RuntimeObjects/Emitter/{EmitterVisual, EmissionPreview}` 已落地。`CoreLoopPrototype.emitter_cell`/`emitter_direction` 双事实已删除。发射器视觉复用通用 `ObjectVisualProfile`（`assets/visual_profiles/emitter_visuals.tres`）。仍为目标：`fixed_emitter.tscn` 独立预制场景、统一 `EmissionRequest`、光粒运行时（`PARTICLE` 仅保存配置与编辑器预览，不执行发射）、Particle 八方向。`EmissionPreview` 不是正式运行光线。
+> **状态：部分实现。** `FixedEmitter`（`gameplay/mechanisms/emitters/fixed_emitter.gd`）为运行期 cell/direction/光形态唯一所有者，由核心 `_ready` 从 `EmitterConfigNode` 启动快照构造，`build_fire_request` 构建 `FireRequest`。`EmitterConfigNode`（`@tool`，`extends GridPlacedObject`）已实现，是发射器关卡配置唯一来源：`default_light_form`、`allow_form_switch`（M4-E4）、`ray_default_direction`（光线八方向）、`particle_default_direction`（光粒八方向，已实现）、`visual_profile: ObjectVisualProfile`、`editor_preview_visible`。`EmissionPreview` 已实现，跟随 Emitter 移动和方向变化，仅编辑器预览，不参与玩法判定，不复制完整传播算法。`LightPathLayer` 独立、固定原点，只承载运行时真实光路，已在核心原型场景存在。结构 `RuntimeObjects/Emitter/{EmitterVisual, EmissionPreview}` 已落地。`CoreLoopPrototype.emitter_cell`/`emitter_direction` 双事实已删除。发射器视觉复用通用 `ObjectVisualProfile`（`assets/visual_profiles/emitter_visuals.tres`）。仍为目标：`fixed_emitter.tscn` 独立预制场景、统一 `EmissionRequest`。光粒运行时与 Particle 八方向已实现（B3b 起 `PARTICLE` 经 `ParticleScheduler` 接正式运行时，八方向）。`EmissionPreview` 不是正式运行光线。
 
 固定发射器目标上包含：
 
 - `cell`；
-- 八方向（RAY/PARTICLE 最终目标均为八方向；当前真实代码 Ray 已八方向、Particle 仍四正方向）；
+- 八方向（RAY/PARTICLE 均已八方向且已接正式运行时）；
 - 光形态；
 - 发射器视觉 Profile；
 - 视觉子节点。
@@ -482,7 +482,7 @@ particle_texture
 
 ## 10.2 一张图片旋转
 
-每种光形态使用一张基础方向图。RAY/PARTICLE 最终目标均为八方向（当前真实代码 Ray 已八方向、Particle 仍四正方向）。
+每种光形态使用一张基础方向图。RAY/PARTICLE 均已八方向且已接正式运行时。
 
 建议原图朝右：
 
@@ -997,7 +997,7 @@ mixed_level_01.tscn
 
 ## 运行（目标 / 未实现，不在当前验收项）
 
-> 以下项目依赖 `READY_TO_FIRE`、开始运行按钮与光粒运行时，当前均未实现，**不作为张梓涵当前验收项**。`EmitterConfigNode`/`EmissionPreview` 已实现，但不改变 `READY_TO_FIRE` 与开始运行按钮尚未落地的事实。
+> `READY_TO_FIRE`、开始运行按钮与光粒运行时均已实现（D7-2/D7-3、D7-4），相关运行行为已可验证，但仍**不作为张梓涵当前验收项**（美术验收范围以已实现视觉接口的素材替换为准）。`EmitterConfigNode`/`EmissionPreview` 已实现。
 
 - [ ] 初始 Space 无效；
 - [ ] 点击“开始运行”；
@@ -1143,7 +1143,7 @@ Debugger错误
 
 # 32. 最终完成标准
 
-> 本节描述的是接口完成后的**目标最终标准**，其中方法 B 多格编辑、Runtime 自动 Validation Gate（`LevelValidator` v0 已实现，但运行期自动调用未实现）、`READY_TO_FIRE`/开始运行入口、光粒运行时、三章节正式关卡制作等当前未实现（方法 B 单格、`LevelValidator` v0 已完成）。`GridPlacedObject` 位置契约、`EmitterConfigNode`/`EmissionPreview`、美术 Profile 插件已实现。节点拖动/复制/64 格吸附由 Godot 原生负责。张梓涵当前可执行的部分为已实现视觉接口的美术替换（含插件）、发射器配置与原型场景验证。
+> 本节描述的是接口完成后的**目标最终标准**，其中方法 B 多格编辑、三章节正式关卡制作等当前未实现（方法 B 单格、`LevelValidator` v0、Runtime 自动 Validation Gate（D7-1/D7-3）、`READY_TO_FIRE`/开始运行入口（D7-2/D7-3）、光粒运行时（D7-4）已完成）。`GridPlacedObject` 位置契约、`EmitterConfigNode`/`EmissionPreview`、美术 Profile 插件已实现。节点拖动/复制/64 格吸附由 Godot 原生负责。张梓涵当前可执行的部分为已实现视觉接口的美术替换（含插件）、发射器配置与原型场景验证。
 
 最终编辑方式目标上必须达到：
 

@@ -307,12 +307,12 @@ func _test_18_core_no_legacy_objective_functions() -> void:
 		_check(NAME, src.find(token) == -1, "核心不应再保留旧目标业务函数/字段：%s" % [token])
 
 
-## 19. 逐 step 接线仍是视觉早于 Objective 激活（D3-E：_apply_ray_execution_result 迁入 LevelRuntimeController，检查其源码中 show_step 早于 _objective_controller.try_activate_crystal_at）。
+## 19. 逐 step 接线仍是视觉早于 Objective 激活（M4-E2.1：_apply_ray_execution_result 迁入 RayEmissionDriver，扫描其源码确认 show_step 早于 _objective_controller.try_activate_crystal_at）。
 func _test_19_wiring_visual_before_objective() -> void:
 	const NAME: String = "19_视觉早于Objective激活"
-	var src: String = FileAccess.get_file_as_string("res://gameplay/runtime/level_runtime_controller.gd")
+	var src: String = FileAccess.get_file_as_string("res://gameplay/runtime/ray_emission_driver.gd")
 	var fn_start: int = src.find("func _apply_ray_execution_result")
-	if _check(NAME, fn_start != -1, "未找到 _apply_ray_execution_result。"):
+	if _check(NAME, fn_start != -1, "未找到 _apply_ray_execution_result（应在 RayEmissionDriver 内）。"):
 		var next_fn: int = src.find("\nfunc ", fn_start + 1)
 		if next_fn == -1:
 			next_fn = src.length()

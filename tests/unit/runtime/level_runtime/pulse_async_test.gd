@@ -27,6 +27,8 @@ func _initialize() -> void:
 	_report()
 	# 清理前推进若干帧，让所有挂起的异步脉冲结束协程恢复完成，避免 free controller 后协程再调用 null 实例。
 	await _fixture.wait_settled(4)
+	# B3b-2：使所有 Particle Tick 泵协程退出（generation 失效 + 推进帧），避免 leaked at exit。
+	await _fixture.await_settle_pumps()
 	_fixture.cleanup()
 	quit(0 if _failures.is_empty() else 1)
 
@@ -94,7 +96,7 @@ func _test_13_stale_generation_cannot_finish_new_pulse() -> void:
 	await _fixture.wait_settled()
 	# 旧回调(1) 已过期返回；新回调(3) 结束未完成脉冲 -> MOVE_WINDOW。
 	_check(NAME, env.rsc.get_current_state() == _RuntimeInteractionTypes.RunState.MOVE_WINDOW, "应由新回调进入 MOVE_WINDOW，实际 %s。" % [_state_label(env.rsc.get_current_state())])
-	_check(NAME, env.controller.get_pulse_generation() == 3, "generation 期望 3。")
+	_check(NAME, env.controller.get_runtime_generation() == 3, "generation 期望 3。")
 
 
 ## 14. R 使旧异步回调失效：发射 gen=1 → R gen=2 → 等待，旧回调不把 SETUP 改成 MOVE_WINDOW/COMPLETED。

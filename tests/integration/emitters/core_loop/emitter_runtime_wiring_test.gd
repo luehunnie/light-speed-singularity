@@ -3,7 +3,7 @@ extends SceneTree
 ## 核心闭环发射器运行接线与发射流程测试（拆分片 2/3 · D4.6-T5）。
 ## 覆盖：启动后 FixedEmitter 格子/方向与 EmitterConfigNode 一致；build_fire_request 起点与方向来自新配置；
 ##   入树前改 position / ray_default_direction 后启动，FixedEmitter 使用新值；
-##   改光粒方向但保持 RAY 不影响光线方向；PARTICLE 不静默创建 RAY FixedEmitter 且安全停止；
+##   改光粒方向但保持 RAY 不影响光线方向；PARTICLE 现构造 PARTICLE 形态 FixedEmitter（不静默降级 RAY）与运行期编排控制器（B3b-1）；
 ##   LevelWorldQuery 发射器格与新配置一致；自检采样不再依赖旧字段；EmissionPreview 不参与真实发射。
 ## 接线用例挂入 root 并 await process_frame 触发真实 _ready，再读取既有私有状态验证；场景加载/清理见 fixtures/core_loop_scene_fixture.gd。
 ## 由 Godot --script 运行，全部通过 quit(0)，任一失败 quit(1)。
@@ -190,9 +190,10 @@ func _test_20_particle_direction_no_effect_on_ray(scene: PackedScene) -> void:
 	await _fixture.free_settled(node)
 
 
-## 21. default_light_form=PARTICLE 时不静默创建 RAY FixedEmitter，且路径安全停止不产生空对象。
+## 21. default_light_form=PARTICLE 现构造 PARTICLE 形态 FixedEmitter 与运行期编排控制器（B3b-1 解除旧执行期拒绝）。
+##     保留旧用例核心关切：不静默降级为 RAY——FixedEmitter.get_light_form() 必须是 PARTICLE；节点不崩溃释放。
 func _test_21_particle_no_silent_ray_safe_stop(scene: PackedScene) -> void:
-	const NAME: String = "21_PARTICLE不静默创建RAY且安全停止"
+	const NAME: String = "21_PARTICLE构造PARTICLE形态非静默RAY"
 	if scene == null:
 		_check(NAME, false, "场景未加载。")
 		return
@@ -208,10 +209,13 @@ func _test_21_particle_no_silent_ray_safe_stop(scene: PackedScene) -> void:
 	emitter.default_light_form = _EmitterConfigNode.LightForm.PARTICLE
 	get_root().add_child(node)
 	await process_frame
-	# PARTICLE 未接运行时：不构造 FixedEmitter，不构造运行期编排控制器，避免后续空引用。
-	_check(NAME, node.get("_fixed_emitter") == null, "PARTICLE 不应静默创建 RAY FixedEmitter，实际非 null。")
-	_check(NAME, node.get("_level_runtime_controller") == null, "PARTICLE 不应构造运行期编排控制器，实际非 null。")
-	_check(NAME, is_instance_valid(node), "PARTICLE 安全停止后节点应仍有效，不应崩溃释放。")
+	# B3b-1：PARTICLE 已接 Runtime，构造 FixedEmitter（PARTICLE 形态，非静默降级 RAY）与 LevelRuntimeController。
+	var fixed_emitter: _FixedEmitter = node.get("_fixed_emitter") as _FixedEmitter
+	_check(NAME, fixed_emitter != null, "PARTICLE 应构造 FixedEmitter，实际 null。")
+	if fixed_emitter != null:
+		_check(NAME, fixed_emitter.get_light_form() == _EmitterConfigNode.LightForm.PARTICLE, "PARTICLE FixedEmitter 形态应为 PARTICLE（不静默降级 RAY），实际 %d。" % [fixed_emitter.get_light_form()])
+	_check(NAME, node.get("_level_runtime_controller") != null, "PARTICLE 应构造运行期编排控制器，实际 null。")
+	_check(NAME, is_instance_valid(node), "PARTICLE 接线后节点应仍有效，不应崩溃释放。")
 	await _fixture.free_settled(node)
 
 

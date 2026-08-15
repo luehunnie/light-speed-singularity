@@ -91,7 +91,7 @@ func get_current_state() -> RuntimeInteractionTypes.RunState:
 
 ## 查询当前是否允许发射普通脉冲。
 ## [br]职责：转发到 RuntimeStateRules.can_fire_light，不复制权限判断。
-## [br]返回：true 表示 READY_TO_FIRE 或 MOVE_WINDOW 可发射；false 表示 SETUP、PULSE_ACTIVE 或 COMPLETED 拒绝。
+## [br]返回：true 表示 READY_TO_FIRE、PULSE_ACTIVE 或 MOVE_WINDOW 可发射（M4-E3 起 PULSE_ACTIVE 开放 repeated fire，唯一额外节流为 0.5 秒 cooldown，由调用方预检）；false 表示 SETUP 或 COMPLETED 拒绝。
 ## [br]副作用：无；纯查询，不发信号、不写日志。
 ## [br]边界：只判定发射权限，不执行发射流程，不改变状态。
 func can_fire_light() -> bool:

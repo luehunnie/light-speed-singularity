@@ -96,7 +96,7 @@ func _test_03_begin_runtime_to_ready(c: RefCounted, r: _Support._SignalRecorder)
 
 
 ## 5. READY→PULSE：begin_pulse 成功，READY_TO_FIRE→PULSE_ACTIVE，一次正确信号；并校验 PULSE 六项权限。
-##    PULSE 权限：fire=false、layout=true、config=false、begin_runtime=false、pulse=true、runtime_move=true。
+##    PULSE 权限（M4-E3 起）：fire=true（repeated fire 开放，0.5s cooldown 由调用方预检）、layout=true、config=false、begin_runtime=false、pulse=true、runtime_move=true。
 func _test_05_ready_to_pulse(c: RefCounted, r: _Support._SignalRecorder) -> void:
 	const NAME: String = "05_READY进PULSE"
 	r.clear()
@@ -109,8 +109,8 @@ func _test_05_ready_to_pulse(c: RefCounted, r: _Support._SignalRecorder) -> void
 		_check(NAME, e.new_state == _Types.RunState.PULSE_ACTIVE, "信号 new 期望 PULSE_ACTIVE，实际 %s。" % [_Support.state_label(e.new_state)])
 		_check(NAME, e.state_during_callback == _Types.RunState.PULSE_ACTIVE,
 			"回调内当前状态期望 PULSE_ACTIVE，实际 %s。" % [_Support.state_label(e.state_during_callback)])
-	## PULSE 六项权限矩阵。
-	_check_permissions(NAME, c, false, true, false, false, true, true)
+	## PULSE 六项权限矩阵（M4-E3：fire=true，PULSE_ACTIVE 开放 repeated fire）。
+	_check_permissions(NAME, c, true, true, false, false, true, true)
 
 
 ## 8. PULSE→MOVE：finish_pulse(false) 成功，PULSE_ACTIVE→MOVE_WINDOW，一次正确信号；并校验 MOVE 六项权限。

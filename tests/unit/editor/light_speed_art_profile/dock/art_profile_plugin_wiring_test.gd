@@ -24,8 +24,9 @@ const _VisualStateTexture: GDScript = preload(
 const _ArtAssetEntry: GDScript = preload(
 	"res://addons/light_speed_art_profile/browser/art_asset_entry.gd"
 )
-const _NORMAL_PNG: String = "res://assets/art/crystals/crystal_normal_unlit.png"
-const _BLUE_PNG: String = "res://assets/art/crystals/crystal_blue_unlit.png"
+# 真实素材路径（M4-F1 修正：美术目录重组后 crystals/ → crystal/，blue 文件更名为 blue_crystal_unactivate.png）
+const _NORMAL_PNG: String = "res://assets/art/crystal/crystal_normal_unlit.png"
+const _BLUE_PNG: String = "res://assets/art/crystal/blue_crystal_unactivate.png"
 
 var _failures: PackedStringArray = PackedStringArray()
 var _checks: int = 0

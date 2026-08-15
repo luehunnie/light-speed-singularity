@@ -40,7 +40,7 @@ func _initialize() -> void:
 	await _test_04_visual_rotation_isolation(scene)
 	await _test_05_preview_isolation(scene)
 	await _test_06_reset_clears_path(scene)
-	await _test_07_particle_rejection(scene)
+	await _test_07_particle_acceptance(scene)
 	_check("末尾_root无残留", root.get_child_count() == 0, "测试结束 root 不应有子节点，实际 %d。" % [root.get_child_count()])
 	_report()
 	quit(0 if _failures.is_empty() else 1)
@@ -267,9 +267,11 @@ func _test_06_reset_clears_path(scene: PackedScene) -> void:
 	await _settle_and_free(node, true)
 
 
-## 7. PARTICLE 拒绝保持：default_light_form=PARTICLE 入树初始化，不构造 FixedEmitter/运行期编排，不生成正式路径段，不静默按 RAY 发射。
-func _test_07_particle_rejection(scene: PackedScene) -> void:
-	const NAME: String = "07_PARTICLE拒绝保持"
+## 7. PARTICLE 合法构造（B3b-1 起）：default_light_form=PARTICLE 入树初始化，core_loop 经 is_runtime_form_supported 闸门合法构造 FixedEmitter + 运行期编排控制器；
+##    PARTICLE 形态不创建 Ray 视觉路径（LightPathLayer 无段），不静默降级为 RAY 发射。
+##    B3b-1 前本组断言"PARTICLE 被拒绝构造"；B3b-1 让 PARTICLE 成为合法 Runtime form 后断言更新为"合法构造"。
+func _test_07_particle_acceptance(scene: PackedScene) -> void:
+	const NAME: String = "07_PARTICLE合法构造"
 	var node: Node2D = scene.instantiate() as Node2D
 	var emitter: _EmitterConfigNode = _emitter(node)
 	_check(NAME, emitter != null, "入树前 Emitter 缺失。")
@@ -279,12 +281,13 @@ func _test_07_particle_rejection(scene: PackedScene) -> void:
 	emitter.default_light_form = _EmitterConfigNode.LightForm.PARTICLE
 	root.add_child(node)
 	await process_frame
-	# 沿用既有 core_loop_emitter_scene_test 私有字段判空契约，确认未静默构造 RAY 运行时。
-	_check(NAME, node.get("_fixed_emitter") == null, "PARTICLE 不应构造 FixedEmitter。")
-	_check(NAME, node.get("_level_runtime_controller") == null, "PARTICLE 不应构造运行期编排控制器。")
-	_check(NAME, is_instance_valid(node), "PARTICLE 安全停止后节点应仍有效。")
+	# B3b-1 起 RAY/PARTICLE 均合法：core_loop 为 PARTICLE 构造 FixedEmitter（particle_default_direction 默认 RIGHT）与运行期编排控制器。
+	_check(NAME, node.get("_fixed_emitter") != null, "PARTICLE 应合法构造 FixedEmitter（B3b-1 起）。")
+	_check(NAME, node.get("_level_runtime_controller") != null, "PARTICLE 应合法构造运行期编排控制器（B3b-1 起）。")
+	_check(NAME, is_instance_valid(node), "PARTICLE 初始化后节点应有效。")
 	var lpl: Node2D = _lpl(node)
-	_check(NAME, lpl != null and lpl.get_child_count() == 0, "PARTICLE 不应生成正式路径段，实际 %d。" % [lpl.get_child_count() if lpl != null else -1])
+	# 入树初始化不 fire：PARTICLE 不走 Ray 视觉路径，LightPathLayer 无段（PARTICLE visual 留 B4，本批 pulse 无 visual）。
+	_check(NAME, lpl != null and lpl.get_child_count() == 0, "PARTICLE 初始化不应生成 Ray 路径段，实际 %d。" % [lpl.get_child_count() if lpl != null else -1])
 	await _settle_and_free(node, false)
 
 
