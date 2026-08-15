@@ -1,7 +1,7 @@
 extends SceneTree
 
 ## LevelRuntimeController 单元测试（拆分片 1/5 · 发射请求与基础运行流程；D7-2 经 READY_TO_FIRE 发射）。
-## 覆盖：READY/MOVE_WINDOW 发射成功、SETUP/PULSE_ACTIVE/COMPLETED/拖拽中拒绝发射、非法方向先于 begin_pulse 拒绝、generation 递增、RayExecution 单次与视觉→水晶顺序。
+## 覆盖：READY/MOVE_WINDOW 发射成功、SETUP/COMPLETED/拖拽中/0.5s cooldown 未到拒绝发射（M4-E3 起 PULSE_ACTIVE 状态权限允许 repeated fire，拒绝来自 cooldown）、非法方向先于 begin_pulse 拒绝、generation 递增、RayExecution 单次与视觉→水晶顺序。
 ## D7-2 起 SETUP 不可直接发射，发射用例先 begin_runtime 进入 READY_TO_FIRE 再 request_fire；test 10 锁定 SETUP→request_fire 完整入口拒绝（无 Ray/光段/完成标签副作用）。
 ## 只通过公开接口验证发射请求编排；桩与装配见 fixtures/runtime_controller_fixture.gd。
 ## 由 Godot --script 运行，全部通过 quit(0)，任一失败 quit(1)；通过 preload 引用避开全局 class_name 缓存问题。
@@ -56,11 +56,12 @@ func _test_01_ready_fire_success() -> void:
 	var ok: bool = env.controller.request_fire()
 	_check(NAME, ok, "READY request_fire 应返回 true。")
 	_check(NAME, env.rsc.get_current_state() == _RuntimeInteractionTypes.RunState.PULSE_ACTIVE, "应进入 PULSE_ACTIVE。")
-	_check(NAME, env.controller.get_pulse_generation() == 1, "generation 期望 1。")
+	_check(NAME, env.controller.get_runtime_generation() == 1, "generation 期望 1。")
 	_check(NAME, env.sink.complete_label_visible == true, "完成标签应已显示（水晶在光路）。")
 
 
-## 2. MOVE_WINDOW 发射成功：先完成一次未完成脉冲到 MOVE_WINDOW，再次发射返回 true。
+## 2. MOVE_WINDOW 发射成功：先完成一次未完成脉冲到 MOVE_WINDOW，再次发射返回 true。M4-E1：同一 epoch 内第二次 fire 不递增 generation。
+##    M4-E3：同 epoch 第二次 fire 受 0.5s cooldown 硬门——经 fixture 可控时钟 advance 到 0.500 使 cooldown ready。
 func _test_02_move_window_fire_success() -> void:
 	const NAME: String = "02_MOVE_WINDOW发射成功"
 	var env: _Fixture._Env = _fixture.make_env(Vector2i(1, 3), Vector2i.RIGHT, null)
@@ -69,23 +70,27 @@ func _test_02_move_window_fire_success() -> void:
 	# 同步推进到 MOVE_WINDOW（未完成）。
 	env.rsc.finish_pulse(false)
 	_check(NAME, env.rsc.get_current_state() == _RuntimeInteractionTypes.RunState.MOVE_WINDOW, "前置应进入 MOVE_WINDOW。")
-	var gen_before: int = env.controller.get_pulse_generation()
+	# M4-E3：advance 到 0.500 使首次 fire 的 cooldown ready（0.499 边界由 repeated_fire_cooldown_test 覆盖）。
+	env.fire_cooldown_clock.advance_seconds(0.5)
+	var gen_before: int = env.controller.get_runtime_generation()
 	var ok: bool = env.controller.request_fire()
 	_check(NAME, ok, "MOVE_WINDOW request_fire 应返回 true。")
-	_check(NAME, env.controller.get_pulse_generation() == gen_before + 1, "generation 应递增。")
+	_check(NAME, env.controller.get_runtime_generation() == gen_before, "M4-E1：同 epoch 内 fire 不再递增 generation（期望 == gen_before）。")
 
 
-## 3. PULSE_ACTIVE 拒绝发射：进入 PULSE_ACTIVE 后再次 request_fire 返回 false，generation 不变。
+## 3. PULSE_ACTIVE 中 cooldown 未到拒绝 repeated fire（M4-E3 语义更新）：首次 fire 成功进入 PULSE_ACTIVE 后立即再 fire，
+##    状态权限已允许（repeated fire 开放），拒绝来自 0.5s cooldown 硬门；generation 不变、active 不变。
 func _test_03_pulse_active_rejects_fire() -> void:
-	const NAME: String = "03_PULSE_ACTIVE拒绝发射"
+	const NAME: String = "03_PULSE_ACTIVEcooldown未到拒绝"
 	var env: _Fixture._Env = _fixture.make_env(Vector2i(1, 3), Vector2i.RIGHT, Vector2i(5, 3))
 	env.rsc.begin_runtime()
 	env.controller.request_fire()
-	var gen_before: int = env.controller.get_pulse_generation()
+	var gen_before: int = env.controller.get_runtime_generation()
 	var ok: bool = env.controller.request_fire()
-	_check(NAME, not ok, "PULSE_ACTIVE request_fire 应返回 false。")
-	_check(NAME, env.controller.get_pulse_generation() == gen_before, "generation 不应变化。")
+	_check(NAME, not ok, "PULSE_ACTIVE cooldown 未到时 request_fire 应返回 false。")
+	_check(NAME, env.controller.get_runtime_generation() == gen_before, "generation 不应变化。")
 	_check(NAME, env.rsc.get_current_state() == _RuntimeInteractionTypes.RunState.PULSE_ACTIVE, "状态应保持 PULSE_ACTIVE。")
+	_check(NAME, env.controller.get_active_emission_count() == 1, "被拒重试不得创建第二个 emission（active 期望 1）。")
 
 
 ## 4. COMPLETED 拒绝发射：进入 COMPLETED 后 request_fire 返回 false。
@@ -110,7 +115,7 @@ func _test_05_dragging_rejects_fire() -> void:
 	var ok: bool = env.controller.request_fire()
 	_check(NAME, not ok, "拖拽中 request_fire 应返回 false。")
 	_check(NAME, env.rsc.get_current_state() == _RuntimeInteractionTypes.RunState.READY_TO_FIRE, "应保持 READY_TO_FIRE。")
-	_check(NAME, env.controller.get_pulse_generation() == 0, "generation 不应递增。")
+	_check(NAME, env.controller.get_runtime_generation() == 1, "M4-E1：begin_runtime 已推进 generation 到 1（fire 被拒不再变化）。")
 
 
 ## 6. 非法发射方向在 begin_pulse 前拒绝：direction=ZERO 时 build_fire_request 返回 null，request_fire 返回 false 且未进入 PULSE_ACTIVE。
@@ -122,20 +127,26 @@ func _test_06_invalid_direction_rejected_before_begin_pulse() -> void:
 	var ok: bool = env.controller.request_fire()
 	_check(NAME, not ok, "非法方向 request_fire 应返回 false。")
 	_check(NAME, env.rsc.get_current_state() == _RuntimeInteractionTypes.RunState.READY_TO_FIRE, "不得进入 PULSE_ACTIVE（begin_pulse 未被调用）。")
-	_check(NAME, env.controller.get_pulse_generation() == 0, "generation 不应递增。")
+	_check(NAME, env.controller.get_runtime_generation() == 1, "M4-E1：begin_runtime 已推进 generation 到 1（fire 被拒不再变化）。")
 
 
-## 7. 发射后 generation 递增：每次成功发射 generation +1。
+## 7. M4-E1 generation 新语义：fire 不再递增 generation——仅 begin_runtime（进入新 epoch）与 R 推进。同 epoch 多次 fire 共享同一 generation。
 func _test_07_generation_incremented_after_fire() -> void:
-	const NAME: String = "07_发射后generation递增"
+	const NAME: String = "07_generation不再每fire递增"
 	var env: _Fixture._Env = _fixture.make_env(Vector2i(1, 3), Vector2i.RIGHT, null)
-	_check(NAME, env.controller.get_pulse_generation() == 0, "初始 generation 期望 0。")
+	_check(NAME, env.controller.get_runtime_generation() == 0, "初始 generation 期望 0。")
 	env.rsc.begin_runtime()
+	_check(NAME, env.controller.get_runtime_generation() == 1, "M4-E1：begin_runtime 进入新 epoch 推进 generation 到 1。")
 	env.controller.request_fire()
-	_check(NAME, env.controller.get_pulse_generation() == 1, "首次发射后 generation 期望 1。")
+	_check(NAME, env.controller.get_runtime_generation() == 1, "M4-E1：首次 fire 不再递增 generation（仍 1）。")
 	env.rsc.finish_pulse(false)
+	# M4-E3：advance 到 0.500 使 cooldown ready，第二次 fire 才能真实启动。
+	env.fire_cooldown_clock.advance_seconds(0.5)
 	env.controller.request_fire()
-	_check(NAME, env.controller.get_pulse_generation() == 2, "二次发射后 generation 期望 2。")
+	_check(NAME, env.controller.get_runtime_generation() == 1, "M4-E1：同 epoch 二次 fire 仍不递增 generation（仍 1，证明 #1 generation 不再因普通 Fire 自增）。")
+	# R 才推进 generation（证明 #2 reset 失效旧 generation）。
+	env.controller.reset_runtime()
+	_check(NAME, env.controller.get_runtime_generation() == 2, "M4-E1：R 推进 generation 到 2（reset 失效旧 generation）。")
 
 
 ## 8. RayExecutionModule 只调用一次：发射后光路段数等于传播步数（ emitter(1,3) RIGHT 到边界 x=15，共 14 步）。
@@ -154,12 +165,12 @@ func _test_08_ray_execution_called_once() -> void:
 		_check(NAME, env.light_world_query_spy.total_query_calls() > 0, "Ray 执行总查询次数应 >0（实际 %d）。" % [env.light_world_query_spy.total_query_calls()])
 
 
-## 9. 每 step 保持视觉→水晶顺序：静态验证 _apply_ray_execution_result 中 show_step 早于 try_activate_crystal_at。
+## 9. 每 step 保持视觉→水晶顺序：M4-E2.1 起 _apply_ray_execution_result 迁入 RayEmissionDriver，扫描其源码确认 show_step 早于 try_activate_crystal_at（不再扫 LRC——Ray 执行细节已拆出）。
 func _test_09_visual_before_crystal_order() -> void:
 	const NAME: String = "09_视觉早于水晶顺序"
-	var src: String = FileAccess.get_file_as_string("res://gameplay/runtime/level_runtime_controller.gd")
+	var src: String = FileAccess.get_file_as_string("res://gameplay/runtime/ray_emission_driver.gd")
 	var fn_start: int = src.find("func _apply_ray_execution_result")
-	if _check(NAME, fn_start != -1, "未找到 _apply_ray_execution_result。"):
+	if _check(NAME, fn_start != -1, "未找到 _apply_ray_execution_result（应在 RayEmissionDriver 内）。"):
 		var next_fn: int = src.find("\nfunc ", fn_start + 1)
 		if next_fn == -1:
 			next_fn = src.length()
@@ -182,7 +193,7 @@ func _test_10_setup_rejects_fire_entry() -> void:
 	var env: _Fixture._Env = _fixture.make_env(Vector2i(1, 3), Vector2i.RIGHT, Vector2i(5, 3), 1, true)
 	# 前置：初始 SETUP，未调用 begin_runtime；generation、光段、Ray 查询、完成事实均为 0/false。
 	_check(NAME, env.rsc.get_current_state() == _RuntimeInteractionTypes.RunState.SETUP, "前置应 SETUP。")
-	_check(NAME, env.controller.get_pulse_generation() == 0, "前置 generation 期望 0。")
+	_check(NAME, env.controller.get_runtime_generation() == 0, "前置 generation 期望 0。")
 	_check(NAME, env.light_visual_controller.get_segment_count() == 0, "前置光段数期望 0。")
 	_check(NAME, env.light_world_query_spy != null, "前置应已注入 Ray 查询 spy。")
 	# 前置完成事实基线：required_count==1 使后续 is_completed==false 具判定意义（排除空 Registry 的平凡 false）。
@@ -193,7 +204,7 @@ func _test_10_setup_rejects_fire_entry() -> void:
 	var ok: bool = env.controller.request_fire()
 	_check(NAME, not ok, "SETUP request_fire 应返回 false。")
 	_check(NAME, env.rsc.get_current_state() == _RuntimeInteractionTypes.RunState.SETUP, "状态应保持 SETUP。")
-	_check(NAME, env.controller.get_pulse_generation() == 0, "generation 不应递增。")
+	_check(NAME, env.controller.get_runtime_generation() == 0, "generation 不应递增。")
 	_check(NAME, env.light_visual_controller.get_segment_count() == 0, "正式光段数期望 0（实际 %d）。" % [env.light_visual_controller.get_segment_count()])
 	# 直接观测 1：RayExecutionModule.execute 从未被调用（光段 0 不能单独冒充，因 Ray 执行后也可能无步）。
 	if env.light_world_query_spy != null:

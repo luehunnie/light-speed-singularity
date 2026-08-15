@@ -1,7 +1,10 @@
 extends SceneTree
 
-## LightVisualController 定向自动测试（Day 3 D3-B）。
-## 覆盖 show_step 创建/多步/cell 传递/四方向映射/非法方向/清理/连续清理/重建/计数/不访问水晶不修改状态/视觉→水晶顺序接线。
+## LightVisualController 定向自动测试（Day 3 D3-B；M4-E2 改 per-emission ownership）。
+## 覆盖 show_step(emission_id, generation, cell, direction) 创建/多步/cell 传递/四方向映射/非法方向；
+##   clear_emission 只清自身、clear_all 全清、连续清理安全、重建、计数；
+##   M4-E2 per-emission 隔离：新 Ray 不清旧 Ray、clear_emission(1) 不影响 emission 2、stale emission_id clear 天然 no-op；
+##   不访问水晶不修改状态、视觉→水晶顺序接线。
 ## 通过 preload 引用控制器与 LightSegmentView，避开全局 class_name 缓存问题；由 Godot --script 运行，全部通过 quit(0)，任一失败 quit(1)。
 ## 替身策略：每个用例新建一个 Node2D 父节点（不加入场景树），控制器把片段 add_child 到该父节点；
 ## LightSegmentView 的 @onready 子节点未就绪时 refresh_visual() 安全返回，_direction 字段仍写入，足以断言方向与位置接线。
@@ -29,13 +32,18 @@ func _initialize() -> void:
 	_test_06_slash_mapping()
 	_test_07_backslash_mapping()
 	_test_08_invalid_direction_legacy()
-	_test_09_clear_removes_all()
-	_test_10_repeated_clear_safe()
-	_test_11_recreate_after_clear()
-	_test_12_segment_count()
-	_test_13_no_crystal_access()
-	_test_14_no_state_mutation()
-	_test_15_wiring_visual_before_crystal()
+	_test_09_clear_emission_removes_only_that_emission()
+	_test_10_clear_all_removes_all()
+	_test_11_repeated_clear_safe()
+	_test_12_recreate_after_clear()
+	_test_13_segment_count_total()
+	_test_14_new_ray_does_not_clear_old_ray()
+	_test_15_clear_one_emission_keeps_other()
+	_test_16_stale_emission_clear_noop()
+	_test_17_emission_segment_count_and_generation()
+	_test_18_no_crystal_access()
+	_test_19_no_state_mutation()
+	_test_20_wiring_visual_before_crystal()
 	_report()
 	quit(0 if _failures.is_empty() else 1)
 
@@ -47,27 +55,30 @@ func _make_controller() -> Dictionary:
 	return { "parent": parent, "controller": controller }
 
 
-## 1. show_step 创建一个片段。
+## 1. show_step 创建一个片段（emission 1）。
 func _test_01_show_step_creates_one() -> void:
 	const NAME: String = "01_show_step创建一个"
 	var env: Dictionary = _make_controller()
 	var controller: _LightVisualController = env["controller"]
-	var ok: bool = controller.show_step(Vector2i(2, 3), Vector2i.RIGHT)
+	var ok: bool = controller.show_step(1, 1, Vector2i(2, 3), Vector2i.RIGHT)
 	_check(NAME, ok, "show_step 返回期望 true。")
 	_check(NAME, controller.get_segment_count() == 1, "片段数期望 1，实际 %d。" % [controller.get_segment_count()])
-	_check(NAME, controller.get_segment_at(0) != null, "get_segment_at(0) 不应为 null。")
+	_check(NAME, controller.get_emission_segment_count(1) == 1, "emission1 片段数期望 1。")
+	_check(NAME, controller.get_segments_for_emission(1).size() == 1, "emission1 片段副本 size 期望 1。")
 	(env["parent"] as Node2D).free()
 
 
-## 2. 多 step 创建多个片段。
+## 2. 多 step 同 emission 创建多个片段。
 func _test_02_multi_step_creates_many() -> void:
 	const NAME: String = "02_多step创建多个"
 	var env: Dictionary = _make_controller()
 	var controller: _LightVisualController = env["controller"]
-	controller.show_step(Vector2i(1, 1), Vector2i.RIGHT)
-	controller.show_step(Vector2i(2, 1), Vector2i.RIGHT)
-	controller.show_step(Vector2i(3, 1), Vector2i.UP)
+	controller.show_step(1, 1, Vector2i(1, 1), Vector2i.RIGHT)
+	controller.show_step(1, 1, Vector2i(2, 1), Vector2i.RIGHT)
+	controller.show_step(1, 1, Vector2i(3, 1), Vector2i.UP)
 	_check(NAME, controller.get_segment_count() == 3, "片段数期望 3，实际 %d。" % [controller.get_segment_count()])
+	_check(NAME, controller.get_emission_segment_count(1) == 3, "emission1 片段数期望 3。")
+	_check(NAME, controller.get_emission_count() == 1, "仍只有 1 个 emission。")
 	(env["parent"] as Node2D).free()
 
 
@@ -77,9 +88,10 @@ func _test_03_cell_position_passed() -> void:
 	var env: Dictionary = _make_controller()
 	var controller: _LightVisualController = env["controller"]
 	var cell: Vector2i = Vector2i(4, 7)
-	controller.show_step(cell, Vector2i.DOWN)
-	var view: _LightSegmentViewScript = controller.get_segment_at(0)
-	if _check(NAME, view != null, "片段不应为 null。"):
+	controller.show_step(1, 1, cell, Vector2i.DOWN)
+	var views: Array = controller.get_segments_for_emission(1)
+	if _check(NAME, views.size() == 1, "emission1 片段数期望 1。"):
+		var view: _LightSegmentViewScript = views[0]
 		var expected: Vector2 = _GridCoordinateRules.cell_to_world(cell)
 		_check(NAME, view.position == expected, "position 期望 %s，实际 %s。" % [expected, view.position])
 	(env["parent"] as Node2D).free()
@@ -110,11 +122,12 @@ func _test_08_invalid_direction_legacy() -> void:
 	const NAME: String = "08_非法方向按旧行为"
 	var env: Dictionary = _make_controller()
 	var controller: _LightVisualController = env["controller"]
-	var ok: bool = controller.show_step(Vector2i(0, 0), Vector2i.ZERO)
+	var ok: bool = controller.show_step(1, 1, Vector2i(0, 0), Vector2i.ZERO)
 	_check(NAME, ok, "非法方向仍应创建片段并返回 true（旧行为）。")
 	_check(NAME, controller.get_segment_count() == 1, "非法方向片段数期望 1，实际 %d。" % [controller.get_segment_count()])
-	var view: _LightSegmentViewScript = controller.get_segment_at(0)
-	if _check(NAME, view != null, "片段不应为 null。"):
+	var views: Array = controller.get_segments_for_emission(1)
+	if _check(NAME, views.size() == 1, "片段不应为空。"):
+		var view: _LightSegmentViewScript = views[0]
 		# 非法方向不映射到任意纹理形态，状态为空。
 		_check(NAME, view._direction == Vector2i.ZERO, "_direction 期望 ZERO，实际 %s。" % [view._direction])
 		var state: StringName = _LightSegmentVisualProfile.get_segment_state_for_direction(view._direction)
@@ -122,75 +135,168 @@ func _test_08_invalid_direction_legacy() -> void:
 	(env["parent"] as Node2D).free()
 
 
-## 9. clear_path 清理全部节点。
-func _test_09_clear_removes_all() -> void:
-	const NAME: String = "09_clear清理全部"
+## 9. clear_emission 只清自身：emission 1/2 各有片段，clear_emission(1) 后 emission 1 清空、emission 2 不受影响。
+func _test_09_clear_emission_removes_only_that_emission() -> void:
+	const NAME: String = "09_clear_emission只清自身"
 	var env: Dictionary = _make_controller()
 	var controller: _LightVisualController = env["controller"]
-	controller.show_step(Vector2i(1, 1), Vector2i.RIGHT)
-	controller.show_step(Vector2i(2, 1), Vector2i.RIGHT)
-	controller.clear_path()
-	_check(NAME, controller.get_segment_count() == 0, "清理后片段数期望 0，实际 %d。" % [controller.get_segment_count()])
-	_check(NAME, controller.get_segment_at(0) == null, "清理后 get_segment_at(0) 应为 null。")
+	controller.show_step(1, 1, Vector2i(1, 1), Vector2i.RIGHT)
+	controller.show_step(2, 1, Vector2i(5, 5), Vector2i.RIGHT)
+	_check(NAME, controller.get_segment_count() == 2, "前置两 emission 各 1 段，总数期望 2。")
+	controller.clear_emission(1)
+	_check(NAME, controller.get_emission_segment_count(1) == 0, "clear_emission(1) 后 emission1 片段期望 0。")
+	_check(NAME, controller.get_segments_for_emission(1).is_empty(), "emission1 片段副本应空。")
+	_check(NAME, controller.get_emission_segment_count(2) == 1, "emission2 片段不受影响，期望 1。")
+	_check(NAME, controller.get_segment_count() == 1, "总片段数期望 1（只剩 emission2）。")
 	(env["parent"] as Node2D).free()
 
 
-## 10. 连续 clear 安全（无子节点时空遍历不报错）。
-func _test_10_repeated_clear_safe() -> void:
-	const NAME: String = "10_连续clear安全"
+## 10. clear_all 清理全部节点。
+func _test_10_clear_all_removes_all() -> void:
+	const NAME: String = "10_clear_all清理全部"
 	var env: Dictionary = _make_controller()
 	var controller: _LightVisualController = env["controller"]
-	controller.show_step(Vector2i(1, 1), Vector2i.RIGHT)
-	controller.clear_path()
-	controller.clear_path()
-	controller.clear_path()
+	controller.show_step(1, 1, Vector2i(1, 1), Vector2i.RIGHT)
+	controller.show_step(2, 1, Vector2i(2, 1), Vector2i.RIGHT)
+	controller.clear_all()
+	_check(NAME, controller.get_segment_count() == 0, "清理后片段数期望 0，实际 %d。" % [controller.get_segment_count()])
+	_check(NAME, controller.get_emission_count() == 0, "清理后 emission 数期望 0。")
+	_check(NAME, controller.get_segments_for_emission(1).is_empty(), "清理后 emission1 片段副本应空。")
+	(env["parent"] as Node2D).free()
+
+
+## 11. 连续 clear 安全（无片段时空遍历不报错；clear_all / clear_emission 均幂等）。
+func _test_11_repeated_clear_safe() -> void:
+	const NAME: String = "11_连续clear安全"
+	var env: Dictionary = _make_controller()
+	var controller: _LightVisualController = env["controller"]
+	controller.show_step(1, 1, Vector2i(1, 1), Vector2i.RIGHT)
+	controller.clear_emission(1)
+	controller.clear_emission(1)
+	controller.clear_all()
+	controller.clear_all()
 	_check(NAME, controller.get_segment_count() == 0, "连续清理后片段数期望 0，实际 %d。" % [controller.get_segment_count()])
 	(env["parent"] as Node2D).free()
 
 
-## 11. clear 后可重新创建。
-func _test_11_recreate_after_clear() -> void:
-	const NAME: String = "11_clear后可重建"
+## 12. clear 后可重新创建（同 emission_id 重建或新 emission_id）。
+func _test_12_recreate_after_clear() -> void:
+	const NAME: String = "12_clear后可重建"
 	var env: Dictionary = _make_controller()
 	var controller: _LightVisualController = env["controller"]
-	controller.show_step(Vector2i(1, 1), Vector2i.RIGHT)
-	controller.clear_path()
-	var ok: bool = controller.show_step(Vector2i(5, 5), Vector2i.UP)
+	controller.show_step(1, 1, Vector2i(1, 1), Vector2i.RIGHT)
+	controller.clear_emission(1)
+	var ok: bool = controller.show_step(1, 1, Vector2i(5, 5), Vector2i.UP)
 	_check(NAME, ok, "清理后再次 show_step 应成功。")
 	_check(NAME, controller.get_segment_count() == 1, "重建后片段数期望 1，实际 %d。" % [controller.get_segment_count()])
-	var view: _LightSegmentViewScript = controller.get_segment_at(0)
-	if _check(NAME, view != null, "重建片段不应为 null。"):
-		_check(NAME, view._direction == Vector2i.UP, "重建片段方向期望 UP，实际 %s。" % [view._direction])
+	var views: Array = controller.get_segments_for_emission(1)
+	if _check(NAME, views.size() == 1, "重建片段不应为空。"):
+		_check(NAME, views[0]._direction == Vector2i.UP, "重建片段方向期望 UP，实际 %s。" % [views[0]._direction])
 	(env["parent"] as Node2D).free()
 
 
-## 12. get_segment_count 正确（初始/递增/清理后归零）。
-func _test_12_segment_count() -> void:
-	const NAME: String = "12_get_segment_count正确"
+## 13. get_segment_count 正确（初始/递增/清理后归零；跨多 emission 求和）。
+func _test_13_segment_count_total() -> void:
+	const NAME: String = "13_get_segment_count总数"
 	var env: Dictionary = _make_controller()
 	var controller: _LightVisualController = env["controller"]
 	_check(NAME, controller.get_segment_count() == 0, "初始片段数期望 0。")
-	controller.show_step(Vector2i(0, 0), Vector2i.RIGHT)
+	controller.show_step(1, 1, Vector2i(0, 0), Vector2i.RIGHT)
 	_check(NAME, controller.get_segment_count() == 1, "1 步后期望 1，实际 %d。" % [controller.get_segment_count()])
-	controller.show_step(Vector2i(1, 0), Vector2i.RIGHT)
+	controller.show_step(1, 1, Vector2i(1, 0), Vector2i.RIGHT)
 	_check(NAME, controller.get_segment_count() == 2, "2 步后期望 2，实际 %d。" % [controller.get_segment_count()])
-	controller.clear_path()
-	_check(NAME, controller.get_segment_count() == 0, "清理后期望 0，实际 %d。" % [controller.get_segment_count()])
+	controller.show_step(2, 1, Vector2i(9, 9), Vector2i.RIGHT)
+	_check(NAME, controller.get_segment_count() == 3, "emission2 加 1 段后期望 3，实际 %d。" % [controller.get_segment_count()])
+	controller.clear_emission(1)
+	_check(NAME, controller.get_segment_count() == 1, "清 emission1 后期望 1（只剩 emission2），实际 %d。" % [controller.get_segment_count()])
+	controller.clear_all()
+	_check(NAME, controller.get_segment_count() == 0, "clear_all 后期望 0。")
 	(env["parent"] as Node2D).free()
 
 
-## 13. 不访问水晶：控制器源码不应引用水晶或激活等视觉无关职责（静态接线检查）。
-func _test_13_no_crystal_access() -> void:
-	const NAME: String = "13_不访问水晶"
+## 14.（spec 九）新 Ray 不清旧 Ray：emission 1 show_step 后 emission 2 show_step，emission 1 片段完好。
+func _test_14_new_ray_does_not_clear_old_ray() -> void:
+	const NAME: String = "14_新Ray不清旧Ray"
+	var env: Dictionary = _make_controller()
+	var controller: _LightVisualController = env["controller"]
+	controller.show_step(1, 1, Vector2i(1, 1), Vector2i.RIGHT)
+	controller.show_step(1, 1, Vector2i(2, 1), Vector2i.RIGHT)
+	_check(NAME, controller.get_emission_segment_count(1) == 2, "前置 emission1 有 2 段。")
+	# 新 Ray（emission 2）不清旧 Ray（emission 1）。
+	controller.show_step(2, 1, Vector2i(5, 5), Vector2i.RIGHT)
+	controller.show_step(2, 1, Vector2i(6, 5), Vector2i.RIGHT)
+	_check(NAME, controller.get_emission_segment_count(1) == 2, "新 Ray 后 emission1 片段仍 2（不被清）。")
+	_check(NAME, controller.get_emission_segment_count(2) == 2, "emission2 片段期望 2。")
+	_check(NAME, controller.get_segment_count() == 4, "总片段期望 4。")
+	_check(NAME, controller.get_emission_count() == 2, "emission 数期望 2。")
+	(env["parent"] as Node2D).free()
+
+
+## 15.（spec 九）clear_emission(1) 不影响 emission 2：两 emission 各有片段，clear emission1 后 emission2 视觉与方向保持。
+func _test_15_clear_one_emission_keeps_other() -> void:
+	const NAME: String = "15_清一emission不影响其它"
+	var env: Dictionary = _make_controller()
+	var controller: _LightVisualController = env["controller"]
+	controller.show_step(1, 1, Vector2i(1, 1), Vector2i.RIGHT)
+	controller.show_step(2, 1, Vector2i(7, 7), Vector2i.DOWN)
+	controller.clear_emission(1)
+	_check(NAME, controller.get_emission_segment_count(1) == 0, "emission1 清空。")
+	var views2: Array = controller.get_segments_for_emission(2)
+	if _check(NAME, views2.size() == 1, "emission2 片段仍 1（不受 emission1 清理影响）。"):
+		_check(NAME, views2[0]._direction == Vector2i.DOWN, "emission2 方向保持 DOWN。")
+		var expected: Vector2 = _GridCoordinateRules.cell_to_world(Vector2i(7, 7))
+		_check(NAME, views2[0].position == expected, "emission2 position 保持 %s。" % [expected])
+	_check(NAME, controller.get_emission_count() == 1, "emission 数期望 1（只剩 emission2）。")
+	(env["parent"] as Node2D).free()
+
+
+## 16.（spec 九）stale emission_id clear 天然 no-op：clear_emission(999)（从未 show）不影响现有 emission；emission_id 跨 clear 不复用。
+func _test_16_stale_emission_clear_noop() -> void:
+	const NAME: String = "16_stale_emission_clear为no-op"
+	var env: Dictionary = _make_controller()
+	var controller: _LightVisualController = env["controller"]
+	controller.show_step(1, 1, Vector2i(1, 1), Vector2i.RIGHT)
+	# clear 一个从未 show 过的 emission_id（模拟 stale / 旧 epoch 残留 id）：安全 no-op，不影响 emission1。
+	controller.clear_emission(999)
+	_check(NAME, controller.get_emission_segment_count(1) == 1, "stale clear 不影响 emission1，片段仍 1。")
+	_check(NAME, controller.get_segment_count() == 1, "总片段仍 1。")
+	# clear 后再 clear 同 id（已清）幂等 no-op。
+	controller.clear_emission(1)
+	controller.clear_emission(1)
+	_check(NAME, controller.get_segment_count() == 0, "emission1 清空后总片段 0。")
+	(env["parent"] as Node2D).free()
+
+
+## 17. get_emission_segment_count / get_emission_generation / get_emission_count 诊断：未登记返回 0/-1/不计入。
+func _test_17_emission_segment_count_and_generation() -> void:
+	const NAME: String = "17_emission诊断访问器"
+	var env: Dictionary = _make_controller()
+	var controller: _LightVisualController = env["controller"]
+	_check(NAME, controller.get_emission_segment_count(1) == 0, "未登记 emission 片段数期望 0。")
+	_check(NAME, controller.get_emission_generation(1) == -1, "未登记 emission generation 期望 -1。")
+	_check(NAME, controller.get_emission_count() == 0, "初始 emission 数期望 0。")
+	controller.show_step(1, 5, Vector2i(1, 1), Vector2i.RIGHT)
+	controller.show_step(1, 5, Vector2i(2, 1), Vector2i.RIGHT)
+	controller.show_step(2, 6, Vector2i(9, 9), Vector2i.RIGHT)
+	_check(NAME, controller.get_emission_generation(1) == 5, "emission1 generation metadata 期望 5。")
+	_check(NAME, controller.get_emission_generation(2) == 6, "emission2 generation metadata 期望 6。")
+	_check(NAME, controller.get_emission_count() == 2, "emission 数期望 2。")
+	_check(NAME, controller.get_segments_for_emission(999).is_empty(), "未登记 emission 片段副本应空。")
+	(env["parent"] as Node2D).free()
+
+
+## 18. 不访问水晶：控制器源码不应引用水晶或激活等视觉无关职责（静态接线检查）。
+func _test_18_no_crystal_access() -> void:
+	const NAME: String = "18_不访问水晶"
 	var src: String = FileAccess.get_file_as_string("res://gameplay/visuals/light_visual_controller.gd")
 	var forbidden: Array = ["activate", "crystal", "Crystal", "BasicCrystal", "try_activate_crystal", "all_required_crystals"]
 	for token: String in forbidden:
 		_check(NAME, src.find(token) == -1, "控制器源码不应包含视觉无关令牌：%s" % [token])
 
 
-## 14. 不修改状态：控制器源码不应引用运行状态/脉冲版本/完成/库存/放置/拖拽/计时器等事实（静态接线检查）。
-func _test_14_no_state_mutation() -> void:
-	const NAME: String = "14_不修改状态"
+## 19. 不修改状态：控制器源码不应引用运行状态/脉冲版本/完成/库存/放置/拖拽/计时器等事实（静态接线检查）。
+func _test_19_no_state_mutation() -> void:
+	const NAME: String = "19_不修改状态"
 	var src: String = FileAccess.get_file_as_string("res://gameplay/visuals/light_visual_controller.gd")
 	var forbidden: Array = [
 		"_run_state_controller", "pulse_generation", "is_level_completed",
@@ -202,12 +308,12 @@ func _test_14_no_state_mutation() -> void:
 		_check(NAME, src.find(token) == -1, "控制器源码不应包含状态/传播相关令牌：%s" % [token])
 
 
-## 15. 应用结果仍保持视觉→水晶顺序（D3-E：_apply_ray_execution_result 迁入 LevelRuntimeController，检查其源码中 show_step 早于 try_activate_crystal_at，且无第二套视觉创建实现）。
-func _test_15_wiring_visual_before_crystal() -> void:
-	const NAME: String = "15_视觉→水晶顺序接线"
-	var src: String = FileAccess.get_file_as_string("res://gameplay/runtime/level_runtime_controller.gd")
+## 20. 应用结果仍保持视觉→水晶顺序（M4-E2.1：_apply_ray_execution_result 迁入 RayEmissionDriver，扫描其源码确认 show_step 早于 try_activate_crystal_at，且无第二套视觉创建实现）。
+func _test_20_wiring_visual_before_crystal() -> void:
+	const NAME: String = "20_视觉→水晶顺序接线"
+	var src: String = FileAccess.get_file_as_string("res://gameplay/runtime/ray_emission_driver.gd")
 	var fn_start: int = src.find("func _apply_ray_execution_result")
-	if _check(NAME, fn_start != -1, "未找到 _apply_ray_execution_result。"):
+	if _check(NAME, fn_start != -1, "未找到 _apply_ray_execution_result（应在 RayEmissionDriver 内）。"):
 		var next_fn: int = src.find("\nfunc ", fn_start + 1)
 		if next_fn == -1:
 			next_fn = src.length()
@@ -225,9 +331,10 @@ func _test_15_wiring_visual_before_crystal() -> void:
 func _check_mapping(group_name: String, direction: Vector2i, expected_state: StringName) -> void:
 	var env: Dictionary = _make_controller()
 	var controller: _LightVisualController = env["controller"]
-	controller.show_step(Vector2i(0, 0), direction)
-	var view: _LightSegmentViewScript = controller.get_segment_at(0)
-	if _check(group_name, view != null, "片段不应为 null。"):
+	controller.show_step(1, 1, Vector2i(0, 0), direction)
+	var views: Array = controller.get_segments_for_emission(1)
+	if _check(group_name, views.size() == 1, "片段不应为空。"):
+		var view: _LightSegmentViewScript = views[0]
 		_check(group_name, view._direction == direction, "_direction 期望 %s，实际 %s。" % [direction, view._direction])
 		var state: StringName = _LightSegmentVisualProfile.get_segment_state_for_direction(direction)
 		_check(group_name, state == expected_state, "方向 %s 状态期望 %s，实际 %s。" % [direction, expected_state, state])
@@ -244,9 +351,9 @@ func _check(group_name: String, ok: bool, detail: String) -> bool:
 
 ## 输出测试摘要并退出。
 func _report() -> void:
-	var group_count: int = 15
+	var group_count: int = 20
 	var passed_checks: int = _checks - _failures.size()
-	print("==== LightVisualController D3-B 测试摘要 ====")
+	print("==== LightVisualController 测试摘要（M4-E2 per-emission）====")
 	print("测试组数：%d" % group_count)
 	print("断言总数：%d" % _checks)
 	print("通过断言：%d" % passed_checks)

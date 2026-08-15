@@ -88,7 +88,7 @@ static func run() -> SelfCheckResult:
 
 	# --- 五个 RunState 分别验证五条纯权限规则（5 × 5 = 25 项）---
 	# 显式构造测试状态，不读取 core_loop.current_run_state；
-	# 每行期望值严格对应 D7-2 五态权限合同（SETUP 不可发射；READY/MOVE 可发射；PULSE/COMPLETED 不可发射）。
+	# 每行期望值严格对应五态权限合同（M4-E3 起：SETUP 不可发射；READY/PULSE/MOVE 可发射（PULSE 为 repeated fire，0.5s cooldown 由调用方预检）；COMPLETED 不可发射）。
 	_check_state_rules(
 			details,
 			_RuntimeInteractionTypes.RunState.SETUP,
@@ -113,7 +113,7 @@ static func run() -> SelfCheckResult:
 			details,
 			_RuntimeInteractionTypes.RunState.PULSE_ACTIVE,
 			"PULSE_ACTIVE",
-			false,  # can_fire_light
+			true,   # can_fire_light（M4-E3 repeated fire 开放；0.5s cooldown 硬门由调用方预检）
 			true,   # can_edit_layout
 			false,  # can_edit_configuration
 			true,   # configuration_locked

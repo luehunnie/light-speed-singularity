@@ -15,6 +15,8 @@ extends SceneTree
 ##   07 不触发 Ray（LightVisualController 观测段数前后均 0 + Gate 源码无光/Ray/发射器/视觉依赖）。
 ##   08 不改库存/占用/水晶（Inventory/Occupancy 观测不变 + 场景内水晶事实不变）。
 ##   09 不依赖 addons（Gate preload 路径无 res://addons + 正向证明只依赖 gameplay/level/validation）。
+##   10 合法 PARTICLE 不阻断（编辑示例 Emitter 翻为 PARTICLE → is_valid=true / 0 ERROR / 无 emitter_runtime_form_unsupported；
+##      证明 B3b-1 起 Gate 经纯委托链对 PARTICLE 与 RAY 一致放行）。
 ##
 ## 约束：不修改/不保存任何场景/资源/既有测试；实例不入树；各场景与观测器受控释放。
 ##   运行方式：直调控制台 exe --headless --script（不经 MCP run_project，避开 .tres 自动归一化）。
@@ -29,11 +31,12 @@ const _InventoryController: GDScript = preload("res://gameplay/placement/invento
 const _OccupancyRegistry: GDScript = preload("res://gameplay/placement/occupancy_registry.gd")
 const _LightVisualController: GDScript = preload("res://gameplay/visuals/light_visual_controller.gd")
 const _BasicCrystal: GDScript = preload("res://gameplay/crystals/basic_crystal.gd")
+const _EmitterConfigNode: GDScript = preload("res://gameplay/mechanisms/emitters/emitter_config_node.gd")
 
 const _BLANK_TEMPLATE_PATH: String = "res://levels/templates/level_template.tscn"
 const _EDITING_EXAMPLE_PATH: String = "res://levels/templates/examples/level_template_editing_example.tscn"
 const _GATE_SCRIPT_PATH: String = "res://gameplay/runtime/runtime_validation_gate.gd"
-const _GROUP_COUNT: int = 9
+const _GROUP_COUNT: int = 10
 
 # Gate preload 路径中禁止出现的“光/Ray/发射器/视觉”命名空间（仅扫 preload 语句，不扫注释）。
 const _RAY_NS: Array = [
@@ -62,6 +65,7 @@ func _initialize() -> void:
 	_test_07_no_ray_triggered()
 	_test_08_no_inventory_occupancy_crystal_change()
 	_test_09_no_addons_dependency()
+	_test_10_legal_particle_not_blocked()
 	_report()
 	_cleanup_observers()
 	quit(0 if _failures.is_empty() else 1)
@@ -251,6 +255,32 @@ func _test_09_no_addons_dependency() -> void:
 		if p.ends_with("level_validator.gd"):
 			has_validator = true
 	_check(G, has_validator, "Gate 应 preload level_validator.gd（复用既有 Validator）。")
+
+
+# ===== 10 合法 PARTICLE 不阻断 =====
+
+## 编辑示例（RAY 合法）原样加载后，把唯一 Emitter 的 default_light_form 内存翻为 PARTICLE（不写回资源），
+## 经 Gate 校验：is_valid=true、0 ERROR、无 emitter_runtime_form_unsupported。
+## 证明 B3b-1 起 PARTICLE 已接 Runtime，Gate 经纯委托链对 PARTICLE 与 RAY 一致放行（不阻断正式开始）。
+func _test_10_legal_particle_not_blocked() -> void:
+	const G: String = "10_合法PARTICLE不阻断"
+	var root: Node2D = _instantiate(_EDITING_EXAMPLE_PATH, G)
+	if root == null:
+		return
+	var emitter_node: Node = root.get_node_or_null(NodePath("RuntimeObjects/Emitter"))
+	if emitter_node == null or not is_instance_of(emitter_node, _EmitterConfigNode):
+		_check(G, false, "编辑示例应有 RuntimeObjects/Emitter（EmitterConfigNode）。")
+		root.free()
+		return
+	var emitter: _EmitterConfigNode = emitter_node
+	emitter.default_light_form = _EmitterConfigNode.LightForm.PARTICLE
+	var result: _LevelValidationResult = _Gate.new().validate_for_run_start(root)
+	_check(G, is_instance_of(result, _LevelValidationResult), "应返回 LevelValidationResult 实例。")
+	_check(G, result.is_valid() == true, "合法 PARTICLE 经 Gate 期望 is_valid=true。")
+	_check(G, result.get_error_count() == 0, "合法 PARTICLE 经 Gate 期望 0 ERROR，实际 %d。" % result.get_error_count())
+	_check(G, not _has_code_at(result, "emitter_runtime_form_unsupported", _LevelValidationIssue.Severity.ERROR),
+		"合法 PARTICLE 经 Gate 不应报 emitter_runtime_form_unsupported。")
+	root.free()
 
 
 # ===== 场景加载 =====

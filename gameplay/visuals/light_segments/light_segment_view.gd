@@ -12,22 +12,28 @@ extends Node2D
 ## 由核心闭环原型控制器在“每进入一个格子”时实例化一个，定位到格中心并加入 LightPathLayer。
 ##
 ## 关键边界（对应冻结决策）：
-## - visual_profile 为空或对应方向纹理为空时，静默回退到黄色占位块，不输出 warning。
+## - visual_profile 为空或对应方向纹理为空时，静默回退到 16px 厚黄色窄光束（按 direction 旋转；正交长 CELL_SIZE、斜向长 CELL_SIZE*√2），不输出 warning。
 ## - 不修改光传播方向、不调用镜面反射、不判断阻挡、不点亮水晶、不修改运行状态。
-## - 不根据纹理反向决定方向；方向只由 set_direction() 写入，仅用于选择纹理。
+## - 不根据纹理反向决定方向；方向只由 set_direction() 写入，仅用于选择纹理与 fallback 光束朝向。
 ## - 每次 refresh_visual() 都显式重设 Artwork.texture / visible / self_modulate 与
-##   PlaceholderBlock.visible / color，避免从有纹理切换到无纹理时残留旧图片。
+##   PlaceholderBlock.visible / color / offset_* / pivot_offset / rotation，避免从有纹理切换到无纹理时残留旧图片或旧方块几何。
 ## - 同一格允许多个 LightSegmentView 共存，本组件不做 cell 去重或对象池。
+## - fallback 光束厚度冻结 16px（FALLBACK_THICKNESS_PX），逻辑格仍 64×64；正式 Artwork 画布保留 64×64（画布尺寸不代表可见光束填满 64×64）。
 ## - 用 preload 引用 LightSegmentVisualProfile 脚本作为类型，避开 MCP run_project 不重建全局类型缓存的问题。
 
 
 # 用 preload 引用光线路段视觉资源脚本，作为 visual_profile 与方法参数的静态类型。
 const _LightSegmentVisualProfile: GDScript = preload("res://gameplay/visuals/light_segments/light_segment_visual_profile.gd")
+# 世界逻辑格尺寸唯一来源（与 GridCoordinateRules / GridPlacedObject 同源），用于算 fallback 光束长度（正交=CELL_SIZE，斜向=CELL_SIZE*√2 角到角连续）。
+const _GridMetrics: GDScript = preload("res://gameplay/grid/grid_metrics.gd")
+
+## fallback 光束可见厚度（冻结 16px，D7-4 B4b-2）。逻辑格仍 64×64；本常量只决定无纹理占位光束的窄边宽，不影响正式美术画布。
+const FALLBACK_THICKNESS_PX: int = 16
 
 ## 该光线路段的视觉资源集合。可为空；为空或对应方向纹理为空时回退到黄色占位块。
 @export var visual_profile: _LightSegmentVisualProfile
 
-# 占位 ColorRect 子节点：纹理缺失时显示的黄色方块。默认可见，默认颜色保持旧占位视觉。
+# 占位 ColorRect 子节点：纹理缺失时显示的 16px 厚黄色窄光束（按 direction 旋转）。默认可见，默认颜色保持旧占位视觉。
 @onready var _placeholder_block: ColorRect = $PlaceholderBlock
 # 美术 TextureRect 子节点：承载四方向正式光线纹理。默认隐藏，位于 PlaceholderBlock 之后（覆盖在上层）。
 @onready var _artwork: TextureRect = $Artwork
@@ -94,6 +100,10 @@ func refresh_visual() -> void:
 	if _artwork == null or _placeholder_block == null:
 		return
 
+	# fallback 占位光束几何按当前方向重算（正交/斜向长度不同，厚度恒 16，rotation=angle(direction)）。
+	# 无论是否最终显示占位块都先算，保证无纹理时几何正确、且方向变化后占位块不残留旧朝向。
+	_apply_placeholder_geometry(_direction)
+
 	var texture: Texture2D = _resolve_texture()
 	# 每次刷新显式重设全部相关属性，避免从有纹理切换到无纹理时残留旧图片。
 	# self_modulate 与占位块 color 都始终跟随 light_color，保证正式纹理与占位块共用同一光线颜色。
@@ -117,3 +127,25 @@ func _resolve_texture() -> Texture2D:
 	if visual_profile == null:
 		return null
 	return visual_profile.get_texture_for_direction(_direction)
+
+
+## 按 fallback 厚度与方向重算占位光束几何并写入 PlaceholderBlock（D7-4 B4b-2）。
+## [br]职责：把 PlaceholderBlock 布为以本节点原点（格中心）为中心、沿 direction 方向的窄光束——
+##   正交方向长度 = CELL_SIZE（覆盖一格、相邻格在共享边中点相接）；斜向长度 = CELL_SIZE*√2（角到角、相邻斜格在共享角相接，视觉连续）；
+##   厚度恒 FALLBACK_THICKNESS_PX(16)；rotation = Vector2(direction).angle()（与 ParticleView 同一八方向角度来源）。
+## [br]本函数无返回值；副作用是写 PlaceholderBlock 的 offset_* / pivot_offset / rotation。
+## [br]边界条件：逻辑格仍 64×64——本函数只决定 fallback 占位光束的可见窄边与朝向，不触碰 Artwork 64×64 画布，不改光传播逻辑；
+##   方向非法（如 ZERO）时 angle()==0，光束呈水平，不报错（与光路方向始终合法八方向不冲突，仅视觉保守）。
+func _apply_placeholder_geometry(direction: Vector2i) -> void:
+	# 斜向（两分量均非 0）光束需更长以角到角连续；正交覆盖一格即可。
+	var is_diagonal: bool = direction.x != 0 and direction.y != 0
+	var beam_length: float = float(_GridMetrics.CELL_SIZE) * (sqrt(2.0) if is_diagonal else 1.0)
+	var half_length: float = beam_length / 2.0
+	var half_thickness: float = float(FALLBACK_THICKNESS_PX) / 2.0
+	# 以格中心（本节点原点）为中心的窄光束：offsets 对称、pivot_offset 置中使 rotation 绕格中心。
+	_placeholder_block.offset_left = -half_length
+	_placeholder_block.offset_right = half_length
+	_placeholder_block.offset_top = -half_thickness
+	_placeholder_block.offset_bottom = half_thickness
+	_placeholder_block.pivot_offset = Vector2(half_length, half_thickness)
+	_placeholder_block.rotation = Vector2(direction).angle()

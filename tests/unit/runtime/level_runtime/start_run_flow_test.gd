@@ -108,16 +108,16 @@ func _test_03_valid_no_auto_fire() -> void:
 	root.free()
 
 
-## 4. generation 不变：valid Start Run 后 pulse_generation 仍为 0（不递增、不预占版本号）。
+## 4. M4-E1 generation 新语义：valid Start Run（SETUP→READY）进入新 Runtime epoch，推进 generation 0→1；同 epoch 后续 fire 不再递增。
 func _test_04_generation_unchanged() -> void:
-	const NAME: String = "04_generation不变"
+	const NAME: String = "04_generation_新语义"
 	var env: _Fixture._Env = _fixture.make_env(Vector2i(1, 3), Vector2i.RIGHT, Vector2i(5, 3))
 	var root: Node2D = _load_scene(_EDITING_EXAMPLE_PATH, NAME)
 	if root == null:
 		return
-	_check(NAME, env.controller.get_pulse_generation() == 0, "前置 generation 期望 0。")
+	_check(NAME, env.controller.get_runtime_generation() == 0, "前置 generation 期望 0。")
 	env.controller.request_begin_runtime(root)
-	_check(NAME, env.controller.get_pulse_generation() == 0, "valid Start Run 后 generation 应仍为 0，实际 %d。" % [env.controller.get_pulse_generation()])
+	_check(NAME, env.controller.get_runtime_generation() == 1, "M4-E1：valid Start Run 进入新 epoch 推进 generation 到 1，实际 %d。" % [env.controller.get_runtime_generation()])
 	root.free()
 
 
@@ -181,7 +181,7 @@ func _test_08_invalid_no_side_effects() -> void:
 	var occ_consistent_before: bool = env.occupancy.is_consistent()
 	env.controller.request_begin_runtime(root)
 	_check(NAME, env.rsc.get_current_state() == _RuntimeInteractionTypes.RunState.SETUP, "状态应保持 SETUP。")
-	_check(NAME, env.controller.get_pulse_generation() == 0, "generation 应保持 0。")
+	_check(NAME, env.controller.get_runtime_generation() == 0, "generation 应保持 0。")
 	_check(NAME, env.light_visual_controller.get_segment_count() == 0, "正式光段数应保持 0。")
 	if env.light_world_query_spy != null:
 		_check(NAME, env.light_world_query_spy.total_query_calls() == 0, "Ray 查询次数应保持 0。")
@@ -232,7 +232,7 @@ func _test_10_non_setup_repeat_rejected() -> void:
 		_check(NAME, state_before != _RuntimeInteractionTypes.RunState.SETUP,
 			"[%s] 前置应已离开 SETUP，实际 %s。" % [label, _state_label(state_before)])
 		var count_before: int = sink.count()
-		var gen_before: int = env.controller.get_pulse_generation()
+		var gen_before: int = env.controller.get_runtime_generation()
 		# 正式 Start Run 入口在非 SETUP 下必须被拒绝。
 		var result: _LevelValidationResult = env.controller.request_begin_runtime(root)
 		_check(NAME, result == null, "[%s] 非 SETUP request_begin_runtime 应返回 null，实际 %s。" % [label, str(result)])
@@ -240,8 +240,8 @@ func _test_10_non_setup_repeat_rejected() -> void:
 			"[%s] 状态应不变，实际 %s。" % [label, _state_label(env.rsc.get_current_state())])
 		_check(NAME, sink.count() == count_before,
 			"[%s] 不应产生额外 state_changed，实际 %d。" % [label, sink.count()])
-		_check(NAME, env.controller.get_pulse_generation() == gen_before,
-			"[%s] 不应 fire（generation 不变），实际 %d。" % [label, env.controller.get_pulse_generation()])
+		_check(NAME, env.controller.get_runtime_generation() == gen_before,
+			"[%s] 不应 fire（generation 不变），实际 %d。" % [label, env.controller.get_runtime_generation()])
 		_check(NAME, env.light_visual_controller.get_segment_count() == 0,
 			"[%s] 不应产生光段，实际 %d。" % [label, env.light_visual_controller.get_segment_count()])
 		if env.light_world_query_spy != null:

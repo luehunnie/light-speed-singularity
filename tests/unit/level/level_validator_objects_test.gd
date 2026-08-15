@@ -4,19 +4,21 @@ extends SceneTree
 ## 用纯内存 fixture（程序化最小 TileSet + 未入树 TileMapLayer + 真实 EmitterConfigNode / BasicCrystal /
 ##   ObjectVisualView / ObjectVisualProfile 实例，全部 .new() 构造、不入树、不读写 .tscn / .tres）固化
 ##   LevelFixedObjectValidator 的固定对象共同规则、Emitter 规则、Crystal 规则与 object_id 行为。
-## 覆盖 20 项冻结用例：合法单 Emitter + 单 Crystal、Emitter 数量、错路径 / 非直属、PARTICLE 不支持、
+## 覆盖 20 项冻结用例：合法单 Emitter + 单 Crystal、Emitter 数量、错路径 / 非直属、PARTICLE 已支持（B3b-1 起）、
 ##   RAY 八方向、position 偏移合法 / 越界、非有限、Terrain 外、Wall 上、Emitter-Crystal 同格、无 Crystal、
 ##   空 / 重复 crystal_id、两 Crystal 不同 ID、改名不改 object_id、缺 VisualView、Profile 缺失仅 WARNING
 ##   （Crystal 与 Emitter）、连续 validate 一致且不改场景。
 ## headless extends SceneTree，由 Godot --script 运行；preload 引用模块避开全局 class_name 缓存问题。
 ## 全部失败项收集后统一退出（任一失败 quit(1)）；fixture 不入 SceneTree，各用例受控 free，不保存任何资源。
 ##
-## 关于 emitter_light_form_invalid / emitter_direction_invalid：二者为防御性校验（冻结规则要求校验枚举域）。
+## 关于 emitter_light_form_invalid / emitter_direction_invalid / emitter_runtime_form_unsupported：均为防御性校验。
 ## 真实 EmitterConfigNode 的 setter 对非法枚举值执行 push_error 并保持旧值（_set_default_light_form /
 ##   _set_ray_default_direction / _set_particle_default_direction），因此通过正式 API 无法把非法枚举持久化到
-##   节点上。本测试按真实 API 可构造性设计：对八光线方向与四光粒方向做正向覆盖（全部被 setter 接受、校验器不报
+##   节点上。本测试按真实 API 可构造性设计：对八光线方向与八光粒方向做正向覆盖（全部被 setter 接受、校验器不报
 ##   emitter_direction_invalid）；不通过伪造不可能持久化的非法赋值（如 =99）制造假覆盖。
-## 故 emitter_light_form_invalid / emitter_direction_invalid 无失败 fixture，属预期且合规。
+## B3b-1 起 RAY / PARTICLE 均接正式 Runtime（is_runtime_form_supported 对二者均 true），故 emitter_runtime_form_unsupported
+##   对当前两种形态均不可达；该校验委派正式能力来源、不在 Validator 内硬编码白名单，仅在未来引入第三种未接形态时触发（前向兼容守卫）。
+## 故 emitter_light_form_invalid / emitter_direction_invalid / emitter_runtime_form_unsupported 无失败 fixture，属预期且合规。
 
 const _LevelValidator: GDScript = preload("res://gameplay/level/validation/level_validator.gd")
 const _LevelValidationResult: GDScript = preload("res://gameplay/level/validation/level_validation_result.gd")
@@ -39,7 +41,7 @@ func _initialize() -> void:
 	_test_01_valid_single_emitter_and_crystal()
 	_test_02_emitter_count_zero_and_two()
 	_test_03_emitter_wrong_path_and_nondirect()
-	_test_04_particle_unsupported()
+	_test_04_particle_supported()
 	_test_05_ray_eight_directions()
 	_test_06_position_offset_legal()
 	_test_07_position_offset_off_grid()
@@ -126,25 +128,30 @@ func _test_03_emitter_wrong_path_and_nondirect() -> void:
 	rootB.free()
 
 
-## 4. 默认 PARTICLE → emitter_runtime_form_unsupported（ERROR）；四光粒方向均合法，不报方向错误。
-func _test_04_particle_unsupported() -> void:
-	const G: String = "04_PARTICLE不支持"
+## 4. 默认 PARTICLE 已接 Runtime（B3b-1 起）：八光粒方向均合法、被运行时支持、整体合法；不再报 emitter_runtime_form_unsupported。
+func _test_04_particle_supported() -> void:
+	const G: String = "04_PARTICLE已支持"
 	var root: Node2D = _make_level(_cells_3x3(), [])
 	var e: _EmitterConfigNode = _add_valid_emitter(root, Vector2i(0, 0))
 	e.default_light_form = _EmitterConfigNode.LightForm.PARTICLE
 	_add_valid_crystal(root, Vector2i(2, 2), &"c1")
 	var dirs: Array = [
 		_EmitterConfigNode.ParticleDirection.RIGHT,
+		_EmitterConfigNode.ParticleDirection.DOWN_RIGHT,
 		_EmitterConfigNode.ParticleDirection.DOWN,
+		_EmitterConfigNode.ParticleDirection.DOWN_LEFT,
 		_EmitterConfigNode.ParticleDirection.LEFT,
+		_EmitterConfigNode.ParticleDirection.UP_LEFT,
 		_EmitterConfigNode.ParticleDirection.UP,
+		_EmitterConfigNode.ParticleDirection.UP_RIGHT,
 	]
 	for d: int in dirs:
 		e.particle_default_direction = d
 		var result: _LevelValidationResult = _validate(root)
-		_check(G, _has_code(result, "emitter_runtime_form_unsupported"), "PARTICLE 期望 emitter_runtime_form_unsupported（dir=%d）。" % d)
-		_check(G, not _has_code(result, "emitter_direction_invalid"), "PARTICLE 合法四方向不应报 emitter_direction_invalid（dir=%d）。" % d)
+		_check(G, not _has_code(result, "emitter_runtime_form_unsupported"), "PARTICLE 已接 Runtime，不应报 emitter_runtime_form_unsupported（dir=%d）。" % d)
+		_check(G, not _has_code(result, "emitter_direction_invalid"), "PARTICLE 合法八方向不应报 emitter_direction_invalid（dir=%d）。" % d)
 		_check(G, not _has_code(result, "emitter_light_form_invalid"), "PARTICLE 为合法枚举不应报 emitter_light_form_invalid（dir=%d）。" % d)
+		_check(G, result.is_valid() == true, "PARTICLE 合法配置整体应合法（dir=%d）。" % d)
 	root.free()
 
 

@@ -11,11 +11,14 @@ extends RefCounted
 ## 依赖：通过 preload 引用 res://gameplay/interaction/runtime_interaction_types.gd 取得 RunState 枚举，
 ## 不定义第二份 RunState，不依赖 Diagnostics，不依赖 RuntimeMoveRules，不修改 RunState 数值。
 ## D7-2 权限合同（五态）：SETUP 仅可 begin_runtime 不可发射；READY_TO_FIRE/PULSE_ACTIVE/MOVE_WINDOW 属运行期移动状态；
-## READY_TO_FIRE 与 MOVE_WINDOW 允许发射；PULSE_ACTIVE 与 COMPLETED 拒绝发射；COMPLETED 冻结布局与配置。
+## 发射权限（M4-E3 起，对齐主发射器 v0.3 §5.0/§7）：READY_TO_FIRE、PULSE_ACTIVE 与 MOVE_WINDOW 允许发射（PULSE_ACTIVE 为 repeated fire，
+## 唯一额外节流为 0.5 秒发射 cooldown，由调用方预检；追加发射不得请求 begin_pulse 非法自环）；SETUP 与 COMPLETED 拒绝发射；COMPLETED 冻结布局与配置。
 ## 未来扩展保护：can_edit_configuration 当前只表示机关内部人工配置（主发射源方向、机关内部模式等），
-## 不代表“运行期所有可操作属性永久锁死”——未来主发射器八方向运行控制、RAY/PARTICLE 形态切换等运行期可操作属性
+## 不代表“运行期所有可操作属性永久锁死”——未来主发射器八方向运行控制等运行期可操作属性
 ## 将使用专用权限规则（由关卡配置决定是否可用），本批不实现，不得在注释或架构中把本函数定义成永久锁死的底层公共规则。
 ## 已知临时边界：is_configuration_locked 未进入本模块公共接口，仍由 core_loop 以薄包装形式临时持有，待 F3 迁移自检后删除。
+## M4-E4：主发射器光形态切换（Q）权限已由专用规则 can_switch_light_form 落地（关卡 allow_form_switch + 非 COMPLETED），
+## 对齐主发射器 v0.3 §4.2 冻结时机表；该规则与 can_edit_configuration 无关（Q 是运行期专用权限，非 SETUP 内部配置编辑）。
 
 const _RuntimeInteractionTypes: GDScript = preload(
 	"res://gameplay/interaction/runtime_interaction_types.gd"
@@ -25,16 +28,34 @@ const _RuntimeInteractionTypes: GDScript = preload(
 ## 查询当前运行状态是否允许发射普通脉冲（纯判断，无副作用）。
 ## [br]职责：判定 Space 发射权限。
 ## [br]输入：state 是当前运行状态。
-## [br]返回：true 表示 READY_TO_FIRE 或 MOVE_WINDOW 可以发射；false 表示 SETUP、PULSE_ACTIVE 或 COMPLETED 必须拒绝 Space。
+## [br]返回：true 表示 READY_TO_FIRE、PULSE_ACTIVE 或 MOVE_WINDOW 可以发射（M4-E3 起 PULSE_ACTIVE 开放 repeated fire，
+##   对齐主发射器 v0.3 §5.0：场上活动光不阻止再次发射，唯一节流为 0.5 秒 cooldown，由调用方在发射预检中判定）；
+##   false 表示 SETUP 或 COMPLETED 必须拒绝 Space。
 ## [br]副作用：无；不读取或修改任何实例状态，不修改输入枚举。
 ## [br]失败：不会失败；任意 RunState 输入均返回确定布尔结果。
-## [br]边界：只负责发射权限判定，不执行发射流程，不清理光路视觉，不改变 current_run_state；
+## [br]边界：只负责发射权限判定，不执行发射流程，不清理光路视觉，不改变 current_run_state，不判定 cooldown（cooldown 硬门由调用方预检）；
 ## D7-2 起 SETUP 不再允许直接 Space 发射，必须先经 Runtime Validation Gate 进入 READY_TO_FIRE；
-## 完成标签已显示但脉冲尚未视觉结束时，状态仍是 PULSE_ACTIVE，因此重复 Space 仍被拒绝，该事实由调用方传入的 state 体现。
+## PULSE_ACTIVE 中的追加发射不得请求 begin_pulse（PULSE_ACTIVE→PULSE_ACTIVE 非法自环），是否处于脉冲窗口由 is_pulse_active 体现。
 static func can_fire_light(
 		state: _RuntimeInteractionTypes.RunState
 ) -> bool:
-	return state == _RuntimeInteractionTypes.RunState.READY_TO_FIRE or state == _RuntimeInteractionTypes.RunState.MOVE_WINDOW
+	return state == _RuntimeInteractionTypes.RunState.READY_TO_FIRE or state == _RuntimeInteractionTypes.RunState.PULSE_ACTIVE or state == _RuntimeInteractionTypes.RunState.MOVE_WINDOW
+
+
+## 查询当前运行状态是否允许切换主发射器光形态（纯判断，无副作用；M4-E4 Q 正式入口）。
+## [br]职责：判定 Q 切换 RAY↔PARTICLE 的权限（主发射器 v0.3 §4.2 冻结时机表）。
+## [br]输入：state 是当前运行状态；allow_form_switch 为关卡配置的 allow_form_switch（false 时任何状态均禁止）。
+## [br]返回：true 表示 allow_form_switch=true 且 state 不是 COMPLETED（SETUP/READY_TO_FIRE/PULSE_ACTIVE/MOVE_WINDOW 均允许）；
+##   false 表示 allow_form_switch=false 或 state 为 COMPLETED。
+## [br]副作用：无；不读取或修改任何实例状态，不修改输入。
+## [br]失败：不会失败；任意 RunState 与布尔输入均返回确定布尔结果。
+## [br]边界：只判定权限，不执行切换（FixedEmitter 形态切换由 LevelRuntimeController.request_switch_light_form 编排）；
+## [br]  Q 只影响后续发射、不重置/不消费 cooldown、不改变场上已存在 emission——这些语义由调用方与发射器保证，本函数不涉及。
+static func can_switch_light_form(
+		state: _RuntimeInteractionTypes.RunState,
+		allow_form_switch: bool
+) -> bool:
+	return allow_form_switch and state != _RuntimeInteractionTypes.RunState.COMPLETED
 
 
 ## 查询当前运行状态是否允许请求进入正式运行（纯判断，无副作用）。

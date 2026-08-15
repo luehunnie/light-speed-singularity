@@ -7,7 +7,8 @@ extends Node2D
 ## 发射请求编排、异步脉冲结束与完整 R 重置顺序由 _level_runtime_controller 唯一持有；玩家机关映射 placed_tokens_by_id 与机关序号由 _placement_controller 唯一持有；
 ## 玩家机关库存剩余由 _inventory_controller 持有；目标完成事实（水晶激活、完成判断、运行期重置）由 _objective_controller 唯一持有。OccupancyRegistry 是格子占用唯一事实来源。
 ## 核心只保留接线、输入转发、右键镜面配置入口、节点工厂、UI 适配与启动自检入口；七项启动自检编排与摘要日志由 _startup_self_check_coordinator 整块负责。
-## 正式运行权限：SETUP 允许完整布置且移动不计次，但 Space 须先「开始运行」进入 READY_TO_FIRE 才可发射；READY_TO_FIRE/PULSE_ACTIVE/MOVE_WINDOW 允许拿取/放置/移动/回收但右键配置锁定，仅 READY_TO_FIRE/MOVE_WINDOW 可 Space 发射（SETUP/PULSE_ACTIVE/COMPLETED 禁止 Space）；
+## 正式运行权限：SETUP 允许完整布置且移动不计次，但 Space 须先「开始运行」进入 READY_TO_FIRE 才可发射；READY_TO_FIRE/PULSE_ACTIVE/MOVE_WINDOW 允许拿取/放置/移动/回收但右键配置锁定，READY_TO_FIRE/MOVE_WINDOW/PULSE_ACTIVE 可 Space 发射（SETUP/COMPLETED 禁止 Space）；
+## Q 切换主发射器光形态（M4-E4）：关卡 allow_form_switch=true 时 SETUP/READY_TO_FIRE/PULSE_ACTIVE/MOVE_WINDOW 均可（COMPLETED 禁止），只影响后续发射；成功切换显示上方居中 1 秒形态提示。
 ## 仅“已放置机关跨格直接移动”成功提交后消耗 runtime_move_limit 一次；COMPLETED 冻结全部交互，只允许 R。
 ## R 是完整关卡重置（由 _level_runtime_controller.reset_runtime 执行）：递增 pulse_generation 使旧异步失效 → 安全取消拖拽 → 清光路/水晶/完成状态 → 逐个注销玩家机关占用并退回库存 → 清零 runtime_moves_used → 回 SETUP；不删除发射器/墙体/水晶/静态内容。
 
@@ -77,10 +78,14 @@ const _SingleCellMirrorScene: PackedScene = preload("res://gameplay/mechanisms/m
 const _InventorySlotViewScript: GDScript = preload("res://gameplay/ui/inventory_slot_view.gd")
 # D7-3 正式「开始运行」UI 视图：拥有按钮/状态提示/invalid 最小反馈，只由真实 RunState 驱动；core_loop 只构造接线与公开转发。
 const _RunStartView: GDScript = preload("res://gameplay/ui/run_start_view.gd")
+# M4-E4 形态切换提示 UI（用户冻结视觉）：Q 成功切换时屏幕上方居中提示 1 秒；core_loop 只构造接线。
+const _FormSwitchToastView: GDScript = preload("res://gameplay/ui/form_switch_toast_view.gd")
 # D7-3 start_run() 返回结构化 LevelValidationResult 供 UI 最小反馈（runtime → level/validation 依赖方向）。
 const _LevelValidationResult: GDScript = preload("res://gameplay/level/validation/level_validation_result.gd")
 # 普通光线路径视觉控制器：完整拥有光路视觉节点集合与四方向接线，核心只调用 show_step / clear_path。
 const _LightVisualController: GDScript = preload("res://gameplay/visuals/light_visual_controller.gd")
+# Particle 视觉控制器（D7-4 B4a）：完整拥有光粒视觉节点集合（runtime_id→View 映射/创建/更新/terminate/清理）；核心只构造并把 Runtime detached 事件接给它。
+const _ParticleVisualController: GDScript = preload("res://gameplay/visuals/particles/particle_visual_controller.gd")
 # 运行交互共享类型契约（RunState / DragSource）。
 const _RuntimeInteractionTypes: GDScript = preload("res://gameplay/interaction/runtime_interaction_types.gd")
 # 运行期移动纯规则；正式玩法调用与 runtime_move 启动自检共用同一规则来源。
@@ -130,6 +135,9 @@ var _run_state_controller: _RunStateController = _RunStateController.new()
 ## 普通光线路径视觉控制器：完整拥有光路视觉节点集合（逐格创建/记录/cell→世界定位/四方向接线/路径清理）；核心只调用 show_step 与 clear_path，不持有第二套视觉创建实现。
 var _light_visual_controller: _LightVisualController = null
 
+## Particle 视觉控制器（D7-4 B4a）：完整拥有光粒视觉节点集合（runtime_id→View 映射/创建/更新/terminate/清理）；核心只构造并把 Runtime detached 事件接给它，不解释事件/维护映射。
+var _particle_visual_controller: _ParticleVisualController = null
+
 ## 世界只读查询门面：在所有真实依赖初始化后构造，持有容器引用而非复制（容器运行期只原地增删，从不整体重赋值）；只读，不修改世界事实。
 var _level_world_query: _LevelWorldQuery = null
 
@@ -154,6 +162,12 @@ var _level_runtime_controller: _LevelRuntimeController = null
 ## D7-3 正式「开始运行」UI 视图：拥有按钮/状态提示/invalid 最小反馈；只由真实 RunState 驱动，核心只构造接线并公开 start_run() 转发。
 var _run_start_view: _RunStartView = null
 
+## M4-E4 形态切换提示 UI：Q 成功切换时由本核心把新形态交给它显示（上方居中 1 秒）；被拒 Q 不触发。
+var _form_switch_toast_view: _FormSwitchToastView = null
+
+## 关卡 Q 形态切换开关（M4-E4）：_ready 中由 EmitterConfigNode 启动快照读取一次，注入 LevelRuntimeController；运行期不再监听配置变化。
+var _allow_form_switch: bool = false
+
 
 ## 初始化核心闭环原型关卡：刷新机关栏 UI；仅调试构建执行七项启动自检与摘要日志，发布构建跳过，避免把调试断言作为运行期必需流程。
 func _ready() -> void:
@@ -161,6 +175,8 @@ func _ready() -> void:
 	_run_state_controller.state_changed.connect(_on_run_state_changed)
 	# 光路视觉控制器先构造：注入 LightPathLayer 作为视觉父节点，视觉资源与颜色由控制器自持。
 	_light_visual_controller = _LightVisualController.new(light_path_layer)
+	# Particle 视觉控制器（D7-4 B4a）：注入同一 LightPathLayer 作为视觉父节点；Runtime detached 事件经 LRC publish Callable 接给它。
+	_particle_visual_controller = _ParticleVisualController.new(light_path_layer)
 	# 四层 TileMapLayer 只读快照（D5-B.1）：先 validate_layers 校验四层再 new() 复制 used cells；缺层 push_error 且保持 null，不退回 map_bounds。
 	_build_tile_layer_snapshot()
 	# 快照为正式运行 Terrain/LegalArea/Wall 唯一事实来源（D5-B.2A）：构造失败则停止后续世界查询接线，避免空快照静默退回 map_bounds+wall_cells 成为正式运行事实。
@@ -173,7 +189,8 @@ func _ready() -> void:
 		_inventory_controller,
 		Callable(self, "_create_formal_token_node")
 	)
-	# 发射配置来源为场景内 EmitterConfigNode：读取一次启动快照构造不可变 FixedEmitter；PARTICLE 未接运行时则安全中止后续接线。
+	# 发射配置来源为场景内 EmitterConfigNode：读取一次启动快照构造不可变 FixedEmitter。
+	# B3b-1 起 RAY/PARTICLE 均为合法 Runtime form（is_runtime_form_supported 与真实 Runtime 能力同步）；返回 false 仅在引入第三种未接形态时安全中止。
 	if not _build_fixed_emitter_from_config():
 		return
 	# 稳定对象索引：遍历 @onready crystals，按显式 crystal_id 与 cell 注册；任一失败 push_error 并 assert 暴露，不静默跳过。
@@ -223,7 +240,11 @@ func _ready() -> void:
 		runtime_move_limit,
 		Callable(self, "_refresh_runtime_ui"),
 		Callable(self, "_set_complete_label_visible"),
-		Callable(self, "_assert_inventory_consistency")
+		Callable(self, "_assert_inventory_consistency"),
+		Callable(_particle_visual_controller, "handle_event"),
+		null,
+		Callable(),
+		_allow_form_switch
 	)
 	add_child(_level_runtime_controller)
 	_update_inventory_ui()
@@ -233,6 +254,9 @@ func _ready() -> void:
 	_run_start_view = _RunStartView.new(Callable(self, "start_run"))
 	_run_start_view.setup(canvas_layer, hint_label)
 	_run_start_view.update_for_state(_get_current_run_state())
+	# M4-E4 形态切换提示 UI：挂到同一 CanvasLayer；只显示成功切换结果（被拒 Q 由 _switch_light_form 不触发体现）。
+	_form_switch_toast_view = _FormSwitchToastView.new()
+	_form_switch_toast_view.setup(canvas_layer)
 	if OS.is_debug_build():
 		# 采集网格采样格（含 Registry 完整性前置断言）与库存一致性只读快照，交由协调器按固定顺序执行七项自检并写摘要日志。
 		var sample_cells: Array[Vector2i] = _collect_grid_coordinate_sample_cells()
@@ -253,20 +277,25 @@ func _build_tile_layer_snapshot() -> void:
 	)
 
 
-## 由 EmitterConfigNode 构造启动快照与不可变 FixedEmitter；节点缺失或 PARTICLE 未接运行时则安全中止。
+## 由 EmitterConfigNode 构造启动快照与不可变 FixedEmitter；节点缺失或形态未接运行时则安全中止。
 ## 返回 true 表示已构造 _fixed_emitter；false 表示已输出明确错误并中止初始化，调用方应停止后续接线。
+## B3b-1 起读取 form + 活动方向（RAY→ray_default / PARTICLE→particle_default）构造对应形态 FixedEmitter；不再因 PARTICLE 拒绝初始化。
 func _build_fixed_emitter_from_config() -> bool:
 	if _emitter_config == null:
 		_abort_runtime_initialization("RuntimeObjects/Emitter 节点缺失或类型不符，无法构造发射器。")
 		return false
-	# PARTICLE 仅保存配置与编辑器预览，未接运行时发射；不静默降级为 RAY，不构造虚假 FixedEmitter。
+	# 执行阶段闸门与真实 Runtime 能力同步（B3b-1：RAY/PARTICLE 均已接）；返回 false 时安全中止，不静默降级为另一形态。
 	if not _emitter_config.is_runtime_form_supported():
-		_abort_runtime_initialization("default_light_form=PARTICLE 未接运行时发射，已拒绝初始化。")
+		_abort_runtime_initialization("default_light_form 未接运行时发射，已拒绝初始化。")
 		return false
-	# 启动快照：position 为唯一位置事实、ray_default_direction 为唯一方向事实；本组局部值仅用于本次构造，不作为第二份持久事实。
+	# 启动快照：position 派生 cell 为唯一位置事实；活动方向（随形态取 ray/particle）为唯一方向事实；form 为唯一形态事实。
+	# 本组局部值仅用于本次构造，不作为第二份持久事实；FixedEmitter 三参构造写入 cell/direction/form。
 	var start_cell: Vector2i = _emitter_config.get_cell()
-	var ray_direction: Vector2i = _emitter_config.get_ray_direction_vector()
-	_fixed_emitter = _FixedEmitter.new(start_cell, ray_direction)
+	var active_direction: Vector2i = _emitter_config.get_active_direction_vector()
+	var light_form: int = _emitter_config.get_default_light_form()
+	# M4-E4：Q 形态切换关卡开关同属启动快照，读取一次注入 LevelRuntimeController（运行期不监听配置变化）。
+	_allow_form_switch = _emitter_config.is_form_switch_allowed()
+	_fixed_emitter = _FixedEmitter.new(start_cell, active_direction, light_form)
 	return true
 
 
@@ -275,7 +304,7 @@ func _abort_runtime_initialization(reason: String) -> void:
 	push_error("CoreLoopPrototype: %s" % reason)
 
 
-## 处理关卡输入动作和鼠标拖拽事件：fire_light 转发到 LevelRuntimeController.request_fire（拖拽中/PULSE_ACTIVE/COMPLETED 拒绝在控制器内）；reset_level 转发到 reset_runtime()；鼠标左键按运行权限驱动放置/移动/回收。
+## 处理关卡输入动作和鼠标拖拽事件：fire_light 转发到 LevelRuntimeController.request_fire（拖拽中/SETUP/COMPLETED/0.5s cooldown 未到在控制器内拒绝；PULSE_ACTIVE repeated fire 已于 M4-E3 开放）；switch_light_form（Q）转发到 _switch_light_form（M4-E4；关卡 allow_form_switch + 非 COMPLETED 权限门在控制器内，被拒不显示提示）；reset_level 转发到 reset_runtime()；鼠标左键按运行权限驱动放置/移动/回收。
 ## 拖拽中按 Space 由控制器拒绝；拖拽中按 R 不依赖 _input 预取消，由 reset_runtime() 统一安全取消拖拽；PULSE_ACTIVE 期间布局变化只影响后续发射，不回溯当前脉冲。
 func _input(event: InputEvent) -> void:
 	# 运行时初始化被中止（如 PARTICLE 未接运行时）时忽略全部输入，避免空对象持续崩溃。
@@ -287,6 +316,8 @@ func _input(event: InputEvent) -> void:
 			reset_runtime()
 		_PlayerInteractionController.Command.Kind.FIRE:
 			fire_light()
+		_PlayerInteractionController.Command.Kind.SWITCH_FORM:
+			_switch_light_form()
 		_PlayerInteractionController.Command.Kind.PRIMARY_PRESS:
 			_drag_flow_controller.try_begin_drag(command.pointer_position)
 		_PlayerInteractionController.Command.Kind.PRIMARY_RELEASE:
@@ -334,6 +365,18 @@ func _update_runtime_move_ui() -> void:
 ## 发射入口：转发到 LevelRuntimeController.request_fire；发射顺序、逐 step 视觉→水晶、异步脉冲结束与 generation 过期保护全部由控制器拥有，核心不保留第二套实现。
 func fire_light() -> void:
 	_level_runtime_controller.request_fire()
+
+
+## Q 形态切换入口（M4-E4）：转发到 LevelRuntimeController.request_switch_light_form（关卡 allow_form_switch + 非 COMPLETED 权限门在控制器内）；
+## 仅成功（返回新形态 >=0）才把新形态交给 FormSwitchToastView 显示上方居中 1 秒提示；被禁止/无效的 Q 不显示任何提示。
+## 核心不复制权限规则；Q 不发射、不触 cooldown、不影响场上 emission（冻结语义由控制器保证）。
+func _switch_light_form() -> void:
+	var new_form: int = _level_runtime_controller.request_switch_light_form()
+	if new_form < 0:
+		if OS.is_debug_build():
+			print_debug("CoreLoopPrototype: Q 形态切换被拒绝（关卡禁止或 COMPLETED），不显示提示。")
+		return
+	_form_switch_toast_view.show_for_form(new_form)
 
 
 ## D7-3 正式「开始运行」入口：转发到 LevelRuntimeController.request_begin_runtime(self)；核心不复制 Gate/严重度/RunState 转换/Ray 规则。

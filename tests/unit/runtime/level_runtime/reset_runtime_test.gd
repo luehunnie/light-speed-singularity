@@ -29,6 +29,8 @@ func _initialize() -> void:
 	_report()
 	# 清理前推进若干帧，让所有挂起的异步脉冲结束协程恢复完成，避免 free controller 后协程再调用 null 实例。
 	await _fixture.wait_settled(4)
+	# B3b-2：使所有 Particle Tick 泵协程退出（generation 失效 + 推进帧），避免 leaked at exit。
+	await _fixture.await_settle_pumps()
 	_fixture.cleanup()
 	quit(0 if _failures.is_empty() else 1)
 

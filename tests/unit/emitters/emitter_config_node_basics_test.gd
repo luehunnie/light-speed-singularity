@@ -30,7 +30,7 @@ func _initialize() -> void:
 	_test_06_all_particle_direction_mappings()
 	_test_07_active_direction_switches_with_form()
 	_test_08_runtime_supported_ray()
-	_test_09_runtime_not_supported_particle()
+	_test_09_runtime_supported_particle()
 	_test_10_directions_stored_separately()
 	_test_11_visual_profile_nullable()
 	_report()
@@ -97,15 +97,19 @@ func _test_05_all_ray_direction_mappings() -> void:
 	config.free()
 
 
-## 6. 四个光粒方向映射全部正确。
+## 6. 八个光粒方向映射全部正确（旧四正方向数值冻结，新四斜向追加）。
 func _test_06_all_particle_direction_mappings() -> void:
-	const NAME: String = "06_四光粒方向映射"
+	const NAME: String = "06_八光粒方向映射"
 	var config: _EmitterConfigNode = _EmitterConfigNode.new()
 	var cases: Array = [
 		[_EmitterConfigNode.ParticleDirection.RIGHT, Vector2i(1, 0)],
 		[_EmitterConfigNode.ParticleDirection.DOWN, Vector2i(0, 1)],
 		[_EmitterConfigNode.ParticleDirection.LEFT, Vector2i(-1, 0)],
 		[_EmitterConfigNode.ParticleDirection.UP, Vector2i(0, -1)],
+		[_EmitterConfigNode.ParticleDirection.DOWN_RIGHT, Vector2i(1, 1)],
+		[_EmitterConfigNode.ParticleDirection.DOWN_LEFT, Vector2i(-1, 1)],
+		[_EmitterConfigNode.ParticleDirection.UP_LEFT, Vector2i(-1, -1)],
+		[_EmitterConfigNode.ParticleDirection.UP_RIGHT, Vector2i(1, -1)],
 	]
 	for case: Array in cases:
 		var d: int = case[0]
@@ -139,12 +143,12 @@ func _test_08_runtime_supported_ray() -> void:
 	config.free()
 
 
-## 9. PARTICLE 形态 is_runtime_form_supported 为 false（不抛假结果、不自动降级）。
-func _test_09_runtime_not_supported_particle() -> void:
-	const NAME: String = "09_PARTICLE运行时不支持"
+## 9. PARTICLE 形态 is_runtime_form_supported 为 true（B3b-1 起 PARTICLE 接 Runtime；不抛假结果、不自动降级）。
+func _test_09_runtime_supported_particle() -> void:
+	const NAME: String = "09_PARTICLE运行时支持"
 	var config: _EmitterConfigNode = _EmitterConfigNode.new()
 	config.default_light_form = _EmitterConfigNode.LightForm.PARTICLE
-	_check(NAME, config.is_runtime_form_supported() == false, "PARTICLE 形态不应支持运行时。")
+	_check(NAME, config.is_runtime_form_supported() == true, "PARTICLE 形态 B3b-1 起应支持运行时（与真实 Runtime 能力同步）。")
 	_check(NAME, config.get_default_light_form() == _EmitterConfigNode.LightForm.PARTICLE, "设置后形态应仍为 PARTICLE，未自动降级为 RAY。")
 	config.free()
 

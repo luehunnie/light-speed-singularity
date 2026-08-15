@@ -9,6 +9,7 @@ extends RefCounted
 const _LevelRuntimeController: GDScript = preload("res://gameplay/runtime/level_runtime_controller.gd")
 const _RunStateController: GDScript = preload("res://gameplay/interaction/run_state_controller.gd")
 const _FixedEmitter: GDScript = preload("res://gameplay/mechanisms/emitters/fixed_emitter.gd")
+const _LightEmissionTypes: GDScript = preload("res://gameplay/light/light_emission_types.gd")
 const _LightWorldQuery: GDScript = preload("res://gameplay/world/light_world_query.gd")
 const _LevelWorldQuery: GDScript = preload("res://gameplay/world/level_world_query.gd")
 const _LevelObjectRegistry: GDScript = preload("res://gameplay/level/level_object_registry.gd")
@@ -21,6 +22,8 @@ const _DragFlowController: GDScript = preload("res://gameplay/interaction/drag_f
 const _BasicCrystalScript: GDScript = preload("res://gameplay/crystals/basic_crystal.gd")
 const _VisualViewScene: PackedScene = preload("res://gameplay/visuals/object_visuals/object_visual_view.tscn")
 const _CrystalProfile: Resource = preload("res://assets/visual_profiles/basic_crystal_visuals.tres")
+# B3b-2.1 MF-1/MF-2 测试技术 seam：可控 Tick 泵替身（tests/**，不进 gameplay/**），替代旧 particle_tick_seconds=0.0 注入。
+const _ControllableParticleTickPump: GDScript = preload("res://tests/unit/runtime/fixtures/controllable_particle_tick_pump.gd")
 
 const _MAP_BOUNDS: Rect2i = Rect2i(0, 0, 16, 16)
 
@@ -97,6 +100,23 @@ class _UiSink:
 		assert_calls += 1
 
 
+## Particle 视觉事件录制 sink（D7-4 B4a）：作为 LRC publish_particle_visual_event Callable 的目标，按到达顺序记录 detached 事件 payload，供视觉/集成测试观测。
+## 不解释事件、不创建 View、不持有 gameplay 引用；仅 append 到 events 数组（保持发布顺序）。
+class _ParticleVisualSink:
+	var events: Array = []
+	func on_particle_visual_event(event: Dictionary) -> void:
+		events.append(event)
+	func event_count() -> int:
+		return events.size()
+	## 按 type 过滤事件（保持到达顺序的只读副本）。
+	func events_of_type(event_type: String) -> Array:
+		var filtered: Array = []
+		for ev in events:
+			if ev.get("type", "") == event_type:
+				filtered.append(ev)
+		return filtered
+
+
 ## 光线世界查询计数替身：extends 真实 LightWorldQuery（字符串路径，与 _StubDragFlow 同模式）以满足控制器与 RayExecutionModule 的 _LightWorldQuery 类型约束。
 ## 用途：直接观测 RayExecutionModule.execute 是否被调用——该静态函数的唯一世界接触即传入的 world_query 参数，任意一次执行必至少调用 is_in_bounds 一次。
 ## 故 total_query_calls()==0 等价于“Ray 执行函数从未被调用”，比“光段数 0”更直接：光段 0 可能来自 Ray 执行后无步，而查询计数 0 才能证明 Ray 根本没启动。
@@ -135,6 +155,16 @@ class _SpyLightWorldQuery extends "res://gameplay/world/light_world_query.gd":
 		return is_in_bounds_calls + is_wall_cell_calls + has_crystal_at_calls + get_light_mechanism_at_calls
 
 
+## 可控发射 cooldown 时钟（M4-E3）：冻结假时钟（初始 0.0，不随真实时间走），测试经 advance_seconds 确定性推进 0.499/0.500 边界，不真实等待。
+## 作为 LRC _init 的 emitter_fire_cooldown_clock seam 注入 EmitterFireCooldown；间隔真值唯一来源 EmitterFireCooldown.FIRE_INTERVAL_SECONDS，本桩不复制。
+class _FakeCooldownClock:
+	var now: float = 0.0
+	func now_seconds() -> float:
+		return now
+	func advance_seconds(delta: float) -> void:
+		now += delta
+
+
 ## 测试上下文：聚合一次用例所需的控制器与桩。
 class _Env:
 	var rsc: _RunStateController = null
@@ -151,6 +181,12 @@ class _Env:
 	var factory: _StubFactory = null
 	var sink: _UiSink = null
 	var controller: _LevelRuntimeController = null
+	## 可控 Tick 泵替身（B3b-2.1）：测试经其 resume_one_tick() 显式驱动整数 Tick，不真实等待 0.1 秒；非 PARTICLE 用例不使用，保持 null 即可。
+	var particle_tick_pump: _ControllableParticleTickPump = null
+	## 可控发射 cooldown 时钟（M4-E3）：经 advance_seconds 确定性推进（0.499/0.500 边界）；每个 env 一枚，fire 时刻由测试显式控制。
+	var fire_cooldown_clock: _FakeCooldownClock = null
+	## Particle 视觉事件录制 sink（B4a）：作为 LRC publish Callable 目标，记录 detached 事件供视觉/集成测试观测；非视觉用例不读取。
+	var particle_visual_sink: _ParticleVisualSink = null
 	var visual_parent: Node2D = null
 
 
@@ -173,12 +209,18 @@ func _init(tree: SceneTree) -> void:
 
 ## 构造测试上下文：emitter_cell/emitter_dir 为发射器配置；crystal_cell 为水晶格（null 表示无水晶）；move_limit 为运行期移动上限。
 ## observe_ray_queries=true 时注入 _SpyLightWorldQuery 替身（对控制器透明），测试经 env.light_world_query_spy 直接观测 Ray 是否执行；默认 false 不影响既有用例。
+## light_form 为 FixedEmitter 光形态（默认 RAY；B3b-1 起 PARTICLE 接 Runtime，传 _LightEmissionTypes.LightForm.PARTICLE 构造光粒发射器）。
+## walls 为墙体格集合（默认空；B3b-2 起 Particle 墙体 terminate 用例可注入墙格，LevelWorldQuery 经 walls 兼容路径识别）。
+## allow_form_switch 为关卡 Q 形态切换开关（M4-E4；默认 false 与正式默认一致，Q 切换用例传 true）。
 func make_env(
 		emitter_cell: Vector2i,
 		emitter_dir: Vector2i,
 		crystal_cell: Variant,
 		move_limit: int = 1,
-		observe_ray_queries: bool = false
+		observe_ray_queries: bool = false,
+		light_form: int = _LightEmissionTypes.LightForm.RAY,
+		walls: Array[Vector2i] = [],
+		allow_form_switch: bool = false
 ) -> _Env:
 	var env: _Env = _Env.new()
 	env.rsc = _RunStateController.new()
@@ -189,14 +231,13 @@ func make_env(
 	env.placement_controller = _PlacementController.new(
 		env.occupancy, env.inventory_controller, Callable(env.factory, "create_formal")
 	)
-	env.fixed_emitter = _FixedEmitter.new(emitter_cell, emitter_dir)
+	env.fixed_emitter = _FixedEmitter.new(emitter_cell, emitter_dir, light_form)
 	var registry: _LevelObjectRegistry = _LevelObjectRegistry.new()
 	if crystal_cell != null:
 		var cell: Vector2i = crystal_cell
 		var crystal: BasicCrystal = make_crystal(&"c001", cell)
 		registry.register_crystal(&"c001", cell, crystal)
 	env.objective_controller = _ObjectiveController.new(registry)
-	var walls: Array[Vector2i] = []
 	var level_query: _LevelWorldQuery = _LevelWorldQuery.new(
 		_MAP_BOUNDS, walls, emitter_cell, registry, env.occupancy,
 		Callable(env.placement_controller, "get_placed_node")
@@ -214,13 +255,23 @@ func make_env(
 	env.light_visual_controller = _LightVisualController.new(env.visual_parent)
 	env.drag = _StubDragFlow.new()
 	env.sink = _UiSink.new()
+	# B3b-2.1 MF-1/MF-2：注入 tests/** 可控 Tick 泵替身（LRC 以 Variant 持有，run() 签名与正式泵一致）。
+	# 测试经 env.particle_tick_pump.resume_one_tick() 显式驱动整数 Tick，不真实等待 0.1 秒；正式 0.1s cadence 唯一来源为 ParticleTickPump.PARTICLE_TICK_SECONDS，测试不触碰。
+	env.particle_tick_pump = _ControllableParticleTickPump.new()
+	env.particle_visual_sink = _ParticleVisualSink.new()
+	# M4-E3：注入可控 cooldown 时钟（正式留空读单调时钟；测试经 advance_seconds 控制 0.5s 边界，不真实等待）。
+	env.fire_cooldown_clock = _FakeCooldownClock.new()
 	env.controller = _LevelRuntimeController.new(
 		env.rsc, env.fixed_emitter, env.light_world_query, env.light_visual_controller,
 		env.objective_controller, env.placement_controller, env.inventory_controller, env.drag,
 		128, 0.0, move_limit,
 		Callable(env.sink, "refresh_runtime_ui"),
 		Callable(env.sink, "set_complete_label_visible"),
-		Callable(env.sink, "assert_inventory_consistency")
+		Callable(env.sink, "assert_inventory_consistency"),
+		Callable(env.particle_visual_sink, "on_particle_visual_event"),
+		env.particle_tick_pump,
+		Callable(env.fire_cooldown_clock, "now_seconds"),
+		allow_form_switch
 	)
 	# add_child 到 SceneTree.root，使控制器进入树以访问 get_tree().create_timer()。
 	_tree.get_root().add_child(env.controller)
@@ -251,7 +302,21 @@ func wait_settled(frames: int = 8) -> void:
 		await _tree.process_frame
 
 
+## B3b-2：在 cleanup 前使所有活动 Particle Tick 泵协程退出，避免 leaked at exit。
+## 职责：对所有 controller reset_runtime（推进 _runtime_generation + scheduler 清空光粒 + 回 SETUP），再推进若干帧让挂起的泵 await 触发——
+##   _on_particle_tick 首行 generation 守卫返回 false 使泵协程退出、helper 引用归零释放，挂起的 SceneTreeTimer 也随之触发释放。
+## 调用方：任何可能启动过 Particle pulse（request_fire on PARTICLE form）的测试 _initialize 在 wait_settled 之后、cleanup 之前 await 本方法。
+## 不启动泵的测试（纯 RAY / 纯移动 / 边界用例）无需调用——RAY 的 _finish_pulse_after_delay 在 wait_settled 内即完成。
+func await_settle_pumps() -> void:
+	for env: _Env in _envs:
+		if is_instance_valid(env.controller):
+			env.controller.reset_runtime()
+	for i in 6:
+		await _tree.process_frame
+
+
 ## 释放本轮创建的水晶、视觉父节点与控制器，跳过已释放实例；须在控制器 free 之后清 envs，避免协程再访问。
+## 调用方若有 Particle pulse 启动，应先 await await_settle_pumps() 使泵协程退出，再调本方法。
 func cleanup() -> void:
 	for controller: Node in _controllers:
 		if is_instance_valid(controller):

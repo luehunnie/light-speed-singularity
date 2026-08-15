@@ -9,20 +9,29 @@ extends GridPlacedObject
 ##   不执行发射、不创建子节点、不接运行时编排，子节点缺失由后续阶段检查结构完整性。
 ## 位置事实：position 继承自 GridPlacedObject，是唯一放置事实；cell 由 position 派生；
 ##   本类不重新导出 cell、不新增 emitter_position、不使用 Node.name 作为 ID、本批不新增 emitter_id。
-## 光粒边界：PARTICLE 当前只允许保存配置与后续编辑器预览，未接运行时；
-##   is_runtime_form_supported 仅 RAY 为 true，PARTICLE 不抛假结果、不自动降级为 RAY。
+## 光粒边界（B3a→B3b-1）：PARTICLE 形态的 Runtime 快照（light_form / emitter_cell / active_direction）已可只读读取，
+##   与 RAY 同样产出合法八方向 Vector2i；B3b-1 起 is_runtime_form_supported 对 RAY/PARTICLE 均返回 true（与真实 Runtime 能力同步），
+##   PARTICLE 已成为合法 Runtime form；不创建 ParticleRuntimeState / ParticleFireRequest，调度器 / Timer 由 LevelRuntimeController 接线，本类不参与。
+## 形态事实来源：公共 LightForm 契约为 LightEmissionTypes.LightForm（RAY=0/PARTICLE=1，冻结）；
+##   本类 LightForm 枚举为 Inspector / 旧场景 / 旧测试兼容别名，数值与公共契约逐一对齐，合法性校验走公共契约。
 ## 方向映射：枚举到稳定 Vector2i 的换算唯一入口为 ray_direction_to_vector / particle_direction_to_vector，
-##   不在他处重复维护映射表；合法性集合即枚举自身，不依赖运行期发射器的向量算法。
+##   不在他处重复维护映射表；输出方向合法性统一由公共 LightEmissionTypes.is_valid_direction 判定，本类不另立八方向合法集合。
+
+## 公共光形态契约唯一来源（preload 避开全局 class 缓存问题）；本类 LightForm 仅作兼容别名，合法性校验委派此模块。
+const _LightEmissionTypes: GDScript = preload("res://gameplay/light/light_emission_types.gd")
 
 signal configuration_changed
 signal visual_profile_changed(profile: ObjectVisualProfile)
 signal preview_visibility_changed(visible: bool)
 
 
-## 发射形态。RAY 已接正式运行时；PARTICLE 仅保存配置与编辑器预览，不执行发射。
+## 发射形态（Inspector / 旧场景 / 旧测试兼容别名）。
+## 公共事实来源为 LightEmissionTypes.LightForm（RAY=0/PARTICLE=1，冻结）；本枚举数值与公共契约逐一对齐，禁止独立偏移。
 enum LightForm {
-	RAY,
-	PARTICLE,
+	## 光线形态（= LightEmissionTypes.LightForm.RAY，冻结 0）。
+	RAY = 0,
+	## 光粒形态（= LightEmissionTypes.LightForm.PARTICLE，冻结 1）。
+	PARTICLE = 1,
 }
 
 ## 光线八方向枚举（Inspector 下拉用）。
@@ -37,12 +46,25 @@ enum RayDirection {
 	UP_RIGHT,
 }
 
-## 光粒四正方向枚举；不允许斜向。
+## 光粒方向枚举（八方向）。旧四正方向数值冻结（RIGHT=0/DOWN=1/LEFT=2/UP=3），新四斜向以追加方式加入，不重排旧值；
+## 八个方向的输出合法性统一由 LightEmissionTypes.is_valid_direction 判定，本类不另立八方向合法集合。
 enum ParticleDirection {
-	RIGHT,
-	DOWN,
-	LEFT,
-	UP,
+	## → 正向（冻结 0）。
+	RIGHT = 0,
+	## ↓ 正向（冻结 1）。
+	DOWN = 1,
+	## ← 正向（冻结 2）。
+	LEFT = 2,
+	## ↑ 正向（冻结 3）。
+	UP = 3,
+	## ↘ 斜向（追加 4）。
+	DOWN_RIGHT = 4,
+	## ↙ 斜向（追加 5）。
+	DOWN_LEFT = 5,
+	## ↖ 斜向（追加 6）。
+	UP_LEFT = 6,
+	## ↗ 斜向（追加 7）。
+	UP_RIGHT = 7,
 }
 
 
@@ -50,12 +72,17 @@ enum ParticleDirection {
 ## 当前默认发射形态。
 @export var default_light_form: LightForm = LightForm.RAY : set = _set_default_light_form
 
+## 关卡是否允许玩家用 Q 切换主发射器光形态（M4-E4；主发射器 v0.3 §4.2）。
+## false 时任何状态下 Q 都不改变主发射器形态，保持本节点配置的初始形态；真值经 is_form_switch_allowed 供 core_loop 启动读取一次注入 LevelRuntimeController。
+## 本配置在“开始运行”前后含义一致：Q 是运行期专用权限（非 COMPLETED 均可），不属于 §8 的 SETUP 内部配置锁定范围。
+@export var allow_form_switch: bool = false
+
 @export_group("光线方向")
 ## RAY 形态的默认发射方向。
 @export var ray_default_direction: RayDirection = RayDirection.RIGHT : set = _set_ray_default_direction
 
 @export_group("光粒方向")
-## PARTICLE 形态的默认发射方向（仅四正方向）。
+## PARTICLE 形态的默认发射方向（八方向）。
 @export var particle_default_direction: ParticleDirection = ParticleDirection.RIGHT : set = _set_particle_default_direction
 
 @export_group("视觉与预览")
@@ -82,13 +109,18 @@ static func ray_direction_to_vector(direction: RayDirection) -> Vector2i:
 	return Vector2i.ZERO
 
 
-## ParticleDirection 到稳定 Vector2i 的唯一映射；非法值 push_error 并返回 ZERO。
+## ParticleDirection 到稳定 Vector2i 的唯一映射（八方向）；非法值 push_error 并返回 ZERO。
+## 输出八个向量经 LightEmissionTypes.is_valid_direction 全部合法，与光线方向向量共用同一公共合法集合。
 static func particle_direction_to_vector(direction: ParticleDirection) -> Vector2i:
 	match direction:
 		ParticleDirection.RIGHT: return Vector2i(1, 0)
 		ParticleDirection.DOWN: return Vector2i(0, 1)
 		ParticleDirection.LEFT: return Vector2i(-1, 0)
 		ParticleDirection.UP: return Vector2i(0, -1)
+		ParticleDirection.DOWN_RIGHT: return Vector2i(1, 1)
+		ParticleDirection.DOWN_LEFT: return Vector2i(-1, 1)
+		ParticleDirection.UP_LEFT: return Vector2i(-1, -1)
+		ParticleDirection.UP_RIGHT: return Vector2i(1, -1)
 	push_error("EmitterConfigNode：非法 ParticleDirection 值 %d。" % [direction])
 	return Vector2i.ZERO
 
@@ -96,8 +128,9 @@ static func particle_direction_to_vector(direction: ParticleDirection) -> Vector
 # ===== 合法性校验 =====
 ## 枚举合法集合即映射键集合，不依赖运行期发射器的向量八方向算法。
 
+## 形态合法性以公共契约 LightEmissionTypes.LightForm 为准；本地 LightForm 仅是兼容别名，不在本类独立扩张。
 static func _is_valid_light_form(value: int) -> bool:
-	return value in LightForm.values()
+	return value in _LightEmissionTypes.LightForm.values()
 
 
 static func _is_valid_ray_direction(value: int) -> bool:
@@ -230,6 +263,11 @@ func get_default_light_form() -> LightForm:
 	return default_light_form
 
 
+## 关卡是否允许 Q 切换光形态（M4-E4）；core_loop 启动读取一次注入 LevelRuntimeController，运行期不再监听本值变化。
+func is_form_switch_allowed() -> bool:
+	return allow_form_switch
+
+
 func get_ray_direction() -> RayDirection:
 	return ray_default_direction
 
@@ -264,6 +302,7 @@ func is_editor_preview_visible() -> bool:
 	return editor_preview_visible
 
 
-## 仅 RAY 接正式运行时；PARTICLE 不抛假结果、不自动降级为 RAY。
+## 执行阶段闸门（非快照阶段）：B3b-1 起 RAY 与 PARTICLE 均接正式运行时发射，二者皆返回 true。
+## 返回当前 default_light_form 是否为已接 Runtime 的合法形态；未来引入第三种未接形态时返回 false，不抛假结果、不自动降级为另一形态。
 func is_runtime_form_supported() -> bool:
-	return default_light_form == LightForm.RAY
+	return default_light_form == LightForm.RAY or default_light_form == LightForm.PARTICLE

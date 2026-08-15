@@ -94,10 +94,12 @@ func _validate_single_emitter(
 		if not _is_valid_particle_direction(emitter.particle_default_direction):
 			issues.append(_issue_struct(_err(), &"emitter_direction_invalid",
 				"PARTICLE 方向枚举域非法：%d。" % emitter.particle_default_direction, path))
-	# 默认形态运行支持：PARTICLE 虽为合法枚举，但当前运行未正式支持。
+	# 默认形态运行支持：委派正式能力来源 EmitterConfigNode.is_runtime_form_supported()
+	# （B3b-1 起 RAY / PARTICLE 均接正式运行时，二者皆返回 true）。本校验不在 Validator 内重立形态白名单，
+	# 仅在未来引入第三种未接 Runtime 的形态时才会触发，作为前向兼容守卫。
 	if not emitter.is_runtime_form_supported():
 		issues.append(_issue_struct(_err(), &"emitter_runtime_form_unsupported",
-			"默认形态 PARTICLE 当前运行未正式支持（仅 RAY 接正式运行时）。", path))
+			"默认形态当前未被正式 Runtime 支持。", path))
 	# visual_profile 缺失仅 WARNING。
 	if emitter.visual_profile == null:
 		issues.append(_issue_struct(_warn(), &"emitter_visual_profile_missing",

@@ -23,6 +23,7 @@ func _initialize() -> void:
 	_test_09_unrelated_mouse_button_none()
 	_test_10_pointer_position_preserved()
 	_test_11_translate_no_side_effects()
+	_test_12_switch_form_q()
 	_report()
 	quit(0 if _failures.is_empty() else 1)
 
@@ -160,6 +161,16 @@ func _test_11_translate_no_side_effects() -> void:
 	_check(NAME, c.kind == _PlayerInteractionController.Command.Kind.FIRE, "重复 FIRE 事件仍应为 FIRE。")
 
 
+## 12. Q 按下 → SWITCH_FORM（M4-E4 switch_light_form 输入动作，physical_keycode 绑定）；Q 释放 → NONE。
+func _test_12_switch_form_q() -> void:
+	const NAME: String = "12_Q按下SWITCH_FORM"
+	var pic: _PlayerInteractionController = _PlayerInteractionController.new()
+	var c: _PlayerInteractionController.Command = pic.translate(_make_key(KEY_Q, true))
+	_check(NAME, c.kind == _PlayerInteractionController.Command.Kind.SWITCH_FORM, "期望 SWITCH_FORM，实际 %s。" % [c.kind])
+	var c2: _PlayerInteractionController.Command = pic.translate(_make_key(KEY_Q, false))
+	_check(NAME, c2.kind == _PlayerInteractionController.Command.Kind.NONE, "Q 释放期望 NONE，实际 %s。" % [c2.kind])
+
+
 # ===== 断言与报告 =====
 
 ## 单项断言：累计计数，失败时追加“[组名] 原因”到失败列表。
@@ -171,7 +182,7 @@ func _check(name: String, ok: bool, detail: String) -> void:
 
 ## 输出测试摘要：测试组数、断言数、通过/失败与全部失败明细。
 func _report() -> void:
-	var group_count: int = 11
+	var group_count: int = 12
 	var passed_checks: int = _checks - _failures.size()
 	print("==== PlayerInteractionController 测试摘要 ====")
 	print("测试组数：%d" % group_count)

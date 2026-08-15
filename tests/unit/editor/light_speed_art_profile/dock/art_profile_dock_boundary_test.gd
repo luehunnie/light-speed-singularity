@@ -24,7 +24,8 @@ const _VisualStateTexture: GDScript = preload(
 const _GridPlacedObject: GDScript = preload(
 	"res://gameplay/grid/grid_placed_object.gd"
 )
-const _REAL_ART_PATH: String = "res://assets/art/crystals/crystal_normal_unlit.png"
+# 真实素材路径（M4-F1 修正：美术目录重组后 crystals/ → crystal/，见 git a3e99ba/0f27215）
+const _REAL_ART_PATH: String = "res://assets/art/crystal/crystal_normal_unlit.png"
 
 var _failures: PackedStringArray = PackedStringArray()
 var _checks: int = 0
