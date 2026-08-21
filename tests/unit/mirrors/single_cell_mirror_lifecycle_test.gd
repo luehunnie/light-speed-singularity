@@ -130,7 +130,7 @@ func _run_path(mirror_cell: Vector2i, orient: int, position_via_cell: bool) -> _
 	world["occupancy"].register_single_cell(mid, mirror.cell)
 	world["lookup"].placed[mid] = mirror
 	var result: _RayExecutionResult = _RayExecutionModule.execute(
-		Vector2i(0, 5), Vector2i.RIGHT, 128, world["query"]
+		Vector2i(0, 5), Vector2i.RIGHT, 128, world["query"], 7, 1
 	)
 	mirror.free()
 	return result

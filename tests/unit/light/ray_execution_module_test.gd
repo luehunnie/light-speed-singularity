@@ -73,7 +73,7 @@ func _test_01_straight_to_bounds() -> void:
 	const NAME: String = "01_直线到边界"
 	var world: Dictionary = _build_world([])
 	var result: _RayExecutionResult = _RayExecutionModule.execute(
-		Vector2i(0, 5), Vector2i.RIGHT, 128, world["query"]
+		Vector2i(0, 5), Vector2i.RIGHT, 128, world["query"], 7, 1
 	)
 	_check(NAME, result.stop_reason == _RayExecutionResult.StopReason.OUT_OF_BOUNDS,
 		"stop_reason 期望 OUT_OF_BOUNDS，实际 %s。" % [result.stop_reason])
@@ -94,7 +94,7 @@ func _test_02_wall_stop() -> void:
 	const NAME: String = "02_墙体停止"
 	var world: Dictionary = _build_world([Vector2i(5, 5)])
 	var result: _RayExecutionResult = _RayExecutionModule.execute(
-		Vector2i(0, 5), Vector2i.RIGHT, 128, world["query"]
+		Vector2i(0, 5), Vector2i.RIGHT, 128, world["query"], 7, 1
 	)
 	_check(NAME, result.stop_reason == _RayExecutionResult.StopReason.WALL,
 		"stop_reason 期望 WALL，实际 %s。" % [result.stop_reason])
@@ -115,7 +115,7 @@ func _test_03_mirror_redirect() -> void:
 	world["placed"][mirror_id] = mirror
 
 	var result: _RayExecutionResult = _RayExecutionModule.execute(
-		Vector2i(0, 5), Vector2i.RIGHT, 128, world["query"]
+		Vector2i(0, 5), Vector2i.RIGHT, 128, world["query"], 7, 1
 	)
 	# SLASH 反射 RIGHT(1,0) → (-0,-1) = UP(0,-1)；光路：(1,5)(2,5)(3,5) 向右，(3,4)..(3,0) 向上，(3,-1) 越界。
 	_check(NAME, result.stop_reason == _RayExecutionResult.StopReason.OUT_OF_BOUNDS,
@@ -143,7 +143,7 @@ func _test_04_mechanism_block() -> void:
 	world["placed"][mirror_id] = {}
 
 	var result: _RayExecutionResult = _RayExecutionModule.execute(
-		Vector2i(0, 5), Vector2i.RIGHT, 128, world["query"]
+		Vector2i(0, 5), Vector2i.RIGHT, 128, world["query"], 7, 1
 	)
 	_check(NAME, result.stop_reason == _RayExecutionResult.StopReason.MECHANISM_BLOCK,
 		"stop_reason 期望 MECHANISM_BLOCK，实际 %s。" % [result.stop_reason])
@@ -160,7 +160,7 @@ func _test_05_step_limit() -> void:
 	const NAME: String = "05_最大步数"
 	var world: Dictionary = _build_world([])
 	var result: _RayExecutionResult = _RayExecutionModule.execute(
-		Vector2i(0, 5), Vector2i.RIGHT, 3, world["query"]
+		Vector2i(0, 5), Vector2i.RIGHT, 3, world["query"], 7, 1
 	)
 	_check(NAME, result.stop_reason == _RayExecutionResult.StopReason.STEP_LIMIT,
 		"stop_reason 期望 STEP_LIMIT，实际 %s。" % [result.stop_reason])
@@ -180,7 +180,7 @@ func _test_06_crystal_per_step_order() -> void:
 	var crystals: Array[BasicCrystal] = [crystal]
 	var world: Dictionary = _build_world([], crystals)
 	var result: _RayExecutionResult = _RayExecutionModule.execute(
-		Vector2i(0, 5), Vector2i.RIGHT, 128, world["query"]
+		Vector2i(0, 5), Vector2i.RIGHT, 128, world["query"], 7, 1
 	)
 	_check(NAME, result.stop_reason == _RayExecutionResult.StopReason.OUT_OF_BOUNDS,
 		"stop_reason 期望 OUT_OF_BOUNDS，实际 %s。" % [result.stop_reason])

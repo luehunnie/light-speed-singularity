@@ -89,7 +89,9 @@ func dispatch(
 		start_cell,
 		direction,
 		_max_propagation_steps,
-		_light_world_query
+		_light_world_query,
+		emission_id,
+		generation
 	)
 	if execution_result.reached_step_limit:
 		push_warning("Light propagation stopped by MAX_PROPAGATION_STEPS")

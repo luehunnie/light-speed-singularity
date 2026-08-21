@@ -112,14 +112,14 @@ func begin_generation(generation: int) -> bool:
 
 
 ## 发射一颗光粒：由本类分配单调 runtime_id、generation=current_generation、初速 STANDARD，经 create_emitted 构造并登记。
-## [br]输入：cell 为发射起始格；direction 为合法八方向。
+## [br]输入：cell 为发射起始格；direction 为合法八方向；emission_id 为发射身份（AF-02 Context Shared Facts；默认 0 = 未关联，正式运行必传真实值）。
 ## [br]返回：成功返回分配的 runtime_id（>=0）；direction 非法致 create_emitted 返回 null 时 push_error 并返回 -1（不消费 id）。
 ## [br]副作用：成功时 _next_runtime_id +=1 并登记进 _active_states；不推进 Tick、不查 world、不调 executor。
 ## [br]边界：发射使用当前 current_tick 作为 step_started_tick / next_move_tick 基线；初速冻结 STANDARD。
-func emit_particle(cell: Vector2i, direction: Vector2i) -> int:
+func emit_particle(cell: Vector2i, direction: Vector2i, emission_id: int = 0) -> int:
 	var runtime_id: int = _next_runtime_id
 	var state: Variant = _ParticleRuntimeState.create_emitted(
-		runtime_id, _current_generation, cell, direction, _current_tick)
+		runtime_id, _current_generation, cell, direction, _current_tick, emission_id)
 	if state == null:
 		push_error("ParticleScheduler：emit_particle 拒绝——create_emitted 返回 null（cell=(%d,%d), direction=(%d,%d)）。" % [cell.x, cell.y, direction.x, direction.y])
 		return -1

@@ -31,6 +31,11 @@ enum DeceleratorDirection {
 ## [br]默认 RIGHT 表示从机关栏新拿出的减速器箭头指向 →。
 var direction: DeceleratorDirection = DeceleratorDirection.RIGHT
 
+# 正式光交互契约（Guide §21）：形态声明入口 + interact_particle 入口；Result 经 preload 引用。
+const _LightInteractionResult: GDScript = preload(
+	"res://gameplay/light/interaction/light_interaction_result.gd"
+)
+
 # 调试箭头节点：正式纹理配置正常时默认隐藏，仅作占位后备，不参与玩法状态。
 @onready var _debug_arrow: Line2D = $DebugArrow
 
@@ -171,3 +176,21 @@ func matches_direction(incoming: Vector2i) -> bool:
 ## [br]本函数无副作用；边界条件：速度档位上下限保护由光粒系统负责，本函数只返回修正量。
 func get_speed_modifier(incoming: Vector2i) -> int:
 	return -1 if matches_direction(incoming) else 0
+
+
+## 声明本机关支持的光形态（Guide §21 正式契约面；Definition 侧声明的运行期镜像）。
+## [br]减速器仅声明 PARTICLE 交互；RAY 未声明 → Runtime 判透明直通（Guide §21 示例语义）。
+func get_light_interaction_forms() -> Array[StringName]:
+	return [&"PARTICLE"]
+
+
+## PARTICLE 正式交互入口（Guide §21）：方向匹配 → CONTINUE + PARTICLE_SPEED_DELTA(-1)；不匹配 → 透明 CONTINUE。
+## [br]particle_context 为 ParticleInteractionContext（只读事实快照）。
+## [br]边界：只请求 -1 档位增量（Guide §24 速度修改仅允许 ±1），档位饱和由 Runtime 应用；
+##   不改传播方向（CONTINUE），不产生 OUTPUT_EVENT。
+func interact_particle(particle_context: Variant) -> _LightInteractionResult:
+	var modifier: int = get_speed_modifier(particle_context.get_incoming_direction())
+	var result: _LightInteractionResult = _LightInteractionResult.continue_result()
+	if modifier != 0:
+		result.add_speed_delta(modifier)
+	return result

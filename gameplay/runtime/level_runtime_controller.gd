@@ -255,7 +255,8 @@ func _begin_particle_emission(generation: int, emission_id: int, emitter_cell: V
 		push_error("LevelRuntimeController: emission %d 不活动，拒绝 Particle 发射（bind 前置防御）。" % [emission_id])
 		return false
 	# 发射一颗光粒：runtime_id 由 scheduler 单调分配；同 generation 多次 emit 各得不同 runtime_id 并存（不清空旧光粒）。
-	var runtime_id: int = _particle_scheduler.emit_particle(emitter_cell, direction)
+	# AF-02：emission_id 随光粒携带（光交互 Context Shared Facts），不再仅在 Registry 侧绑定。
+	var runtime_id: int = _particle_scheduler.emit_particle(emitter_cell, direction, emission_id)
 	if runtime_id < 0:
 		push_error("LevelRuntimeController: Particle emit_particle 失败（cell=%s direction=%s），拒绝本次 emission。" % [emitter_cell, direction])
 		return false

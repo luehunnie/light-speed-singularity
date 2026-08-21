@@ -44,6 +44,9 @@ var _step_started_tick: int
 var _next_move_tick: int
 ## 是否仍在活动；emitted 入口写入 true，terminate 后置 false 且不得复活。
 var _active: bool
+## 发射身份（ActiveEmissionRegistry 单调 emission_id；AF-02 光交互 Context Shared Facts 用）。
+## [br]0 = 未关联 emission（遗留两参构造 / 测试桩），正式运行由 scheduler.emit_particle 传入真实值。
+var _emission_id: int
 
 
 ## 默认构造：创建一个 inactive 空壳（active=false，字段为零值）。
@@ -57,6 +60,7 @@ func _init() -> void:
 	_step_started_tick = 0
 	_next_move_tick = 0
 	_active = false
+	_emission_id = 0
 
 
 ## 已发射光粒的最小构造入口（冻结 emitted-state 合同）。
@@ -67,13 +71,15 @@ func _init() -> void:
 ## [br]副作用：仅写入新实例字段；不分配 runtime_id、不推进 Tick、不执行移动、不读写 world query 或视觉。
 ## [br]失败：direction 非法 / runtime_id<0 / current_tick<0 任一成立时 push_error 并返回 null（按冻结边界拒绝构造）。
 ## [br]边界：current_tick 不复制进 state；next_move_tick 为绝对整数 Tick；
-##   STANDARD 初始速度冻结，不因调用方传入的其它档位参数改变（本入口不接受 speed 参数）。
+##   STANDARD 初始速度冻结，不因调用方传入的其它档位参数改变（本入口不接受 speed 参数）；
+##   emission_id 为发射身份（AF-02 Context Shared Facts；默认 0 = 未关联，正式运行必传真实值）。
 static func create_emitted(
 		runtime_id: int,
 		generation: int,
 		cell: Vector2i,
 		direction: Vector2i,
-		current_tick: int
+		current_tick: int,
+		emission_id: int = 0
 ) -> ParticleRuntimeState:
 	if not _LightEmissionTypes.is_valid_direction(direction):
 		push_error("ParticleRuntimeState：非法发射方向 (%d, %d)，拒绝构造。" % [direction.x, direction.y])
@@ -94,6 +100,7 @@ static func create_emitted(
 	state._next_move_tick = current_tick + _ParticleMotionRules.ticks_for(
 		_ParticleMotionRules.SpeedTier.STANDARD, direction)
 	state._active = true
+	state._emission_id = emission_id
 	return state
 
 
@@ -168,6 +175,11 @@ func get_direction() -> Vector2i:
 ## 当前速度档位（_ParticleMotionRules.SpeedTier 值）。
 func get_speed_tier() -> int:
 	return _speed_tier
+
+
+## 发射身份（AF-02 Context Shared Facts；0 = 未关联 emission 的遗留构造 / 测试桩）。
+func get_emission_id() -> int:
+	return _emission_id
 
 
 ## 当前传播步的逻辑起始 Tick（绝对整数 Tick）。

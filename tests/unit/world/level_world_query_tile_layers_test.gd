@@ -209,18 +209,18 @@ func _test_08_light_inherits_terrain_and_wall() -> void:
 	var row: Array[Vector2i] = [Vector2i(0, 0), Vector2i(1, 0), Vector2i(2, 0), Vector2i(3, 0), Vector2i(4, 0)]
 	# A. WallLayer 阻挡：墙在 (3,0)；从 (0,0) 向右进入 (1,0)(2,0) 后在 (3,0) 墙体停止。
 	var world_a: Dictionary = _build_snapshot_world(row, [Vector2i(3, 0)], [], [], [], Vector2i(-9, -9))
-	var res_a: _RayExecutionResult = _RayExecutionModule.execute(Vector2i(0, 0), Vector2i.RIGHT, 128, _LightWorldQuery.new(world_a["query"]))
+	var res_a: _RayExecutionResult = _RayExecutionModule.execute(Vector2i(0, 0), Vector2i.RIGHT, 128, _LightWorldQuery.new(world_a["query"]), 7, 1)
 	_check(NAME, res_a.stop_reason == _RayExecutionResult.StopReason.WALL, "A 墙体停止期望 WALL，实际 %s。" % [res_a.stop_reason])
 	_check(NAME, res_a.steps.size() == 2, "A 墙体停止 steps 期望 2((1,0)(2,0))，实际 %d。" % [res_a.steps.size()])
 	# B. Terrain 外包越界：无墙，从 (0,0) 向右进入 (1,0)..(4,0) 后在 (5,0) 越界（外包 Rect2i(0,0,5,1)）。
 	var world_b: Dictionary = _build_snapshot_world(row, [], [], [], [], Vector2i(-9, -9))
-	var res_b: _RayExecutionResult = _RayExecutionModule.execute(Vector2i(0, 0), Vector2i.RIGHT, 128, _LightWorldQuery.new(world_b["query"]))
+	var res_b: _RayExecutionResult = _RayExecutionModule.execute(Vector2i(0, 0), Vector2i.RIGHT, 128, _LightWorldQuery.new(world_b["query"]), 7, 1)
 	_check(NAME, res_b.stop_reason == _RayExecutionResult.StopReason.OUT_OF_BOUNDS, "B 外包越界期望 OUT_OF_BOUNDS，实际 %s。" % [res_b.stop_reason])
 	_check(NAME, res_b.steps.size() == 4, "B 外包越界 steps 期望 4((1,0)..(4,0))，实际 %d。" % [res_b.steps.size()])
 	# C. Terrain 空洞越界：外包内 (3,0) 无 Terrain Tile；从 (0,0) 向右进入 (1,0)(2,0) 后在空洞 (3,0) 越界（非外包矩形边界）。
 	var hole_row: Array[Vector2i] = [Vector2i(0, 0), Vector2i(1, 0), Vector2i(2, 0), Vector2i(4, 0)]
 	var world_c: Dictionary = _build_snapshot_world(hole_row, [], [], [], [], Vector2i(-9, -9))
-	var res_c: _RayExecutionResult = _RayExecutionModule.execute(Vector2i(0, 0), Vector2i.RIGHT, 128, _LightWorldQuery.new(world_c["query"]))
+	var res_c: _RayExecutionResult = _RayExecutionModule.execute(Vector2i(0, 0), Vector2i.RIGHT, 128, _LightWorldQuery.new(world_c["query"]), 7, 1)
 	_check(NAME, res_c.stop_reason == _RayExecutionResult.StopReason.OUT_OF_BOUNDS, "C 空洞越界期望 OUT_OF_BOUNDS，实际 %s。" % [res_c.stop_reason])
 	_check(NAME, res_c.steps.size() == 2, "C 空洞越界 steps 期望 2((1,0)(2,0))，实际 %d。" % [res_c.steps.size()])
 
@@ -230,7 +230,7 @@ func _test_09_legal_decoration_no_light_effect() -> void:
 	const NAME: String = "09_LegalArea/Decoration不影响光线"
 	var row: Array[Vector2i] = [Vector2i(0, 0), Vector2i(1, 0), Vector2i(2, 0), Vector2i(3, 0), Vector2i(4, 0)]
 	var world: Dictionary = _build_snapshot_world(row, [], [], [Vector2i(2, 0)], [Vector2i(1, 0)], Vector2i(-9, -9))
-	var res: _RayExecutionResult = _RayExecutionModule.execute(Vector2i(0, 0), Vector2i.RIGHT, 128, _LightWorldQuery.new(world["query"]))
+	var res: _RayExecutionResult = _RayExecutionModule.execute(Vector2i(0, 0), Vector2i.RIGHT, 128, _LightWorldQuery.new(world["query"]), 7, 1)
 	_check(NAME, res.stop_reason == _RayExecutionResult.StopReason.OUT_OF_BOUNDS, "期望外包越界 OUT_OF_BOUNDS，实际 %s。" % [res.stop_reason])
 	_check(NAME, res.steps.size() == 4, "期望贯穿 4 格 ((1,0)..(4,0))，实际 %d。" % [res.steps.size()])
 
