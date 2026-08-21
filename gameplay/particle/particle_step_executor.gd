@@ -24,6 +24,9 @@ const _ParticleRuntimeState: GDScript = preload(
 const _ParticleMechanismAdapter: GDScript = preload(
 	"res://gameplay/particle/particle_mechanism_adapter.gd"
 )
+const _ParticleInteractionContext: GDScript = preload(
+	"res://gameplay/light/interaction/particle_interaction_context.gd"
+)
 
 
 ## 单步求值结果类型。MOVE=成功进入下一格；TERMINATE=本步终止传播。
@@ -111,10 +114,24 @@ func evaluate_step(
 		result.has_crystal = false
 		return result
 
-	# ⑤ 成功进入 next_cell；⑥ 查水晶；⑦ 查机关；⑧ 交 Adapter。
+	# ⑤ 成功进入 next_cell；⑥ 查水晶；⑦ 查机关；⑧ 构造不可变 Context 后交 Adapter 正式分发（AF-02 §23 时序）。
 	var has_crystal: bool = world_query.has_crystal_at(next_cell)
 	var mechanism: Variant = world_query.get_light_mechanism_at(next_cell)
-	var effect = _ParticleMechanismAdapter.adapt(mechanism, state.get_direction())
+	var particle_context: Variant = _ParticleInteractionContext.create(
+		next_cell,
+		state.get_direction(),
+		state.get_emission_id(),
+		state.get_generation(),
+		state.get_speed_tier(),
+		state.get_runtime_id()
+	)
+	var effect
+	if particle_context == null:
+		# 防御：state 不变量被破坏（正常不可达）时按透明通过，不中断求值。
+		effect = _ParticleMechanismAdapter.MechanismEffect.new()
+		effect.outgoing_direction = state.get_direction()
+	else:
+		effect = _ParticleMechanismAdapter.adapt(mechanism, particle_context)
 
 	# ⑨ 返回纯 StepResult（MOVE）。M4-E4：确定性前瞻——本步离开方向上的再下一格是否墙 / 越界，
 	#    供 Visual 在接触边界时即时消失；不改本步 MOVE 语义（本格照常进入，终止仍由下一次求值裁定）。

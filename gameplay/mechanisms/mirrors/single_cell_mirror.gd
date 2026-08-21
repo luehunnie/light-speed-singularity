@@ -22,6 +22,12 @@ enum MirrorOrientation {
 ## [br]默认 SLASH 表示从机关栏新拿出的镜面显示“/”；移动、回收取消或 R 重置不应把已有镜面强制恢复默认方向。
 var orientation: MirrorOrientation = MirrorOrientation.SLASH
 
+# 正式光交互契约（Guide §21）：形态声明入口 + 对称 interact_* 入口；Result/Context 经 preload 引用。
+const _LightInteractionResult: GDScript = preload(
+	"res://gameplay/light/interaction/light_interaction_result.gd"
+)
+
+# 支持的八方向入射集合（正式传播恒为八方向；is_valid_incoming_direction_value 为唯一判定）。
 # 内容状态 ID 契约：必须与 single_cell_mirror_visuals.tres 中 states 的 state_id 保持一致。
 # slash（/，左下到右上）对应 large_mirror.png；backslash（\，左上到右下）对应 large_mirror_other.png。
 const STATE_SLASH: StringName = &"slash"
@@ -77,6 +83,34 @@ func toggle_orientation() -> void:
 ## [br]边界条件：基础版本采用双面反射；SLASH 使用 Vector2i(-direction.y, -direction.x)，BACKSLASH 使用 Vector2i(direction.y, direction.x)，不使用浮点角度、物理碰撞或 RayCast。
 func reflect_direction(incoming_direction: Vector2i) -> Vector2i:
 	return reflect_direction_for_orientation(orientation, incoming_direction)
+
+
+## 声明本机关支持的光形态（Guide §21 正式契约面；Definition 侧声明的运行期镜像）。
+## [br]镜面对 RAY 与 PARTICLE 均有反射响应；未声明形态由 Runtime 判透明，不调用 interact_*。
+func get_light_interaction_forms() -> Array[StringName]:
+	return [&"RAY", &"PARTICLE"]
+
+
+## RAY 正式交互入口（Guide §21）：按 orientation 反射入射方向。
+## [br]ray_context 为 RayInteractionContext（只读事实快照）。
+## [br]返回：合法入射 → REDIRECT(反射方向)；非法入射（零反射哨兵）→ BLOCK（与既有 Ray 链路停止语义一致）。
+## [br]本函数无副作用；不改 orientation / 占用 / 传播状态，反射真值仍唯一来自 orientation。
+func interact_ray(ray_context: Variant) -> _LightInteractionResult:
+	var reflected: Vector2i = reflect_direction(ray_context.get_incoming_direction())
+	if reflected == Vector2i.ZERO:
+		return _LightInteractionResult.block_result()
+	return _LightInteractionResult.redirect_result(reflected)
+
+
+## PARTICLE 正式交互入口（Guide §21）：按 orientation 反射入射方向（改向不改速）。
+## [br]particle_context 为 ParticleInteractionContext（只读事实快照，速度档不参与镜面计算）。
+## [br]返回：合法入射 → REDIRECT(反射方向)；非法入射 → CONTINUE（保持入射方向，与既有 Particle 安全降级一致）。
+## [br]本函数无副作用；不产生 SpeedDelta（镜面不改速）。
+func interact_particle(particle_context: Variant) -> _LightInteractionResult:
+	var reflected: Vector2i = reflect_direction(particle_context.get_incoming_direction())
+	if reflected == Vector2i.ZERO:
+		return _LightInteractionResult.continue_result()
+	return _LightInteractionResult.redirect_result(reflected)
 
 
 ## 判断一个入射方向是否可用于单格镜面反射。

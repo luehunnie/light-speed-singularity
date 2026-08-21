@@ -14,15 +14,21 @@ const _LightWorldQuery: GDScript = preload("res://gameplay/world/light_world_que
 const _RayMechanismAdapter: GDScript = preload("res://gameplay/light/ray_mechanism_adapter.gd")
 const _RayMechanismResult: GDScript = preload("res://gameplay/light/ray_mechanism_result.gd")
 const _RayExecutionResult: GDScript = preload("res://gameplay/light/ray_execution_result.gd")
+const _RayInteractionContext: GDScript = preload(
+	"res://gameplay/light/interaction/ray_interaction_context.gd"
+)
 
 
 ## 执行一次无副作用的普通光线传播，返回有序路径与停止原因；触顶 push_warning 由核心根据 reached_step_limit 复现。
 ## 逐格顺序与旧 fire_light() 一致：先算 next_cell，越界/墙体 break，否则记录步骤（含是否有水晶）再查机关；REDIRECT 改向下一轮，BLOCK break，CONTINUE 保持原方向。
+## [br]emission_id / runtime_generation 为本次发射身份与运行代快照（AF-02：构造 RayInteractionContext 的 Shared Facts）。
 static func execute(
 		start_cell: Vector2i,
 		initial_direction: Vector2i,
 		max_steps: int,
-		world_query: _LightWorldQuery
+		world_query: _LightWorldQuery,
+		emission_id: int,
+		runtime_generation: int
 ) -> _RayExecutionResult:
 	var result: _RayExecutionResult = _RayExecutionResult.new()
 	var current_cell: Vector2i = start_cell
@@ -45,11 +51,20 @@ static func execute(
 		# 3-5. 光进入 next_cell：先记录该格步骤（入射方向、是否有水晶）再处理机关方向，保持旧循环顺序。
 		result.add_step(next_cell, direction, world_query.has_crystal_at(next_cell))
 
-		# 6-8. 进入镜面格后再更新方向：REDIRECT 改向从下一格起生效，BLOCK 停止，CONTINUE 保持原方向。
+		# 6-8. 进入机关格后再更新方向：REDIRECT 改向从下一格起生效，BLOCK 停止，CONTINUE 保持原方向。
 		# get_light_mechanism_at 一次取得机关节点；无机关或未登记正式节点返回 null，跳过评估等价 CONTINUE。
+		# AF-02：光到达机关格先构造不可变 RayInteractionContext（Shared Facts 快照），再经 Adapter 正式分发。
 		var mechanism: Variant = world_query.get_light_mechanism_at(next_cell)
 		if mechanism != null:
-			var mech_result: _RayMechanismResult = _RayMechanismAdapter.evaluate(mechanism, direction)
+			var ray_context: Variant = _RayInteractionContext.create(
+				next_cell, direction, emission_id, runtime_generation)
+			var mech_result: _RayMechanismResult
+			if ray_context == null:
+				if OS.is_debug_build():
+					print_debug("RayExecutionModule: Context 构造失败，本轮保持原方向。")
+				mech_result = _RayMechanismResult.continue_with(direction)
+			else:
+				mech_result = _RayMechanismAdapter.evaluate(mechanism, ray_context)
 			match mech_result.kind:
 				_RayMechanismResult.Kind.REDIRECT:
 					direction = mech_result.outgoing_direction

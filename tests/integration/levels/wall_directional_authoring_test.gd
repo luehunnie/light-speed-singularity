@@ -121,7 +121,7 @@ func _test_04_ray_equivalence() -> void:
 	for i in range(4):
 		# 第 i 方向 atlas 在 (3,0) 立墙；光线自 (0,0) 向右传播。
 		var q: _LevelWorldQuery = _build_query(row, [[Vector2i(3, 0), _DIRS[i]]], [], Vector2i(-9, -9))
-		var res: _RayExecutionResult = _RayExecutionModule.execute(Vector2i(0, 0), Vector2i.RIGHT, 64, _LightWorldQuery.new(q))
+		var res: _RayExecutionResult = _RayExecutionModule.execute(Vector2i(0, 0), Vector2i.RIGHT, 64, _LightWorldQuery.new(q), 7, 1)
 		_check(G, res.stop_reason == _RayExecutionResult.StopReason.WALL, "%s 方向墙期望 WALL 停止，实际 %s。" % [_DIR_NAMES[i], str(res.stop_reason)])
 		var wall_in_steps: bool = false
 		for st in res.steps:
