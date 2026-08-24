@@ -26,6 +26,9 @@ var orientation: MirrorOrientation = MirrorOrientation.SLASH
 const _LightInteractionResult: GDScript = preload(
 	"res://gameplay/light/interaction/light_interaction_result.gd"
 )
+# Typed Configuration 类型引用继承 PlaceableToken._MechanismConfiguration（AF-03 / P0-4 apply_configuration 覆写）。
+# 本类型的正式 Stable Field ID（内容 Schema 身份，Guide §11.3）：镜面朝向字段。
+const FIELD_ORIENTATION: StringName = &"orientation"
 
 # 支持的八方向入射集合（正式传播恒为八方向；is_valid_incoming_direction_value 为唯一判定）。
 # 内容状态 ID 契约：必须与 single_cell_mirror_visuals.tres 中 states 的 state_id 保持一致。
@@ -74,6 +77,24 @@ func toggle_orientation() -> void:
 		set_orientation(MirrorOrientation.BACKSLASH)
 	else:
 		set_orientation(MirrorOrientation.SLASH)
+
+
+## 正式 Typed Configuration 应用（AF-03 / P0-4，覆写 PlaceableToken 契约）：
+## [br]按 Stable Field ID "orientation" 解释枚举整数值并写入唯一朝向事实（经 set_orientation 同步视觉）。
+## [br]配置含未知字段或缺 orientation 字段返回 false 且朝向不变；值越界由 set_orientation 拒绝并保持原朝向。
+func apply_configuration(configuration: _MechanismConfiguration) -> bool:
+	if configuration == null:
+		return true
+	var value: Variant = configuration.get_value(FIELD_ORIENTATION)
+	if not (value is int):
+		push_error("SingleCellMirror: Typed 配置缺少合法 %s 字段，拒绝应用。" % [FIELD_ORIENTATION])
+		return false
+	var next_orientation := value as MirrorOrientation
+	if next_orientation != MirrorOrientation.SLASH and next_orientation != MirrorOrientation.BACKSLASH:
+		push_error("SingleCellMirror: Typed 配置朝向越界：%s。" % [value])
+		return false
+	set_orientation(next_orientation)
+	return true
 
 
 ## 根据当前镜面朝向反射一个八方向入射向量。

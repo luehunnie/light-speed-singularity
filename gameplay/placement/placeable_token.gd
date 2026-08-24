@@ -24,6 +24,10 @@ extends Node2D
 const _GridCoordinateRules: GDScript = preload(
 	"res://gameplay/grid/grid_coordinate_rules.gd"
 )
+## Typed Configuration 类型引用（AF-03 / P0-4 apply_configuration 正式契约面；preload 避开新 class_name 缓存坑）。
+const _MechanismConfiguration: GDScript = preload(
+	"res://gameplay/content/configuration/mechanism_configuration.gd"
+)
 
 var mechanism_id: StringName = &""
 
@@ -119,3 +123,17 @@ func set_drag_preview_visible(preview_is_visible: bool) -> void:
 ## [br]回收和销毁通过 queue_free() 清理节点，不会留下可见拖拽预览。
 func set_placed_visible(placed_is_visible: bool) -> void:
 	_visual_view.set_visual_visible(placed_is_visible)
+
+
+## 正式 Typed Configuration 应用契约（AF-03 / P0-4，Guide §11/§12）：
+## Definition Spawn / 玩家动作提交把 Schema 约束的类型化配置投影到节点内部状态事实。
+## [br]基类默认实现：无字段配置（空 Schema）为合法 no-op；含字段配置基类无法解释，push_error 并返回 false，
+## 拒绝静默吞掉（具体机关子类覆写本方法，按 Stable Field ID 逐字段解释，禁止自由 Dictionary 参数）。
+## [br]返回 false 时节点内部状态保持不变（调用方事务按失败回滚）。
+func apply_configuration(configuration: _MechanismConfiguration) -> bool:
+	if configuration == null:
+		return true
+	if configuration.get_field_ids().is_empty():
+		return true
+	push_error("PlaceableToken: 基类不接受含字段的 Typed 配置，须由具体机关覆写 apply_configuration。")
+	return false

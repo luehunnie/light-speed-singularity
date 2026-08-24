@@ -35,6 +35,9 @@ var direction: AcceleratorDirection = AcceleratorDirection.RIGHT
 const _LightInteractionResult: GDScript = preload(
 	"res://gameplay/light/interaction/light_interaction_result.gd"
 )
+# Typed Configuration 类型引用继承 PlaceableToken._MechanismConfiguration（AF-03 / P0-4 apply_configuration 覆写）。
+# 本类型的正式 Stable Field ID（内容 Schema 身份，Guide §11.3）：加速方向字段（枚举值序与 AcceleratorDirection 一致）。
+const FIELD_DIRECTION: StringName = &"direction"
 
 # 调试箭头节点：正式纹理配置正常时默认隐藏，仅作占位后备，不参与玩法状态。
 @onready var _debug_arrow: Line2D = $DebugArrow
@@ -97,6 +100,24 @@ func set_direction(new_dir: AcceleratorDirection):
 func cycle_direction() -> void:
 	direction = (direction + 1) % 8 as AcceleratorDirection
 	_refresh_direction_visual()
+
+
+## 正式 Typed Configuration 应用（AF-03 / P0-4，覆写 PlaceableToken 契约）：
+## [br]按 Stable Field ID "direction" 解释枚举整数值并写入唯一方向事实（经 set_direction 同步视觉）。
+## [br]配置含未知字段或缺 direction 字段返回 false 且方向不变；值越界由 set_direction 拒绝并保持原方向。
+func apply_configuration(configuration: _MechanismConfiguration) -> bool:
+	if configuration == null:
+		return true
+	var value: Variant = configuration.get_value(FIELD_DIRECTION)
+	if not (value is int):
+		push_error("ParticleAccelerator: Typed 配置缺少合法 %s 字段，拒绝应用。" % [FIELD_DIRECTION])
+		return false
+	var next_direction := value as AcceleratorDirection
+	if next_direction < 0 or next_direction > 7:
+		push_error("ParticleAccelerator: Typed 配置方向越界：%s。" % [value])
+		return false
+	set_direction(next_direction)
+	return true
 
 
 ## 把当前 direction 映射为 ObjectVisualView 的内容状态 ID。

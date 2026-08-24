@@ -3,14 +3,13 @@ extends RefCounted
 ## 一次拖拽的临时事实唯一所有者：来源、机关 ID、原格、预览格、起始朝向。
 ## 不持有 Node、Controller、OccupancyRegistry、UI、Callable 或场景树引用；预览与正式节点句柄由核心保留。
 ## 复用 RuntimeInteractionTypes.DragSource，不定义第二份来源枚举；can_recycle 由核心在松手时按当前状态实时查询，不在此缓存。
-## orientation 是拖拽起始朝向快照：库存拖拽为 SLASH，已放置拖拽取自正式节点；正式节点本身仍保留朝向，本字段不作同步副本维护。
+## orientation 是拖拽起始朝向快照（AF-03 / P0-4 起为类型无关 Variant 快照，清除 Mirror-specific 类型依赖）：
+## 库存拖拽由调用方传入类型默认朝向，已放置拖拽取自正式节点当前朝向；具体取值语义归各机关类型，
+## 本类只保存快照不解释；正式节点本身仍保留朝向，本字段不作同步副本维护。
 
 
 const _RuntimeInteractionTypes: GDScript = preload(
 	"res://gameplay/interaction/runtime_interaction_types.gd"
-)
-const _SingleCellMirror: GDScript = preload(
-	"res://gameplay/mechanisms/mirrors/single_cell_mirror.gd"
 )
 
 ## 与核心 INVALID_CELL 一致的哨兵；库存拖拽时 original_cell 取此值，表示无原始格。
@@ -26,15 +25,15 @@ var mechanism_id: StringName = &""
 var original_cell: Vector2i = INVALID_CELL
 ## 当前预览格；鼠标移动时由核心调用 update_preview_cell 更新。
 var preview_cell: Vector2i = INVALID_CELL
-## 拖拽起始朝向快照；库存拖拽为 SLASH，已放置拖拽取自正式节点。
-var original_orientation: _SingleCellMirror.MirrorOrientation = _SingleCellMirror.MirrorOrientation.SLASH
+## 拖拽起始朝向快照（类型无关 Variant；取值语义归机关类型，本类不解释）。
+var original_orientation: Variant = 0
 
 
 ## 开始一次库存拖拽；记录类型 ID、预览格与起始朝向，清空已放置机关字段。
 func begin_inventory(
 	p_token_type_id: StringName,
 	p_initial_preview_cell: Vector2i,
-	p_orientation: _SingleCellMirror.MirrorOrientation
+	p_orientation: Variant
 ) -> void:
 	source = _RuntimeInteractionTypes.DragSource.INVENTORY
 	token_type_id = p_token_type_id
@@ -49,7 +48,7 @@ func begin_placed(
 	p_mechanism_id: StringName,
 	p_original_cell: Vector2i,
 	p_initial_preview_cell: Vector2i,
-	p_orientation: _SingleCellMirror.MirrorOrientation
+	p_orientation: Variant
 ) -> void:
 	source = _RuntimeInteractionTypes.DragSource.PLACED
 	token_type_id = &""
@@ -71,7 +70,7 @@ func clear() -> void:
 	mechanism_id = &""
 	original_cell = INVALID_CELL
 	preview_cell = INVALID_CELL
-	original_orientation = _SingleCellMirror.MirrorOrientation.SLASH
+	original_orientation = 0
 
 
 ## 是否存在进行中的拖拽（source != NONE）。
