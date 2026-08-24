@@ -11,6 +11,8 @@ extends Node2D
 ## Q 切换主发射器光形态（M4-E4）：关卡 allow_form_switch=true 时 SETUP/READY_TO_FIRE/PULSE_ACTIVE/MOVE_WINDOW 均可（COMPLETED 禁止），只影响后续发射；成功切换显示上方居中 1 秒形态提示。
 ## 仅“已放置机关跨格直接移动”成功提交后消耗 runtime_move_limit 一次；COMPLETED 冻结全部交互，只允许 R。
 ## R 是完整关卡重置（由 _level_runtime_controller.reset_runtime 执行）：递增 pulse_generation 使旧异步失效 → 安全取消拖拽 → 清光路/水晶/完成状态 → 逐个注销玩家机关占用并退回库存 → 清零 runtime_moves_used → 回 SETUP；不删除发射器/墙体/水晶/静态内容。
+## AF-07 起本脚本同时作为统一 LevelRuntimeHost（gameplay/runtime/level_runtime_host.gd）的关卡控制器基类：
+## 内容角色经 LevelRoot 子节点间接解析（见 _content_root），运行链与 HUD 接线单一来源，不复制第二套 Runtime。
 
 
 # 世界格尺寸唯一来源（preload 共享常量，不加 class_name）；64 世界格对应半格 32。
@@ -36,22 +38,27 @@ const INVALID_CELL: Vector2i = Vector2i(-999999, -999999)
 # 四层 TileMapLayer 接线（D5-B.1）：Terrain/Wall/LegalArea/Decoration 均已接入对应 TileSet，visible=false 不改变当前运行画面；
 # 启动构造只读快照 _tile_layer_snapshot 复制四层 used cells（D5-B.2A）：快照作为正式运行 Terrain/LegalArea/Wall 唯一事实接入 LevelWorldQuery，map_bounds/wall_cells 退化为 Diagnostics/导出与旧兼容路径。
 # 格↔世界换算仍由 GridCoordinateRules 实现，不依赖 map_to_local。
-@onready var terrain_layer: TileMapLayer = $TerrainLayer
-@onready var wall_layer: TileMapLayer = $WallLayer
-@onready var legal_area_layer: TileMapLayer = $LegalAreaLayer
-@onready var decoration_layer: TileMapLayer = $DecorationLayer
-@onready var runtime_objects: Node2D = $RuntimeObjects
-@onready var light_path_layer: Node2D = $LightPathLayer
+# AF-07 内容根解析：Host 模式下纯关卡 Scene 实例挂在子节点 LevelRoot 上（由 level_runtime_host.gd 装载），
+# 全部内容角色（四层 TileMapLayer / RuntimeObjects / LightPathLayer / 发射器配置 / 水晶）在其下解析；
+# 原型场景无 LevelRoot 子节点时内容根为自身，行为与 AF-07 前保持不变。本变量声明须早于其余内容 @onready。
+@onready var _content_root: Node2D = _resolve_content_root()
+@onready var terrain_layer: TileMapLayer = _content_root.get_node("TerrainLayer") as TileMapLayer
+@onready var wall_layer: TileMapLayer = _content_root.get_node("WallLayer") as TileMapLayer
+@onready var legal_area_layer: TileMapLayer = _content_root.get_node("LegalAreaLayer") as TileMapLayer
+@onready var decoration_layer: TileMapLayer = _content_root.get_node("DecorationLayer") as TileMapLayer
+@onready var runtime_objects: Node2D = _content_root.get_node("RuntimeObjects") as Node2D
+@onready var light_path_layer: Node2D = _content_root.get_node("LightPathLayer") as Node2D
 @onready var canvas_layer: CanvasLayer = $CanvasLayer
 @onready var hint_label: Label = $CanvasLayer/HintLabel
 @onready var complete_label: Label = $CanvasLayer/CompleteLabel
 @onready var inventory_bar: Control = $CanvasLayer/InventoryBar
 @onready var prototype_token_slot: _InventorySlotViewScript = $CanvasLayer/InventoryBar/MarginContainer/HBoxContainer/PrototypeTokenSlot
 @onready var runtime_move_label: Label = $CanvasLayer/RuntimeMoveLabel
-@onready var crystals: Array[BasicCrystal] = [$RuntimeObjects/Crystal]
+## AF-07 内容根水晶采集：原型场景保持原固定路径 RuntimeObjects/Crystal 单水晶；Host 模式递归发现纯关卡 Scene 内全部水晶。
+@onready var crystals: Array[BasicCrystal] = _collect_content_crystals()
 ## 发射器关卡配置节点（固定角色路径 RuntimeObjects/Emitter，仅预制场景内部接线，不作为稳定 emitter_id）。
 ## 运行时启动读取一次其 position 与 ray_default_direction 构造 FixedEmitter，不监听运行期节点移动或配置变化。
-@onready var _emitter_config: _EmitterConfigNode = get_node_or_null("RuntimeObjects/Emitter") as _EmitterConfigNode
+@onready var _emitter_config: _EmitterConfigNode = _content_root.get_node_or_null("RuntimeObjects/Emitter") as _EmitterConfigNode
 
 ## 轻量机关占用表：格子坐标 ↔ 机关 ID 双向索引，用于单格镜面放置/移动/回收与传播循环中的镜面节点解析。
 const _OccupancyRegistry: GDScript = preload("res://gameplay/placement/occupancy_registry.gd")
@@ -288,6 +295,24 @@ func _ready() -> void:
 		_startup_self_check_coordinator.run_all(sample_cells, snapshot, true, true)
 
 
+## 解析关卡内容根（AF-07）：存在 Node2D 子节点 LevelRoot（Host 装载的纯关卡 Scene 实例）时以其为内容根；否则内容根为自身（原型场景）。
+func _resolve_content_root() -> Node2D:
+	var level_root: Node = get_node_or_null("LevelRoot")
+	if level_root is Node2D:
+		return level_root
+	return self
+
+
+## 采集内容根下的水晶（AF-07）：原型场景走原固定路径单水晶；Host 模式递归发现（owned=false 覆盖运行期实例化的场景，owner 为空）。
+func _collect_content_crystals() -> Array[BasicCrystal]:
+	if _content_root == self:
+		return [$RuntimeObjects/Crystal]
+	var discovered: Array[BasicCrystal] = []
+	for node: Node in _content_root.find_children("*", "BasicCrystal", true, false):
+		discovered.append(node as BasicCrystal)
+	return discovered
+
+
 ## 构造四层 TileMapLayer 只读快照（D5-B.1；D5-B.1R 两段式构造）：先调静态校验 validate_layers 检查四层有效；校验失败保持 _tile_layer_snapshot 为 null 并安全返回，不退回 map_bounds；成功则直接 new() 构造快照。
 ## D5-B.2A 起校验失败（null 快照）由 _ready 中止后续世界查询初始化；成功则接入 LevelWorldQuery 作为正式运行 Terrain/LegalArea/Wall 唯一事实。
 func _build_tile_layer_snapshot() -> void:
@@ -403,13 +428,14 @@ func _switch_light_form() -> void:
 	_form_switch_toast_view.show_for_form(new_form)
 
 
-## D7-3 正式「开始运行」入口：转发到 LevelRuntimeController.request_begin_runtime(self)；核心不复制 Gate/严重度/RunState 转换/Ray 规则。
+## D7-3 正式「开始运行」入口：转发到 LevelRuntimeController.request_begin_runtime；核心不复制 Gate/严重度/RunState 转换/Ray 规则。
+## [br]AF-07：校验目标改为内容根（Host 模式 = LevelRoot 纯关卡根，Gate 只认正式角色为直接子节点；原型场景内容根即自身，行为不变）。
 ## [br]返回：SETUP 下返回结构化 LevelValidationResult（valid=已进 READY_TO_FIRE / invalid=仍 SETUP 供 UI 最小反馈）；非 SETUP 返回 null（被忽略，正常 UI 此时按钮已隐藏）。
 ## [br]边界：按钮本身不发射；fire 仍走 fire_light()，且 fire_light 不隐式自动 Start Run。运行时初始化被中止（如 PARTICLE 未接运行时）时返回 null，不构造虚假开始。
 func start_run() -> _LevelValidationResult:
 	if _level_runtime_controller == null:
 		return null
-	var result: _LevelValidationResult = _level_runtime_controller.request_begin_runtime(self)
+	var result: _LevelValidationResult = _level_runtime_controller.request_begin_runtime(_content_root)
 	# 把结构化结果回写 RunStartView：invalid 时显示最小反馈；valid 时由后续 READY_TO_FIRE 状态刷新清除旧反馈。
 	# 按钮与程序化 start_run() 调用方共用此路径，core_loop 只做转发，不复制 Gate/严重度规则。
 	if _run_start_view != null:
