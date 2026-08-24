@@ -1,0 +1,11 @@
+[gd_resource type="Resource" script_class="ObjectiveTargetDefinition" format=3]
+
+[ext_resource type="PackedScene" path="res://gameplay/crystals/basic_crystal.tscn" id="1_13mj2"]
+[ext_resource type="Script" path="res://gameplay/content/objective_target_definition.gd" id="2_esbji"]
+
+[resource]
+script = ExtResource("2_esbji")
+content_type_id = &"basic_crystal"
+display_name = "基础水晶"
+category = &"objectives"
+scene = ExtResource("1_13mj2")

@@ -1,0 +1,11 @@
+[gd_resource type="Resource" script_class="EmitterDefinition" format=3]
+
+[ext_resource type="PackedScene" path="res://gameplay/mechanisms/emitters/emitter_config_node.tscn" id="1_6i6ry"]
+[ext_resource type="Script" path="res://gameplay/content/emitter_definition.gd" id="2_vy225"]
+
+[resource]
+script = ExtResource("2_vy225")
+content_type_id = &"main_emitter"
+display_name = "主发射器"
+category = &"emitters"
+scene = ExtResource("1_6i6ry")

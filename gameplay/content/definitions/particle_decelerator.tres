@@ -1,0 +1,23 @@
+[gd_resource type="Resource" script_class="MechanismDefinition" format=3]
+
+[ext_resource type="Script" path="res://gameplay/content/configuration/mechanism_field_definition.gd" id="1_m2ghw"]
+[ext_resource type="PackedScene" path="res://gameplay/mechanisms/speed/particle_decelerator.tscn" id="2_446hd"]
+[ext_resource type="Script" path="res://gameplay/content/mechanism_definition.gd" id="3_ojkqi"]
+
+[sub_resource type="Resource" id="Resource_tu8hr"]
+script = ExtResource("1_m2ghw")
+field_id = &"direction"
+display_name = "减速方向"
+enum_max = 7
+player_action = &"cycle_direction"
+
+[resource]
+script = ExtResource("3_ojkqi")
+inventory_eligible = true
+light_interaction_forms = Array[StringName]([&"PARTICLE"])
+configuration_fields = [SubResource("Resource_tu8hr")]
+player_interaction_actions = Array[StringName]([&"cycle_direction"])
+content_type_id = &"particle_decelerator"
+display_name = "光粒减速器"
+category = &"speed"
+scene = ExtResource("2_446hd")

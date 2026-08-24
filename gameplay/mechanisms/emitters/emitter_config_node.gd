@@ -91,6 +91,9 @@ enum ParticleDirection {
 ## 编辑器预览是否可见；本批仅承载配置，不实际显示预览。
 @export var editor_preview_visible: bool = true : set = _set_editor_preview_visible
 
+# AF-08 Authoring 字段（stable_instance_id / editor_note / interaction_profile）继承自 GridPlacedObject
+# （本类 extends GridPlacedObject）；默认 interaction_profile=fixed 与主发射器固定预置语义一致，无需覆写。
+
 
 # ===== 方向映射（枚举到 Vector2i 的唯一入口） =====
 
