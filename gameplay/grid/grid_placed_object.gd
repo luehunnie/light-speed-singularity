@@ -7,7 +7,8 @@ extends Node2D
 ## 职责：只经 GridCoordinateRules 做 cell↔position 纯换算，保留 .cell / set_cell / get_cell 访问兼容性。
 ## 边界：不引用玩法对象、Registry、Validator、世界查询或核心循环；不做父链 Transform 校验、地图边界、占用登记或合法性校验；
 ##   不复制 64×64 公式，不持有运行期状态机；不使用 _ready/_process 自动覆盖 position，不监听 transform，不引入编辑器吸附或 Undo 插件。
-## 持久化语义：仅 position 随场景保存；cell 为计算属性，不作为第二份数据写入 .tscn。
+## 持久化语义：position 随场景保存；cell 为计算属性，不作为第二份数据写入 .tscn；
+##   AF-08 Authoring 三字段（stable_instance_id / editor_note / interaction_profile）为被动编辑器数据，随场景保存。
 
 
 ## 格坐标纯换算规则唯一来源：preload 引用以避开 Godot MCP 运行期未重建全局 class 缓存的类型解析问题。
@@ -24,6 +25,15 @@ var cell: Vector2i:
 		return _GridCoordinateRules.world_to_cell(position)
 	set(next_cell):
 		position = _GridCoordinateRules.cell_to_world(next_cell)
+
+
+## ===== AF-08 Authoring 基础字段（Guide §7/§8/§11）：被动数据，运行时玩法链不读取，仅编辑器工具读写。=====
+## 稳定实例 ID（Guide §7）：Stable ID Manager 生成并持久化；@export_storage 只存盘不进 Inspector，作者不可手填。
+@export_storage var stable_instance_id: String = ""
+## 作者备注（Guide §8）：仅供关卡作者识别；不影响稳定 ID、玩法或玩家显示。
+@export_multiline var editor_note: String = ""
+## 实例 Interaction Profile（Guide §11）：作者裁剪“允许玩家以什么方式交互”；固定格对象默认 fixed。
+@export_enum("fixed", "movable_preplaced", "player_tool") var interaction_profile: String = "fixed"
 
 
 ## 设置目标格并经计算属性 setter 写入 position。委派给 cell setter，语义与直接赋值 .cell 一致。

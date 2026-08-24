@@ -11,6 +11,11 @@ const _ID_FORMAT: String = "fci_%07d"
 var _next_serial: int = 0
 
 
+## 构造；可指定起始序号（AF-08：编辑器服务按关卡内既有最大序号播种，保证新发号不与已持久化 ID 冲突）。
+func _init(start_serial: int = 0) -> void:
+	_next_serial = maxi(start_serial, 0)
+
+
 ## 分配下一个稳定实例 ID。
 func allocate() -> String:
 	_next_serial += 1

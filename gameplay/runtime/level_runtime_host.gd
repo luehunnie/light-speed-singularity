@@ -15,17 +15,35 @@ extends "res://levels/prototypes/core_loop_prototype.gd"
 ## 要装载的纯关卡 Scene（Host Scene 中固定指向正式关卡；测试可在入树前替换以验证任意纯关卡装载）。
 @export var level_scene: PackedScene = null
 
+## Play Current Level 注入环境变量名（AF-08 / Guide A §89）：编辑器 Level Authoring 插件播放前
+## 经 OS.set_environment 注入当前编辑关卡路径，子进程（被播放的游戏）继承读取；非编辑器直跑不受影响。
+const PLAY_CURRENT_LEVEL_ENV: String = "LIGHT_SPEED_PLAY_CURRENT_LEVEL"
+
 
 ## 装载纯关卡 Scene：入树早期（先于 @onready 内容解析）实例化 level_scene 并命名为 LevelRoot 加入自身。
 ## [br]level_scene 缺失或根非 Node2D 时 push_error 并跳过装载；父类内容解析因找不到内容角色而安全中止初始化（明确报错，不静默降级为空关卡）。
+## [br]Play Current Level（Guide §89 流程 3→4）：编辑器注入环境变量优先于 Host Scene 固定 level_scene，
+## [br]使同一 Host 可播放任意当前编辑关卡；两者均缺失时保持原报错路径。
 func _enter_tree() -> void:
-	if level_scene == null:
+	var resolved := _resolve_level_scene()
+	if resolved == null:
 		push_error("LevelRuntimeHost：level_scene 未配置，无法装载纯关卡 Scene。")
 		return
-	var level_instance: Node = level_scene.instantiate()
+	var level_instance: Node = resolved.instantiate()
 	if level_instance is not Node2D:
 		push_error("LevelRuntimeHost：level_scene 根节点必须为 Node2D，实际 %s，拒绝装载。" % [level_instance.get_class()])
 		level_instance.free()
 		return
 	level_instance.name = "LevelRoot"
 	add_child(level_instance)
+
+
+## 解析实际装载的关卡 Scene：Play Current Level 环境变量优先，其次 Host Scene 固定 level_scene；均无效返回 null。
+func _resolve_level_scene() -> PackedScene:
+	var play_current_path := OS.get_environment(PLAY_CURRENT_LEVEL_ENV)
+	if not play_current_path.is_empty():
+		var played := load(play_current_path) as PackedScene
+		if played != null:
+			return played
+		push_error("LevelRuntimeHost：Play Current Level 路径加载失败：%s，回退 level_scene。" % [play_current_path])
+	return level_scene

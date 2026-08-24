@@ -1,3 +1,4 @@
+@tool
 class_name PlaceableToken
 extends Node2D
 
@@ -30,6 +31,14 @@ const _MechanismConfiguration: GDScript = preload(
 )
 
 var mechanism_id: StringName = &""
+
+## ===== AF-08 Authoring 基础字段（Guide §7/§8/§11）：被动数据，运行时玩法链不读取，仅编辑器工具读写。=====
+## 稳定实例 ID（Guide §7）：Stable ID Manager 生成并持久化；@export_storage 只存盘不进 Inspector，作者不可手填。
+@export_storage var stable_instance_id: String = ""
+## 作者备注（Guide §8）：仅供关卡作者识别；不影响稳定 ID、玩法或玩家显示。
+@export_multiline var editor_note: String = ""
+## 实例 Interaction Profile（Guide §11）：作者裁剪“允许玩家以什么方式交互”；玩家工具默认 player_tool。
+@export_enum("fixed", "movable_preplaced", "player_tool") var interaction_profile: String = "player_tool"
 
 ## 格子坐标（Vector2i），由 position 确定性派生，非独立持久化事实。
 ## getter：position → world_to_cell；setter：cell_to_world → position。保留 .cell 访问兼容性。
