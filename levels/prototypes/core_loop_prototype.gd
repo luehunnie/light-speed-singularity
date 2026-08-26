@@ -113,6 +113,13 @@ const _StartupSelfCheckCoordinator: GDScript = preload(
 	"res://gameplay/diagnostics/startup_self_check_coordinator.gd"
 )
 const _SingleCellMirrorScene: PackedScene = preload("res://gameplay/mechanisms/mirrors/single_cell_mirror.tscn")
+# 速度型机关脚本（右键类型分发用）：preload 引用以规避 Godot MCP run_project 不重建全局
+# class_name 缓存导致新类型解析失败的问题（与 AGENTS.md「preload 常量模式」约定一致）。
+# 仅用于 is/as 类型收窄后调用机关自身入口；不在核心复制方向枚举 / cycle_direction 逻辑——
+# direction 唯一事实与八方向循环逻辑唯一存在于各机关脚本，核心保持「只转发、不实现」的边界。
+const _ParticleAccelerator: GDScript = preload("res://gameplay/mechanisms/speed/particle_accelerator.gd")
+const _ParticleDecelerator: GDScript = preload("res://gameplay/mechanisms/speed/particle_decelerator.gd")
+
 const _InventorySlotViewScript: GDScript = preload("res://gameplay/ui/inventory_slot_view.gd")
 # D7-3 正式「开始运行」UI 视图：拥有按钮/状态提示/invalid 最小反馈，只由真实 RunState 驱动；core_loop 只构造接线与公开转发。
 const _RunStartView: GDScript = preload("res://gameplay/ui/run_start_view.gd")
@@ -474,7 +481,7 @@ func _input(event: InputEvent) -> void:
 			if is_dragging():
 				_drag_flow_controller.finish_drag(command.pointer_position)
 		_PlayerInteractionController.Command.Kind.SECONDARY_PRESS:
-			_try_toggle_mirror_at_mouse()
+			_try_toggle_mechanism_at_mouse()
 		_PlayerInteractionController.Command.Kind.POINTER_MOTION:
 			_drag_flow_controller.update_preview(command.pointer_position)
 		_PlayerInteractionController.Command.Kind.NONE:
@@ -560,8 +567,13 @@ func get_mechanism_at(cell: Vector2i) -> StringName:
 	return _level_world_query.get_mechanism_id_at(cell)
 
 
-## 尝试右键切换鼠标所在已放置镜面的内部朝向；仅 SETUP 且未拖拽、鼠标位于世界已放置 SingleCellMirror 时调用 toggle_orientation()。拖拽中、InventoryBar 区域、未知机关和空格安全忽略。
-func _try_toggle_mirror_at_mouse() -> void:
+## 尝试右键对鼠标所在已放置机关执行「循环内部配置」动作（Guide §12 过渡实现）。
+## [br]正式通用方案应为 PlayerInteractionActionService.execute_action(ActionRequest(target_stable_id, action))，
+## action token 由 Definition.player_interaction_actions 声明（镜面 cycle_internal_state、加减速器 cycle_direction），
+## 全程无类型分支；但 DefinitionSpawnService 官方声明本批不接线 core_loop（mechanism_id → stable_id 身份迁移
+## 留待 GUI 验收批次），故此处以 is/as 类型分发临时承担「动作 → 机关方法」映射，迁移时整段替换为 execute_action。
+## [br]权限：仅 SETUP（can_edit_configuration 把关）；预置机关经 has_placed 守卫保持只读（本轮不开放右键）。
+func _try_toggle_mechanism_at_mouse() -> void:
 	if is_dragging():
 		return
 	var viewport_mouse_position: Vector2 = get_viewport().get_mouse_position()
@@ -569,7 +581,7 @@ func _try_toggle_mirror_at_mouse() -> void:
 		return
 	if not can_edit_configuration():
 		if OS.is_debug_build():
-			print_debug("CoreLoopPrototype: 当前运行状态锁定内部配置，忽略镜面右键切换：%s。" % [_get_current_run_state()])
+			print_debug("CoreLoopPrototype: 当前运行状态锁定内部配置，忽略机关右键切换：%s。" % [_get_current_run_state()])
 		return
 
 	var target_cell: Vector2i = _GridCoordinateRules.world_to_cell(get_global_mouse_position())
@@ -580,11 +592,22 @@ func _try_toggle_mirror_at_mouse() -> void:
 	var token: Variant = _placement_controller.get_placed_node(mechanism_id)
 	if not is_instance_valid(token):
 		return
-	if token is not SingleCellMirror:
-		return
-	var mirror: SingleCellMirror = token as SingleCellMirror
-	mirror.toggle_orientation()
+	_apply_cycle_configuration_action(token)
 
+
+## 过渡：把「循环内部配置」动作映射到具体机关方法。
+## [br]Guide §12 禁止 Runtime UI 做类型判断，正式方案由 PlayerInteractionActionService 按 action token 驱动；
+## 本函数是身份迁移前的临时映射器，未来接入 DefinitionSpawnService 后删除本函数、改调 execute_action。
+## [br]边界：方向/朝向事实与循环逻辑唯一存在于各机关脚本（toggle_orientation / cycle_direction），核心不复制。
+func _apply_cycle_configuration_action(token: Variant) -> void:
+	if token is SingleCellMirror:
+		(token as SingleCellMirror).toggle_orientation()
+	elif token is _ParticleAccelerator:
+		(token as _ParticleAccelerator).cycle_direction()
+	elif token is _ParticleDecelerator:
+		(token as _ParticleDecelerator).cycle_direction()
+	else:
+		return
 
 ## 解析指针命中场景供 DragFlowController 使用：是否位于机关栏、是否位于原型槽位/道具卡、世界格坐标、
 ## 命中的库存类型。世界格用 get_global_mouse_position() 换算（与原拖拽实现一致），UI 命中用传入的视口坐标。
