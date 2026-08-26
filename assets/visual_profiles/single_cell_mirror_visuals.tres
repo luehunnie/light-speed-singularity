@@ -4,6 +4,7 @@
 [ext_resource type="Script" uid="uid://b562k3phylvi3" path="res://gameplay/visuals/visual_state_texture.gd" id="2_state"]
 [ext_resource type="Texture2D" uid="uid://cy5vtv8ejuja7" path="res://assets/art/mirror/mirror_slash.png" id="3_slash_tex"]
 [ext_resource type="Texture2D" uid="uid://p28ynnk7qpaa" path="res://assets/art/mirror/mirror_backslash.png" id="4_backslash_tex"]
+[ext_resource type="Texture2D" uid="uid://bkha4k57sbtlh" path="res://assets/art/mirror/flat_mirror.png" id="5_icon_tex"]
 
 [sub_resource type="Resource" id="VisualStateTexture_slash"]
 script = ExtResource("2_state")
@@ -17,5 +18,6 @@ world_texture = ExtResource("4_backslash_tex")
 
 [resource]
 script = ExtResource("1_profile")
+inventory_icon = ExtResource("5_icon_tex")
 default_state_id = &"slash"
 states = Array[ExtResource("2_state")]([SubResource("VisualStateTexture_slash"), SubResource("VisualStateTexture_backslash")])

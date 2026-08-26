@@ -18,7 +18,7 @@ const _HOST_SCRIPT_PATH: String = "res://gameplay/runtime/level_runtime_host.gd"
 const _EXAMPLE_LEVEL_PATH: String = "res://levels/templates/examples/level_template_editing_example.tscn"
 # 略大于生产脉冲视觉持续时间 1.0s，确保异步结束协程在释放前于活动控制器上恢复。
 const _PULSE_SETTLE_MS: int = 1150
-const _TOKEN_TYPE: StringName = &"single_cell_mirror"
+const _TOKEN_TYPE: StringName = &"basic_single_cell_mirror"
 
 const _GridCoordinateRules: GDScript = preload("res://gameplay/grid/grid_coordinate_rules.gd")
 const _SingleCellMirrorScript: GDScript = preload("res://gameplay/mechanisms/mirrors/single_cell_mirror.gd")

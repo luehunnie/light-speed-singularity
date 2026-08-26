@@ -43,7 +43,7 @@ class _SpyEdit extends RefCounted:
 		return _real.find_state(profile, state_id)
 	func can_replace(view, state_id, texture, resource_path) -> Dictionary:
 		return _real.can_replace(view, state_id, texture, resource_path)
-	func replace_with_undo_redo(undo_redo, view, state_id, new_texture, action_name) -> Dictionary:
+	func replace_with_undo_redo(undo_redo, view, state_id, new_texture, action_name, scene_root = null) -> Dictionary:
 		replace_count += 1
 		return {ok = false, reason = "spy：不应在保存路径调用替换", skipped = false}
 

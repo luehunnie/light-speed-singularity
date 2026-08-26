@@ -70,6 +70,9 @@ class ClearPlacedResult:
 var _occupancy: _OccupancyRegistry
 var _level_world_query: _LevelWorldQuery = null
 var _inventory: _InventoryController
+## 玩家机关类型索引（AF-10 第三批）：mechanism_id → 放置时的 token_type_id，随 place/recycle 同步维护；
+## 多类型库存（MultiTypeInventory）回收归还需按类型路由，本映射是事务内类型的唯一事实（不解析 ID 字符串）。
+var _placed_token_types: Dictionary = {}
 var _factory: Callable
 ## 玩家已放置机关 ID → 正式节点；本控制器是唯一修改者，光线层经 get_placed_node 只读 Callable 解析，不再共享可写映射。
 var _placed_tokens_by_id: Dictionary[StringName, Variant] = {}
@@ -104,8 +107,8 @@ func place_from_inventory(
 	# 1. 再次校验目标格（边界/静态/占用）。
 	if not _is_valid_placement_cell(target_cell, &""):
 		return PlacementTransactionResult.new(Status.INVALID, &"", Vector2i.ZERO, target_cell, false, "目标格非法")
-	# 2. 确认库存可用（拿起预览时不扣，此处仍未扣）。
-	if not _inventory.can_consume_one():
+	# 2. 确认库存可用（拿起预览时不扣，此处仍未扣）；多类型库存按放置类型路由（AF-10 第三批）。
+	if not _can_consume_for_type(token_type_id):
 		return PlacementTransactionResult.new(Status.FAILED, &"", Vector2i.ZERO, target_cell, false, "库存不足")
 	# 3. 生成唯一 mechanism_id（序号递增，失败也不复用）。
 	var mechanism_id: StringName = _make_next_mechanism_id(token_type_id)
@@ -121,14 +124,15 @@ func place_from_inventory(
 		return PlacementTransactionResult.new(Status.FAILED, mechanism_id, Vector2i.ZERO, target_cell, false, "占用登记失败")
 	# 7. 写入映射（Dictionary 赋值不会失败）。
 	_placed_tokens_by_id[mechanism_id] = token
-	# 8. 扣除库存；防御性回滚（can_consume_one 已通过，理论不会失败，仍逆序恢复以防竞态）。
-	if not _inventory.try_consume_one():
+	# 8. 扣除库存；防御性回滚（can_consume 已通过，理论不会失败，仍逆序恢复以防竞态）；按放置类型路由。
+	if not _try_consume_for_type(token_type_id):
 		push_error("PlacementController: 库存扣除意外失败，逆序回滚映射/占用/节点：%s" % [mechanism_id])
 		_placed_tokens_by_id.erase(mechanism_id)
 		_occupancy.unregister(mechanism_id)
 		_destroy_token(token)
 		return PlacementTransactionResult.new(Status.FAILED, mechanism_id, Vector2i.ZERO, target_cell, false, "库存扣除失败")
-	# 9. 成功；新机关放置不消耗运行期移动次数。
+	# 9. 成功；记录机关类型（回收归还需按类型路由）；新机关放置不消耗运行期移动次数。
+	_placed_token_types[mechanism_id] = token_type_id
 	return PlacementTransactionResult.new(Status.SUCCESS, mechanism_id, Vector2i.ZERO, target_cell, false)
 
 
@@ -174,29 +178,77 @@ func recycle_placed(mechanism_id: StringName) -> PlacementTransactionResult:
 	var source_cell: Vector2i = Vector2i.ZERO
 	if is_instance_valid(token):
 		source_cell = token.cell
+	# 回收归还需按放置类型路由（AF-10 第三批）：类型索引缺失时传空类型（旧单类型库存按旧名接口工作）。
+	var token_type_id: StringName = _placed_token_types.get(mechanism_id, &"")
 	# 1. 不可逆销毁前先预留库存归还容量；失败则节点/映射/占用/库存全部保持。
-	if not _inventory.try_reserve_return_one():
+	if not _try_reserve_return_for_type(token_type_id):
 		push_error("PlacementController: 回收库存归还预留失败，保留节点/映射/占用：%s" % [mechanism_id])
 		return PlacementTransactionResult.new(Status.FAILED, mechanism_id, source_cell, Vector2i.ZERO, false, "库存归还预留失败")
 	# 2. 暂时注销占用；失败则取消预留，节点/映射/库存保持。
 	if not _occupancy.unregister(mechanism_id):
 		push_error("PlacementController: 回收注销占用失败，取消预留并保留节点/映射/库存：%s" % [mechanism_id])
-		_inventory.cancel_reserved_return()
+		_cancel_reserved_return_for_type(token_type_id)
 		return PlacementTransactionResult.new(Status.FAILED, mechanism_id, source_cell, Vector2i.ZERO, false, "注销占用失败")
 	# 3. 提交归还；失败则用正式注册接口恢复原占用、取消预留，节点/映射/库存保持，事务一致可重试。
 	# 回滚恢复占用的事务假设：刚注销的是同一 mechanism_id 与 source_cell，且库存 commit 不修改占用，
 	# 故 register_single_cell 原则上必成功；返回 false 即不变量破坏，必须 push_error 报告，不得静默吞掉。
 	# 无论恢复成功与否，预留都只在此清理一次；Token/映射保留、不 queue_free、不进入成功路径、不改内部 Dictionary。
-	if not _inventory.commit_reserved_return():
+	if not _commit_reserved_return_for_type(token_type_id):
 		push_error("PlacementController: 回收提交归还失败，恢复占用并取消预留，保留节点/映射/库存：%s" % [mechanism_id])
 		if not _occupancy.register_single_cell(mechanism_id, source_cell):
 			push_error("PlacementController: 回收回滚恢复占用失败（不变量破坏）：%s at %s" % [mechanism_id, source_cell])
-		_inventory.cancel_reserved_return()
+		_cancel_reserved_return_for_type(token_type_id)
 		return PlacementTransactionResult.new(Status.FAILED, mechanism_id, source_cell, Vector2i.ZERO, false, "库存归还提交失败")
-	# 4. 归还已提交成功：删映射 → 销毁节点（queue_free 不必等待真正释放）。
+	# 4. 归还已提交成功：删映射与类型索引 → 销毁节点（queue_free 不必等待真正释放）。
 	_placed_tokens_by_id.erase(mechanism_id)
+	_placed_token_types.erase(mechanism_id)
 	_destroy_token(token)
 	return PlacementTransactionResult.new(Status.SUCCESS, mechanism_id, source_cell, Vector2i.ZERO, false)
+
+
+## 库存类型路由辅助（AF-10 第三批）：注入 MultiTypeInventory 时走显式按类型事务；
+## 旧 InventoryController（单类型）保持原接口调用，既有测试与原型路径行为不变。
+## 类型为空时对多类型库存返回 false（无选中类型不可消费/归还），对旧单类型库存退回旧名接口。
+
+## 指定类型是否可扣除一个。
+func _can_consume_for_type(type_id: StringName) -> bool:
+	var inventory: Variant = _inventory
+	if inventory.has_method("can_consume_one_for"):
+		return inventory.can_consume_one_for(type_id)
+	return _inventory.can_consume_one()
+
+
+## 指定类型扣除一个。
+func _try_consume_for_type(type_id: StringName) -> bool:
+	var inventory: Variant = _inventory
+	if inventory.has_method("try_consume_one_for"):
+		return inventory.try_consume_one_for(type_id)
+	return _inventory.try_consume_one()
+
+
+## 指定类型归还预留两阶段第一阶段。
+func _try_reserve_return_for_type(type_id: StringName) -> bool:
+	var inventory: Variant = _inventory
+	if inventory.has_method("try_reserve_return_one_for"):
+		return inventory.try_reserve_return_one_for(type_id)
+	return _inventory.try_reserve_return_one()
+
+
+## 指定类型归还预留两阶段第二阶段。
+func _commit_reserved_return_for_type(type_id: StringName) -> bool:
+	var inventory: Variant = _inventory
+	if inventory.has_method("commit_reserved_return_for"):
+		return inventory.commit_reserved_return_for(type_id)
+	return _inventory.commit_reserved_return()
+
+
+## 取消指定类型归还预留（失败结果忽略：调用点语义为尽力清理，残留由一致性断言暴露）。
+func _cancel_reserved_return_for_type(type_id: StringName) -> void:
+	var inventory: Variant = _inventory
+	if inventory.has_method("cancel_reserved_return_for"):
+		inventory.cancel_reserved_return_for(type_id)
+		return
+	_inventory.cancel_reserved_return()
 
 
 ## R 清理：复用 recycle_placed 单一回收事务逐个清理玩家机关，不维护第二套回收路径。

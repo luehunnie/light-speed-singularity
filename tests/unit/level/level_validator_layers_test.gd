@@ -19,7 +19,7 @@ const _BasicCrystal: GDScript = preload("res://gameplay/crystals/basic_crystal.g
 const _ObjectVisualView: GDScript = preload("res://gameplay/visuals/object_visuals/object_visual_view.gd")
 const _ObjectVisualProfile: GDScript = preload("res://gameplay/visuals/object_visuals/object_visual_profile.gd")
 
-const _GROUP_COUNT: int = 21
+const _GROUP_COUNT: int = 22
 
 ## 累积失败项（每项为“[组名] 原因”）。
 var _failures: PackedStringArray = PackedStringArray()
@@ -50,6 +50,7 @@ func _initialize() -> void:
 	_test_19_misplaced_multi_candidates()
 	_test_20_unexpected_nested()
 	_test_21_wrong_type_with_extra()
+	_test_22_ancestor_transform()
 	_report()
 	quit(0 if _failures.is_empty() else 1)
 
@@ -331,9 +332,40 @@ func _test_21_wrong_type_with_extra() -> void:
 	root.free()
 
 
-# ===== fixture =====
+## 22. 祖先 transform（含关卡根）非单位变换 → ancestor_transform_invalid（AF-09 P0 幽灵墙阻断）：
+## 格子是唯一事实，祖先位移/旋转/缩放使视觉随节点动而碰撞/占位不动；进运行（Play Gate 委派本校验）前必须阻断。
+func _test_22_ancestor_transform() -> void:
+	const G: String = "22_祖先transform"
+	# 关卡根（= Walls/WallLayer 父节点）位移：报错且阻断，同一根只报一次。
+	var moved_root: Node2D = _make_root(_cells_3x3(), [Vector2i(1, 1)], [], [])
+	moved_root.position = Vector2(32, 0)
+	var r_moved: _LevelValidationResult = _validate(moved_root)
+	_check(G, r_moved.is_valid() == false, "关卡根位移期望 is_valid=false。")
+	_check(G, _has_code(r_moved, "ancestor_transform_invalid"), "关卡根位移期望 ancestor_transform_invalid。")
+	var count: int = 0
+	for issue in r_moved.get_issues():
+		if str(issue.get_code()) == "ancestor_transform_invalid":
+			count += 1
+	_check(G, count == 1, "同一祖先只应报一次，实际 %d。" % count)
+	moved_root.free()
+	# 根旋转同理。
+	var rotated_root: Node2D = _make_root(_cells_3x3(), [Vector2i(1, 1)], [], [])
+	rotated_root.rotation = 0.5
+	_check(G, _has_code(_validate(rotated_root), "ancestor_transform_invalid"), "关卡根旋转期望报错。")
+	rotated_root.free()
+	# 根缩放同理。
+	var scaled_root: Node2D = _make_root(_cells_3x3(), [Vector2i(1, 1)], [], [])
+	scaled_root.scale = Vector2(2.0, 2.0)
+	_check(G, _has_code(_validate(scaled_root), "ancestor_transform_invalid"), "关卡根缩放期望报错。")
+	scaled_root.free()
+	# 对照：identity 祖先不报（合法结构零 issue 由用例 1 覆盖，此处补防御性对照）。
+	var clean_root: Node2D = _make_root(_cells_3x3(), [Vector2i(1, 1)], [], [])
+	_check(G, not _has_code(_validate(clean_root), "ancestor_transform_invalid"),
+		"identity 祖先不应报 ancestor_transform_invalid。")
+	clean_root.free()
 
-## 组装结构合法的关卡根：六个正式角色齐备、类型正确、transform 单位、TileSet 已绑；四层格子由参数指定。
+
+# ===== fixture =====## 组装结构合法的关卡根：六个正式角色齐备、类型正确、transform 单位、TileSet 已绑；四层格子由参数指定。
 func _make_root(terrain_cells: Array, legal_cells: Array, wall_cells: Array, deco_cells: Array) -> Node2D:
 	var ts: TileSet = _make_min_tile_set()
 	var root: Node2D = Node2D.new()

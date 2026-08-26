@@ -2,11 +2,13 @@
 class_name LightSpeedArtProfileVisualTargetResolver
 extends RefCounted
 
-## 正式视觉目标通用解析器（D4.5-A2）。
+## 正式视觉目标通用解析器（D4.5-A2；AF-Artwork 扩展 PlaceableToken 组件边界）。
 ## 职责：把编辑器当前选中节点解析为只读 VisualTargetResult，覆盖组件边界定位、深层视觉收集与嵌套隔离。
 ## 输入输出：输入 Node 或 null，返回 VisualTargetResult（永不返回 null 表达“多目标”）。
 ## 副作用：无；不增删节点、不修改位置、不写 Profile、不读取节点名称作为身份。
-## 边界：组件边界为最近 GridPlacedObject 祖先（含自身）；遇到嵌套 GridPlacedObject 记录并停止其子树；
+## 边界：组件边界为最近 GridPlacedObject 或 PlaceableToken 祖先（含自身）——前者覆盖固定格对象，
+##       后者覆盖可放置机关（加速器 / 减速器 / 镜面 token 等新机制无需逐类型接入即可被解析）；
+##       遇到嵌套组件根（任一种）记录并停止其子树；
 ##       EmissionPreview 永不入 targets；直接选视觉节点只返回该节点，不扩大到同组件其他视觉；
 ##       不存在 EmitterConfigNode / Mirror / Crystal 等逐类型分支。
 
@@ -31,14 +33,14 @@ func resolve(selected: Node) -> RefCounted:
 		var visual: ObjectVisualView = selected as ObjectVisualView
 		var ancestor: Node = _find_nearest_component(visual)
 		return _Result.for_direct_visual(visual, visual, ancestor if ancestor != null else visual)
-	# 4. 选择组件根或组件内部普通节点：向上找最近 GridPlacedObject 作为组件边界。
+	# 4. 选择组件根或组件内部普通节点：向上找最近组件根（GridPlacedObject / PlaceableToken）作为组件边界。
 	var component_root: Node = _find_nearest_component(selected)
 	if component_root == null:
 		return _Result.for_unsupported(selected, "no_component_boundary")
 	return _collect_from_component(selected, component_root)
 
 
-## 直接选择 EmissionPreview 的解析：定位最近 GridPlacedObject 组件根并收集其正式视觉。
+## 直接选择 EmissionPreview 的解析：定位最近组件根（GridPlacedObject / PlaceableToken）并收集其正式视觉。
 ## preview 为 EmissionPreview；返回组件集合结果；组件根缺失时返回 UNSUPPORTED。
 # Preview 自身不是 ObjectVisualView，收集器天然排除，无需额外过滤。
 func _resolve_from_preview(preview: Node) -> RefCounted:
@@ -57,7 +59,7 @@ func _collect_from_component(selected: Node, component_root: Node) -> RefCounted
 	return _Result.for_component(selected, component_root, targets, ignored_nodes)
 
 
-## 深度优先递归收集 ObjectVisualView；遇到嵌套 GridPlacedObject 记录并停止其子树。
+## 深度优先递归收集 ObjectVisualView；遇到嵌套组件根（GridPlacedObject / PlaceableToken）记录并停止其子树。
 ## node 为当前节点；is_root 标识当前节点是否为组件根（组件根本身不作为嵌套组件跳过）；
 ## targets / ignored_nodes 由调用方持有并就地追加；顺序为稳定场景树深度优先，不按 Node.name 排序。
 func _collect_visuals(
@@ -66,8 +68,8 @@ func _collect_visuals(
 		targets: Array,
 		ignored_nodes: Array
 ) -> void:
-	# 非根节点遇到 GridPlacedObject：记录为被忽略的嵌套子组件根，不进入其子树。
-	if not is_root and node is GridPlacedObject:
+	# 非根节点遇到组件根（任一种）：记录为被忽略的嵌套子组件根，不进入其子树。
+	if not is_root and _is_component_root(node):
 		ignored_nodes.append(node)
 		return
 	# 收集正式视觉节点；EmissionPreview 非 ObjectVisualView，天然不入集合。
@@ -78,12 +80,18 @@ func _collect_visuals(
 		_collect_visuals(child, false, targets, ignored_nodes)
 
 
-## 从 node 向上（含自身）寻找最近的 GridPlacedObject 祖先。
-## node 为起点；返回最近 GridPlacedObject 或 null；不跨到更外层组件，不依赖节点名称。
+## 从 node 向上（含自身）寻找最近的组件根（GridPlacedObject 或 PlaceableToken）。
+## node 为起点；返回最近组件根或 null；不跨到更外层组件，不依赖节点名称。
 func _find_nearest_component(node: Node) -> Node:
 	var current: Node = node
 	while current != null:
-		if current is GridPlacedObject:
+		if _is_component_root(current):
 			return current
 		current = current.get_parent()
 	return null
+
+
+## 组件根判定：GridPlacedObject（固定格对象）或 PlaceableToken（可放置机关）。
+## 新机制只要继承两者之一即被 Resolver 覆盖，无需在本文件逐类型登记。
+func _is_component_root(node: Node) -> bool:
+	return node is GridPlacedObject or node is PlaceableToken

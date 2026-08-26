@@ -42,19 +42,23 @@ var _refresh_ui: Callable
 var _assert_consistency: Callable
 
 
-## 指针命中场景信息：是否位于机关栏、是否位于原型槽位、世界格坐标。
+## 指针命中场景信息：是否位于机关栏、是否位于原型槽位/道具卡、世界格坐标、命中的库存类型。
+## inventory_type_id 为按下的道具卡类型（AF-10 第三批；空 = 命中旧槽位区域或场景未提供，退回镜像默认）。
 class PointerScene:
 	var over_inventory_bar: bool
 	var over_prototype_slot: bool
 	var world_cell: Vector2i
+	var inventory_type_id: StringName
 	func _init(
 			p_over_inventory_bar: bool = false,
 			p_over_prototype_slot: bool = false,
-			p_world_cell: Vector2i = Vector2i.ZERO
+			p_world_cell: Vector2i = Vector2i.ZERO,
+			p_inventory_type_id: StringName = &""
 	) -> void:
 		over_inventory_bar = p_over_inventory_bar
 		over_prototype_slot = p_over_prototype_slot
 		world_cell = p_world_cell
+		inventory_type_id = p_inventory_type_id
 
 
 ## 拖拽权限只读快照：当前运行状态与剩余运行期移动次数。
@@ -105,7 +109,7 @@ func try_begin_drag(pointer_position: Vector2) -> bool:
 	if scene.over_prototype_slot:
 		# 库存拿取：库存大于 0 且状态允许；数量为 0 或状态锁定时不创建预览。
 		if _inventory_controller.can_consume_one() and _RuntimeMoveRules.can_take_from_inventory_for_state(permission.run_state):
-			_begin_inventory_drag(scene.world_cell)
+			_begin_inventory_drag(scene.inventory_type_id, scene.world_cell)
 			update_preview(pointer_position)
 			return true
 		return false
@@ -127,10 +131,12 @@ func try_begin_drag(pointer_position: Vector2) -> bool:
 
 
 ## 从机关栏开始一次库存拖拽：创建默认 SLASH 预览，来源设为 INVENTORY；不扣库存，非法/松回不变化。
-func _begin_inventory_drag(start_cell: Vector2i) -> void:
-	_drag_context.begin_inventory(MIRROR_TOKEN_TYPE_ID, start_cell, _SingleCellMirror.MirrorOrientation.SLASH)
+## [br]inventory_type_id 为按下的道具卡类型（AF-10 第三批）；空时退回 MIRROR_TOKEN_TYPE_ID 兼容旧注入位。
+func _begin_inventory_drag(inventory_type_id: StringName, start_cell: Vector2i) -> void:
+	var type_id: StringName = MIRROR_TOKEN_TYPE_ID if inventory_type_id == &"" else inventory_type_id
+	_drag_context.begin_inventory(type_id, start_cell, _SingleCellMirror.MirrorOrientation.SLASH)
 	_dragged_placed_token = null
-	_drag_preview_token = _create_preview_token.call(StringName("preview_%s" % MIRROR_TOKEN_TYPE_ID), start_cell)
+	_drag_preview_token = _create_preview_token.call(StringName("preview_%s" % type_id), start_cell)
 
 
 ## 从已放置机关开始拖拽移动：一致性校验通过后隐藏正式视觉、创建预览、复制朝向、记录原格。
@@ -249,6 +255,11 @@ func _commit_placed_drag_or_cancel() -> void:
 		return
 	var permission: DragPermission = _query_permission.call()
 	if not _RuntimeMoveRules.can_commit_placed_move(permission.run_state, permission.moves_remaining, from_cell, to_cell):
+		# AF-10 第二批：达上限拒绝给可观察原因（跨格 + 运行期剩余为 0 即次数用尽；原格取消/COMPLETED 冻结不误报）。
+		if from_cell != to_cell and permission.moves_remaining <= 0:
+			push_warning(
+				"DragFlowController: 运行期移动次数已用尽（剩余 0），跨格移动被拒绝，机关保持原格并取消拖拽。"
+			)
 		cancel_current_drag()
 		return
 	var result := _placement_controller.move_placed(mechanism_id, to_cell)

@@ -1,12 +1,14 @@
-[gd_scene format=3 uid="uid://r8cd2ob1jh4k"]
+[gd_scene load_steps=4 format=3 uid="uid://r8cd2ob1jh4k"]
 
 [ext_resource type="Script" uid="uid://brqu63p1yhjs6" path="res://gameplay/mechanisms/speed/particle_decelerator.gd" id="1_script"]
 [ext_resource type="PackedScene" uid="uid://cjha6lnu2voun" path="res://gameplay/visuals/object_visuals/object_visual_view.tscn" id="2_view"]
+[ext_resource type="Resource" uid="uid://bdecvisuals01" path="res://assets/visual_profiles/particle_decelerator_visuals.tres" id="3_profile"]
 
 [node name="ParticleDecelerator" type="Node2D" unique_id=812973716]
 script = ExtResource("1_script")
 
 [node name="VisualView" parent="." unique_id=1998113443 instance=ExtResource("2_view")]
+visual_profile = ExtResource("3_profile")
 initial_state_id = &"right"
 
 [node name="DebugArrow" type="Line2D" parent="." unique_id=229045295]

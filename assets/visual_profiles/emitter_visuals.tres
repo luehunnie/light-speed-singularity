@@ -8,6 +8,17 @@
 script = ExtResource("2_state")
 world_texture = ExtResource("3_default_tex")
 
+[sub_resource type="Resource" id="VisualStateTexture_ray"]
+script = ExtResource("2_state")
+state_id = &"ray"
+world_texture = ExtResource("3_default_tex")
+
+[sub_resource type="Resource" id="VisualStateTexture_particle"]
+script = ExtResource("2_state")
+state_id = &"particle"
+world_texture = ExtResource("3_default_tex")
+
 [resource]
 script = ExtResource("1_profile")
-states = Array[ExtResource("2_state")]([SubResource("VisualStateTexture_default")])
+default_state_id = &"default"
+states = Array[ExtResource("2_state")]([SubResource("VisualStateTexture_default"), SubResource("VisualStateTexture_ray"), SubResource("VisualStateTexture_particle")])
