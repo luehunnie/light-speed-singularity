@@ -13,6 +13,9 @@ extends Node2D
 ## R 是完整关卡重置（由 _level_runtime_controller.reset_runtime 执行）：递增 pulse_generation 使旧异步失效 → 安全取消拖拽 → 清光路/水晶/完成状态 → 逐个注销玩家机关占用并退回库存 → 清零 runtime_moves_used → 回 SETUP；不删除发射器/墙体/水晶/静态内容。
 ## AF-07 起本脚本同时作为统一 LevelRuntimeHost（gameplay/runtime/level_runtime_host.gd）的关卡控制器基类：
 ## 内容角色经 LevelRoot 子节点间接解析（见 _content_root），运行链与 HUD 接线单一来源，不复制第二套 Runtime。
+## AF-10 第一批：启动扫描 RuntimeObjects 直属预置机关（PlaceableToken 契约）经 _PreplacedMechanismAdopter 注册进
+## 占用/查询（不扣库存、不进玩家放置映射、R 不清理）；库存总量改读关卡根 metadata inventory_entries
+## （MetadataInventoryReader 复用 LevelInventoryEntry schema），缺失时退回 PROTOTYPE_TOKEN_TOTAL 兼容。
 
 
 # 世界格尺寸唯一来源（preload 共享常量，不加 class_name）；64 世界格对应半格 32。
@@ -26,6 +29,9 @@ const _GridCoordinateRules: GDScript = preload(
 const MAX_PROPAGATION_STEPS: int = 128
 const PULSE_VISUAL_DURATION_SECONDS: float = 1.0
 const PROTOTYPE_TOKEN_TOTAL: int = 1
+## AF-10：原型槽位机关的稳定 content_type_id，与 gameplay/content/definitions/basic_single_cell_mirror.tres
+## 声明一致；用于从关卡根 metadata inventory_entries 读取该类型的初始库存数量。
+const PROTOTYPE_TOKEN_TYPE_ID: StringName = &"basic_single_cell_mirror"
 const INVALID_CELL: Vector2i = Vector2i(-999999, -999999)
 
 
@@ -77,6 +83,31 @@ const _InventoryController: GDScript = preload(
 const _PlacementController: GDScript = preload(
 	"res://gameplay/placement/placement_controller.gd"
 )
+# AF-10 预置机关收编器：扫描 RuntimeObjects 直属正式机关契约节点注册进占用/查询；不进玩家放置映射、不扣库存。
+const _PreplacedMechanismAdopter: GDScript = preload(
+	"res://gameplay/placement/preplaced_mechanism_adopter.gd"
+)
+# AF-10 关卡根 inventory_entries metadata 只读解析器：复用 LevelInventoryEntry 冻结 schema，缺失时退回原型默认值。
+const _MetadataInventoryReader: GDScript = preload(
+	"res://gameplay/placement/inventory/metadata_inventory_reader.gd"
+)
+# AF-10 第二批 关卡根 move_limit metadata 只读解析器：镜像 Authoring 冻结 schema {enabled,max_count}，
+# 启用时覆盖场景导出上限，缺失/禁用保持 @export runtime_move_limit 原值兼容。
+const _MetadataMoveLimitReader: GDScript = preload(
+	"res://gameplay/placement/rules/metadata_move_limit_reader.gd"
+)
+# AF-10 第三批 多类型库存门面 / 道具卡 Presenter / 运行期 Definition 索引：
+# metadata inventory_entries 有合法条目时按类型独立扣还并动态建卡（图标唯一来源 ObjectVisualProfile.inventory_icon）；
+# 工厂场景经 Registry 解析（未知类型安全失败回滚），无条目保持旧单类型路径行为不变。
+const _MultiTypeInventory: GDScript = preload(
+	"res://gameplay/placement/inventory/multi_type_inventory.gd"
+)
+const _InventoryCardBar: GDScript = preload(
+	"res://gameplay/ui/inventory_card_bar.gd"
+)
+const _RuntimeDefinitionIndex: GDScript = preload(
+	"res://gameplay/placement/inventory/runtime_definition_index.gd"
+)
 # 启动自检协调器：核心持有的唯一实例，整块负责七项启动自检编排、三层 Debug 硬断言与启动摘要日志；核心只采集场景数据并调用 run_all。
 const _StartupSelfCheckCoordinator: GDScript = preload(
 	"res://gameplay/diagnostics/startup_self_check_coordinator.gd"
@@ -125,10 +156,24 @@ const _LevelRuntimeController: GDScript = preload("res://gameplay/runtime/level_
 var occupancy: _OccupancyRegistry = _OccupancyRegistry.new()
 
 ## 玩家机关库存事实所有者：运行期剩余数量唯一事实来源，扣除/归还/重置经此实例；拖拽开始时不提前扣数量，仅合法放置成功后才扣除。
+## AF-10 第三批：metadata 有合法条目时此位注入 MultiTypeInventory 子类实例（每类型独立栈，Σ 聚合口径兼容旧读取方）。
 var _inventory_controller: _InventoryController = _InventoryController.new(PROTOTYPE_TOKEN_TOTAL)
+
+## AF-10 第三批 多类型库存门面（_inventory_controller 的多类型形态；null = 旧单类型标量路径）。
+var _multi_inventory: Variant = null
+
+## AF-10 第三批 道具卡 Presenter（动态多类型道具栏；null = metadata 无条目，旧 PrototypeTokenSlot 路径）。
+var _inventory_card_bar: Variant = null
+
+## AF-10 第三批 运行期 Definition 索引：懒构建 FormalContentRegistry，供工厂场景解析与卡数据构建。
+var _definition_index: _RuntimeDefinitionIndex = null
 
 ## 玩家机关放置/移动/回收事务控制器；唯一持有 placed_tokens_by_id 与机关序号，_ready 中构造并注入依赖。核心只发事务请求并按结果清理拖拽。
 var _placement_controller: _PlacementController = null
+
+## AF-10 预置机关收编器：_ready 中构造并扫描 RuntimeObjects 直属机关契约节点；持有预置机关只读映射，
+## R 清理（clear_all_placed 只遍历玩家放置映射）与库存一致性断言均不涉及预置机关。
+var _preplaced_adopter: _PreplacedMechanismAdopter = null
 
 ## 拖拽业务流程控制器：核心持有的唯一实例，拥有一次拖拽的完整业务生命周期；核心只转发指针位置、取消请求与场景适配 Callable。
 var _drag_flow_controller: _DragFlowController = null
@@ -200,6 +245,24 @@ func _ready() -> void:
 	if _tile_layer_snapshot == null:
 		_abort_runtime_initialization("四层 TileMapLayer 只读快照构造失败，已停止世界查询初始化。")
 		return
+	# AF-10 运行时库存初始化：metadata inventory_entries 有合法条目时走多类型门面（每类型独立栈 + 道具卡
+	# Presenter 动态建卡 + PlacementController 按类型扣/还路由）；无条目保持旧单类型标量路径
+	# （read_initial_total_for_type 兼容：缺失退回原型默认 PROTOTYPE_TOKEN_TOTAL）。
+	_definition_index = _RuntimeDefinitionIndex.new()
+	var inventory_entries: Array[Dictionary] = _MetadataInventoryReader.read_ordered_entries(_content_root)
+	if inventory_entries.is_empty():
+		_inventory_controller = _InventoryController.new(_resolve_initial_inventory_total())
+	else:
+		_inventory_controller = _MultiTypeInventory.new(inventory_entries)
+		_multi_inventory = _inventory_controller
+		_inventory_card_bar = _InventoryCardBar.new()
+		_inventory_card_bar.setup(prototype_token_slot.get_parent(), prototype_token_slot)
+		_inventory_card_bar.build_cards(
+			_InventoryCardBar.build_card_models(_definition_index.get_registry(), inventory_entries)
+		)
+	# AF-10 第二批 运行期移动上限：读关卡根 metadata move_limit（Authoring 冻结 schema），启用时覆盖场景导出值；
+	# 缺失/禁用保持 @export runtime_move_limit 原值兼容。须在 LevelRuntimeController 构造与首次运行 UI 刷新前生效。
+	runtime_move_limit = _MetadataMoveLimitReader.read_runtime_move_limit(_content_root, runtime_move_limit)
 	# 放置事务控制器先于只读查询门面构造：LevelWorldQuery 需持有控制器映射引用，供光线层 cell→ID→节点解析。
 	_placement_controller = _PlacementController.new(
 		occupancy,
@@ -216,7 +279,9 @@ func _ready() -> void:
 				"水晶注册失败：crystal_id=%s cell=%s" % [crystal.get_crystal_id(), crystal.cell])
 	# 目标完成事实所有者：在 Registry 填充后构造，唯一持有水晶激活/完成判断/运行期重置。
 	_objective_controller = _ObjectiveController.new(_level_object_registry)
-	# 在所有真实依赖初始化后构造只读查询门面；水晶查询走 Registry，机关节点走 PlacementController.get_placed_node 只读 Callable，不共享可写映射。
+	# 在所有真实依赖初始化后构造只读查询门面；水晶查询走 Registry，机关节点经核心 _resolve_mechanism_node
+	# 只读 Callable 解析（玩家放置映射 PlacementController.get_placed_node 优先，AF-10 起回退预置机关收编映射），
+	# 不共享可写映射。
 	# 首个粗筛边界参数取快照 Terrain 外包矩形（D5-B.2B）：正式运行边界事实即 Terrain bounds，构造现场不再误传 map_bounds 为边界；快照作为末参接入为 Terrain/LegalArea/Wall 唯一事实。
 	# wall_cells 仍传入仅供 LevelWorldQuery 无快照兼容路径（本场景已由上方守卫保证非空快照，不触发）；map_bounds 退化为导出与旧兼容，不作为正式运行边界。
 	_level_world_query = _LevelWorldQuery.new(
@@ -225,10 +290,17 @@ func _ready() -> void:
 		_fixed_emitter.get_cell(),
 		_level_object_registry,
 		occupancy,
-		Callable(_placement_controller, "get_placed_node"),
+		Callable(self, "_resolve_mechanism_node"),
 		_tile_layer_snapshot
 	)
 	_placement_controller.set_level_world_query(_level_world_query)
+	# AF-10 预置机关收编：扫描 RuntimeObjects 直属正式机关契约节点注册进占用表；预置机关不扣库存、
+	# 不进玩家放置映射（玩家拖拽/回收/右键配置经 has_placed 守卫安全忽略预置机关），R 重置不清理，保持场景原状。
+	_preplaced_adopter = _PreplacedMechanismAdopter.new(
+		occupancy,
+		Callable(self, "_is_preplaced_cell_adoptable")
+	)
+	_preplaced_adopter.adopt_all(runtime_objects)
 	_light_world_query = _LightWorldQuery.new(_level_world_query)
 	# 拖拽流程控制器在放置/库存/世界查询门面就绪后构造；场景适配 Callable 注入指针解析、预览创建、权限查询、扣次、UI 刷新与一致性断言。
 	_drag_flow_controller = _DragFlowController.new(
@@ -311,6 +383,35 @@ func _collect_content_crystals() -> Array[BasicCrystal]:
 	for node: Node in _content_root.find_children("*", "BasicCrystal", true, false):
 		discovered.append(node as BasicCrystal)
 	return discovered
+
+
+## AF-10：解析原型槽位类型的初始库存总量（关卡根 metadata inventory_entries → 缺失时原型默认值兼容）。
+## 纯读取转发 MetadataInventoryReader，不在核心复制解析规则。
+func _resolve_initial_inventory_total() -> int:
+	return _MetadataInventoryReader.read_initial_total_for_type(
+		_content_root,
+		PROTOTYPE_TOKEN_TYPE_ID,
+		PROTOTYPE_TOKEN_TOTAL
+	)
+
+
+## AF-10 预置机关收编格合法性：Terrain 边界内且非静态阻挡（墙/发射器格/水晶）。
+## 只读组合 LevelWorldQuery 既有判定，不建第二套格合法性规则；占用冲突由收编器经 OccupancyRegistry 原子拒绝。
+## 不检查 LegalArea：合法区约束的是玩家可放置范围，预置机关为作者事实，边界/静态阻挡即非法格下限。
+func _is_preplaced_cell_adoptable(cell: Vector2i) -> bool:
+	return _level_world_query.is_in_bounds(cell) and not _level_world_query.is_static_blocked_for_placement(cell)
+
+
+## AF-10 机关节点统一解析（注入 LevelWorldQuery 的 get_placed_node_by_id Callable）：
+## 先查玩家放置映射（PlacementController.get_placed_node），再回退预置机关收编映射；均未命中返回 null。
+## 玩家机关与预置机关共用 OccupancyRegistry 占用事实与本解析入口，光线层/光粒层解析无感切换。
+func _resolve_mechanism_node(mechanism_id: StringName) -> Variant:
+	var placed_node: Variant = _placement_controller.get_placed_node(mechanism_id)
+	if placed_node != null:
+		return placed_node
+	if _preplaced_adopter != null:
+		return _preplaced_adopter.get_preplaced_node(mechanism_id)
+	return null
 
 
 ## 构造四层 TileMapLayer 只读快照（D5-B.1；D5-B.1R 两段式构造）：先调静态校验 validate_layers 检查四层有效；校验失败保持 _tile_layer_snapshot 为 null 并安全返回，不退回 map_bounds；成功则直接 new() 构造快照。
@@ -425,6 +526,9 @@ func _switch_light_form() -> void:
 		if OS.is_debug_build():
 			print_debug("CoreLoopPrototype: Q 形态切换被拒绝（关卡禁止或 COMPLETED），不显示提示。")
 		return
+	# 形态→视觉：成功切换后经 EmitterConfigNode 正式入口把 FixedEmitter 新形态写入 EmitterVisual
+	# 内容状态（set_content_state 契约），不并行维护第二套纹理切换。
+	_emitter_config.set_visual_light_form(new_form)
 	_form_switch_toast_view.show_for_form(new_form)
 
 
@@ -446,6 +550,9 @@ func start_run() -> _LevelValidationResult:
 ## R 完整重置入口：转发到 LevelRuntimeController.reset_runtime；重置顺序、旧异步失效与移动次数清零全部由控制器拥有。
 func reset_runtime() -> void:
 	_level_runtime_controller.reset_runtime()
+	# R 恢复初始形态后同步视觉：FixedEmitter 已复位到构造时快照，EmitterVisual 内容状态跟随同一形态事实。
+	if _fixed_emitter != null and _emitter_config != null:
+		_emitter_config.set_visual_light_form(_fixed_emitter.get_light_form())
 
 
 ## 查询指定格子被哪个机关占用（薄包装，转发 _level_world_query.get_mechanism_id_at）；未被占用返回空 StringName（&""），不报错。
@@ -479,14 +586,33 @@ func _try_toggle_mirror_at_mouse() -> void:
 	mirror.toggle_orientation()
 
 
-## 解析指针命中场景供 DragFlowController 使用：是否位于机关栏、是否位于原型槽位、世界格坐标。
-## 世界格用 get_global_mouse_position() 换算（与原拖拽实现一致），UI 命中用传入的视口坐标。
+## 解析指针命中场景供 DragFlowController 使用：是否位于机关栏、是否位于原型槽位/道具卡、世界格坐标、
+## 命中的库存类型。世界格用 get_global_mouse_position() 换算（与原拖拽实现一致），UI 命中用传入的视口坐标。
+## AF-10 第三批：命中道具卡时携带该卡 type_id 并写入选中事实（未拖拽时；拖拽中不改选中防跨类型串扣）；
+## 命中旧槽位区域（无卡覆盖）携带当前选中类型；旧单类型路径 type_id 恒空，DragFlow 退回镜像默认。
 func _resolve_drag_pointer(viewport_position: Vector2) -> _DragFlowController.PointerScene:
 	var world_cell: Vector2i = _GridCoordinateRules.world_to_cell(get_global_mouse_position())
+	var over_slot: bool = false
+	var inventory_type_id: StringName = &""
+	if _inventory_card_bar != null:
+		var card_type: StringName = _inventory_card_bar.get_card_type_id_at(viewport_position)
+		over_slot = card_type != &"" or _is_mouse_over_prototype_slot(viewport_position)
+		if not is_dragging():
+			if card_type != &"":
+				inventory_type_id = card_type
+			elif over_slot:
+				inventory_type_id = _inventory_card_bar.get_selected_type_id()
+			if inventory_type_id != &"":
+				_inventory_card_bar.set_selected_type(inventory_type_id)
+				if _multi_inventory != null:
+					_multi_inventory.selected_type_id = inventory_type_id
+	else:
+		over_slot = _is_mouse_over_prototype_slot(viewport_position)
 	return _DragFlowController.PointerScene.new(
 		_is_mouse_over_inventory_bar(viewport_position),
-		_is_mouse_over_prototype_slot(viewport_position),
-		world_cell
+		over_slot,
+		world_cell,
+		inventory_type_id
 	)
 
 
@@ -521,10 +647,26 @@ func _set_complete_label_visible(should_be_visible: bool) -> void:
 	complete_label.visible = should_be_visible
 
 
-## 创建拖拽预览节点（DragFlowController 的 create_preview_token 适配）：实例化 SingleCellMirror 并加入 RuntimeObjects，配置 ID/格/世界坐标与预览模式。
-## 不写库存、不写 OccupancyRegistry、不判断合法性；新建镜面默认 SLASH，拖动已有镜面由控制器复制原 orientation。
+## AF-10 第三批：按 mechanism_id/预览 ID 解析机关场景（Registry 驱动，未知类型返回 null 由调用方安全失败）。
+func _scene_for_mechanism(mechanism_id: StringName) -> PackedScene:
+	var scene: PackedScene = _definition_index.resolve_scene_for_mechanism_id(
+		mechanism_id, PROTOTYPE_TOKEN_TYPE_ID, _SingleCellMirrorScene
+	)
+	if scene == null:
+		push_error("CoreLoopPrototype: 机关类型场景解析失败，拒绝实例化：%s" % [mechanism_id])
+	return scene
+
+
+## 创建拖拽预览节点（DragFlowController 的 create_preview_token 适配）：按类型实例化机关场景并加入
+## RuntimeObjects，配置 ID/格/世界坐标与预览模式。不写库存、不写 OccupancyRegistry、不判断合法性；
+## 新库存拖拽默认 SLASH（仅镜面消费朝向），拖动已有机关由控制器复制原朝向；解析失败返回 null 安全取消。
 func _create_token_node(mechanism_id: StringName, cell: Vector2i) -> Variant:
-	var token = _SingleCellMirrorScene.instantiate()
+	var scene: PackedScene = _scene_for_mechanism(mechanism_id)
+	if scene == null:
+		return null
+	var token = scene.instantiate()
+	if not is_instance_valid(token):
+		return null
 	runtime_objects.add_child(token)
 	token.configure(mechanism_id, cell)
 	token.set_world_position(_GridCoordinateRules.cell_to_world(cell))
@@ -532,10 +674,15 @@ func _create_token_node(mechanism_id: StringName, cell: Vector2i) -> Variant:
 	return token
 
 
-## 创建正式机关节点工厂（注入 PlacementController）：实例化 SingleCellMirror 并加入 RuntimeObjects，配置 ID/格/朝向/世界坐标。
-## 不写占用、不写库存、不判断合法性；orientation 由 place_from_inventory 传入，新镜面为 SLASH。实例化失败返回 null 由控制器回滚。
+## 创建正式机关节点工厂（注入 PlacementController）：按类型实例化机关场景并加入 RuntimeObjects，
+## 配置 ID/格/朝向/世界坐标。不写占用、不写库存、不判断合法性；orientation 仅镜面消费
+## （place_from_inventory 传入，新镜面为 SLASH），非镜面类型走场景默认配置；解析/实例化失败返回 null 由控制器回滚。
 func _create_formal_token_node(mechanism_id: StringName, cell: Vector2i, orientation: Variant) -> Variant:
-	var token = _SingleCellMirrorScene.instantiate()
+	var scene: PackedScene = _scene_for_mechanism(mechanism_id)
+	if scene == null:
+		push_error("CoreLoopPrototype: 正式机关场景解析失败，事务回滚：%s at %s" % [mechanism_id, cell])
+		return null
+	var token = scene.instantiate()
 	if not is_instance_valid(token):
 		push_error("CoreLoopPrototype: 正式机关节点实例化失败：%s at %s" % [mechanism_id, cell])
 		return null
@@ -564,6 +711,7 @@ func _is_mouse_over_prototype_slot(viewport_mouse_position: Vector2) -> bool:
 
 
 ## 刷新底部机关栏 UI：把库存剩余与是否允许拿取传给 InventorySlotView.refresh_slot()，由槽位组件统一负责剩余文本/占位符颜色/图标 self_modulate。UI 只显示库存事实，不自行修改库存。
+## AF-10 第三批：多类型模式下同时刷新道具卡 Presenter（每卡独立剩余/可用性/选中高亮，选中类型经 set_selected_type 维护）。
 func _update_inventory_ui() -> void:
 	# 拿取可用性：库存大于 0 且当前运行状态允许从机关栏拿取（非 COMPLETED）。
 	var remaining: int = _inventory_controller.get_remaining()
@@ -574,6 +722,24 @@ func _update_inventory_ui() -> void:
 	prototype_token_slot.refresh_slot(
 		remaining,
 		is_available
+	)
+	if _inventory_card_bar != null:
+		_inventory_card_bar.refresh(
+			Callable(self, "_card_remaining_for_type"),
+			Callable(self, "_card_available_for_type")
+		)
+
+
+## AF-10 第三批：道具卡只读数量查询（Presenter refresh 注入；多类型门面按类型剩余）。
+func _card_remaining_for_type(type_id: StringName) -> int:
+	return _multi_inventory.get_remaining_for(type_id) if _multi_inventory != null else 0
+
+
+## AF-10 第三批：道具卡只读可用性查询（剩余 > 0 且当前状态允许拿取）。
+func _card_available_for_type(type_id: StringName) -> bool:
+	return (
+		_card_remaining_for_type(type_id) > 0
+		and _RuntimeMoveRules.can_take_from_inventory_for_state(_get_current_run_state())
 	)
 
 

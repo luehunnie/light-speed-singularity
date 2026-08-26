@@ -2,15 +2,25 @@
 class_name LightSpeedArtProfileVisualStatePanel
 extends VBoxContainer
 
-## 视觉状态子面板（D4.5-P1B 拆分自 profile_action_panel）。
+## 视觉状态子面板（D4.5-P1B 拆分自 profile_action_panel；AF-Artwork 再拆出库存图标区与创建绑定区）。
 ## 职责：枚举 Profile 状态供用户选择、展示当前纹理信息与预览、评估并执行"应用到当前状态"
-##       （经注入的 EditService + UndoRedo）；不负责保存。
-## 输入输出：由 ActionPanel 注入 active visual 提供器、素材提供器、UndoRedo、EditService、共享状态 Label。
+##       （经注入的 EditService + UndoRedo）；装配 InventoryIconPanel 与 ProfileBindPanel 并转发注入。
+## 输入输出：由 ActionPanel 注入 active visual 提供器、素材提供器、UndoRedo、EditService、
+##       BindService、编辑场景根提供器、绑定后刷新提供器、共享状态 Label。
 ## 副作用：替换通过 EditorUndoRedoManager 走正式 Undo/Redo；仅重建自身控件，不直接改写 Profile 字段、不扫描素材。
 ## 边界：不静默选中第一项；切换目标清空旧状态选择；单击素材仅选择预览，不在此处替换；
-##       真正替换只经"应用到当前状态" + UndoRedo；保存交由 ProfileSavePanel。
+##       真正替换只经"应用到当前状态" + UndoRedo；保存交由 ProfileSavePanel；
+##       库存图标与创建绑定细节分别下沉两个子面板，本面板只装配 / 转发 / 刷新。
 
 const _ART_ROOT_PREFIX: String = "res://assets/art/"
+
+# 以 preload + 基类型持有子面板，避免引用尚未进入全局缓存的新 class_name（见 MCP 新 class_name 缓存坑）。
+const _IconPanelScript: GDScript = preload(
+	"res://addons/light_speed_art_profile/dock/inventory_icon_panel.gd"
+)
+const _BindPanelScript: GDScript = preload(
+	"res://addons/light_speed_art_profile/dock/profile_bind_panel.gd"
+)
 
 # ActionPanel 注入：返回当前激活 ObjectVisualView 或 null；只读，不持有 active visual 生命周期。
 var _active_visual_provider: Callable = Callable()
@@ -20,6 +30,8 @@ var _browser_entry_provider: Callable = Callable()
 var _editor_undo_redo = null
 # ActionPanel 注入并按需更新：纹理替换编辑服务；由 ActionPanel 持有，测试可整体替换。
 var _edit_service: RefCounted = null
+# ActionPanel 注入：返回当前编辑场景根 Node 或 null；应用路径的同 Profile 多实例刷新使用。
+var _scene_root_provider: Callable = Callable()
 # ActionPanel 注入：共享操作状态 Label，应用结果（成功/跳过/失败）写入此处。
 var _status_label: Label = null
 
@@ -32,6 +44,9 @@ var _current_state_info: Label = null
 var _current_state_preview: TextureRect = null
 var _apply_button: Button = null
 var _apply_hint: Label = null
+# 子面板以基类型 VBoxContainer 持有，原因同上。
+var _icon_panel: VBoxContainer = null
+var _bind_panel: VBoxContainer = null
 
 # 用户在状态列表中明确选择的状态 ID；未选择时为空 StringName。
 var _selected_state_id: StringName = &""
@@ -82,31 +97,89 @@ func _ensure_ui() -> void:
 	_apply_hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	_apply_hint.add_theme_color_override("font_color", Color(0.6, 0.6, 0.6))
 	add_child(_apply_hint)
+	# 库存图标区：与状态纹理并列的 Profile 级图标入口；子面板整体初始不可见，仅 Profile 存在时显示。
+	_icon_panel = _IconPanelScript.new() as VBoxContainer
+	_icon_panel.set_active_visual_provider(_active_visual_provider)
+	_icon_panel.set_browser_entry_provider(_browser_entry_provider)
+	_icon_panel.set_editor_undo_redo(_editor_undo_redo)
+	_icon_panel.set_edit_service(_edit_service)
+	_icon_panel.set_scene_root_provider(_scene_root_provider)
+	_icon_panel.set_status_label(_status_label)
+	add_child(_icon_panel)
+	_icon_panel._ensure_ui()
+	# 创建绑定区：Profile 缺失时可见的最小无代码创建入口。
+	_bind_panel = _BindPanelScript.new() as VBoxContainer
+	_bind_panel.set_active_visual_provider(_active_visual_provider)
+	_bind_panel.set_browser_entry_provider(_browser_entry_provider)
+	_bind_panel.set_editor_undo_redo(_editor_undo_redo)
+	_bind_panel.set_scene_root_provider(_scene_root_provider)
+	_bind_panel.set_status_label(_status_label)
+	add_child(_bind_panel)
+	_bind_panel._ensure_ui()
 
 
-## ActionPanel 注入 active visual 提供器；cb 无参数，返回 ObjectVisualView 或 null。无返回值。
+## ActionPanel 注入 active visual 提供器；同时转发两个子面板。无返回值。
 func set_active_visual_provider(cb: Callable) -> void:
 	_active_visual_provider = cb
+	if _icon_panel != null and is_instance_valid(_icon_panel):
+		_icon_panel.set_active_visual_provider(cb)
+	if _bind_panel != null and is_instance_valid(_bind_panel):
+		_bind_panel.set_active_visual_provider(cb)
 
 
-## ActionPanel 注入浏览器素材提供器；cb 无参数，返回 ArtAssetEntry 或 null。无返回值。
+## ActionPanel 注入浏览器素材提供器；同时转发两个子面板。无返回值。
 func set_browser_entry_provider(cb: Callable) -> void:
 	_browser_entry_provider = cb
+	if _icon_panel != null and is_instance_valid(_icon_panel):
+		_icon_panel.set_browser_entry_provider(cb)
+	if _bind_panel != null and is_instance_valid(_bind_panel):
+		_bind_panel.set_browser_entry_provider(cb)
 
 
-## ActionPanel 注入真实编辑器 UndoRedo 管理器；传入 null 表示清空引用，应用按钮会明确报失败。无返回值。
+## ActionPanel 注入真实编辑器 UndoRedo 管理器；同时转发两个子面板。无返回值。
 func set_editor_undo_redo(undo_redo) -> void:
 	_editor_undo_redo = undo_redo
+	if _icon_panel != null and is_instance_valid(_icon_panel):
+		_icon_panel.set_editor_undo_redo(undo_redo)
+	if _bind_panel != null and is_instance_valid(_bind_panel):
+		_bind_panel.set_editor_undo_redo(undo_redo)
 
 
-## ActionPanel 注入纹理替换编辑服务；测试可经 ActionPanel 属性 setter 整体替换后立即生效。无返回值。
+## ActionPanel 注入纹理替换编辑服务；同时转发库存图标子面板。无返回值。
 func set_edit_service(edit_service: RefCounted) -> void:
 	_edit_service = edit_service
+	if _icon_panel != null and is_instance_valid(_icon_panel):
+		_icon_panel.set_edit_service(edit_service)
 
 
-## ActionPanel 注入共享操作状态 Label；应用结果写入此处。无返回值。
+## ActionPanel 注入创建并绑定服务；转发创建绑定子面板。无返回值。
+func set_bind_service(bind_service: RefCounted) -> void:
+	if _bind_panel != null and is_instance_valid(_bind_panel):
+		_bind_panel.set_bind_service(bind_service)
+
+
+## ActionPanel 注入编辑场景根提供器；同时转发两个子面板。无返回值。
+func set_scene_root_provider(cb: Callable) -> void:
+	_scene_root_provider = cb
+	if _icon_panel != null and is_instance_valid(_icon_panel):
+		_icon_panel.set_scene_root_provider(cb)
+	if _bind_panel != null and is_instance_valid(_bind_panel):
+		_bind_panel.set_scene_root_provider(cb)
+
+
+## ActionPanel 注入绑定后刷新提供器；转发创建绑定子面板。无返回值。
+func set_refresh_for_view_provider(cb: Callable) -> void:
+	if _bind_panel != null and is_instance_valid(_bind_panel):
+		_bind_panel.set_refresh_for_view_provider(cb)
+
+
+## ActionPanel 注入共享操作状态 Label；同时转发两个子面板。无返回值。
 func set_status_label(label: Label) -> void:
 	_status_label = label
+	if _icon_panel != null and is_instance_valid(_icon_panel):
+		_icon_panel.set_status_label(label)
+	if _bind_panel != null and is_instance_valid(_bind_panel):
+		_bind_panel.set_status_label(label)
 
 
 ## 只读边界：返回用户明确选择的状态 ID；未选择返回空 StringName。
@@ -120,13 +193,16 @@ func clear_state_selection() -> void:
 	_refresh_apply_controls()
 
 
-## 清空状态列表控件并重算应用按钮；profile 为空时由 ActionPanel 调用。无返回值。
+## 清空状态列表控件并重算应用按钮；profile 为空时由 ActionPanel 调用（改显创建绑定区）。无返回值。
 func clear_states() -> void:
 	_clear_states()
+	_icon_panel.set_section_visible(false)
+	_bind_panel.set_section_visible(true)
+	_bind_panel.refresh_create_bind_controls()
 	_refresh_apply_controls()
 
 
-## 清空本面板全部状态：选择、列表、信息、预览、应用按钮；clear_action 时由 ActionPanel 调用。无返回值。
+## 清空本面板全部状态：选择、列表、信息、预览、应用按钮、库存图标区与创建绑定区；clear_action 时由 ActionPanel 调用。无返回值。
 func clear_visual_state() -> void:
 	_selected_state_id = &""
 	_clear_states()
@@ -138,11 +214,27 @@ func clear_visual_state() -> void:
 		_current_state_info.text = "未选择状态。"
 	if _current_state_preview != null:
 		_current_state_preview.texture = null
+	_icon_panel.set_section_visible(false)
+	_bind_panel.set_section_visible(false)
 
 
-## 浏览器选择变化时重算应用按钮启用条件。无返回；只读评估，不修改 Entry 或 Profile。
+## 浏览器选择变化时重算应用按钮与图标 / 创建绑定区启用条件。无返回；只读评估，不修改 Entry 或 Profile。
 func refresh_apply_controls() -> void:
 	_refresh_apply_controls()
+	refresh_icon_section()
+	refresh_create_bind_controls()
+
+
+## 兼容转发：刷新库存图标区（见 InventoryIconPanel.refresh_icon_section）。无返回值。
+func refresh_icon_section() -> void:
+	if _icon_panel != null and is_instance_valid(_icon_panel):
+		_icon_panel.refresh_icon_section()
+
+
+## 兼容转发：刷新创建绑定区（见 ProfileBindPanel.refresh_create_bind_controls）。无返回值。
+func refresh_create_bind_controls() -> void:
+	if _bind_panel != null and is_instance_valid(_bind_panel):
+		_bind_panel.refresh_create_bind_controls()
 
 
 ## 枚举 Profile states 建立可选择的状态列表（ItemList）。
@@ -150,6 +242,9 @@ func refresh_apply_controls() -> void:
 ## 不静默选中第一项；仅当旧选择仍存在时恢复高亮；ItemList 设最小高度保证 unlit/lit 可见。
 func show_states(profile: ObjectVisualProfile) -> void:
 	_clear_states()
+	_bind_panel.set_section_visible(false)
+	_icon_panel.set_section_visible(true)
+	refresh_icon_section()
 	# 新 Profile 不含旧选中状态时清除选择，避免悬空 state_id。
 	if _selected_state_id != &"" and not profile.has_state(_selected_state_id):
 		_selected_state_id = &""
@@ -302,7 +397,8 @@ func _on_apply_pressed() -> void:
 		return
 	var action_name := "替换视觉状态 %s 的图片" % String(_selected_state_id)
 	var result: Dictionary = _edit_service.replace_with_undo_redo(
-		_editor_undo_redo, view, _selected_state_id, entry.texture, action_name)
+		_editor_undo_redo, view, _selected_state_id, entry.texture, action_name,
+		get_scene_root())
 	if not result.get("ok", false):
 		if _status_label != null:
 			_status_label.text = "应用失败：%s" % String(result.get("reason", "未知原因。"))
@@ -324,3 +420,10 @@ func _clear_states() -> void:
 		return
 	for child: Node in _states_box.get_children():
 		child.queue_free()
+
+
+## 经注入提供器取得当前编辑场景根；未注入或失效返回 null。只读。
+func get_scene_root() -> Node:
+	if not _scene_root_provider.is_valid():
+		return null
+	return _scene_root_provider.call() as Node

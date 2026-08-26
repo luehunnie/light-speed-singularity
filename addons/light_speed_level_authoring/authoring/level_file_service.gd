@@ -16,6 +16,9 @@ const _StableIdService: GDScript = preload(
 const _LevelValidator: GDScript = preload(
 	"res://gameplay/level/validation/level_validator.gd"
 )
+const _BusinessData: GDScript = preload(
+	"res://addons/light_speed_level_authoring/authoring/business_data/business_data_service.gd"
+)
 
 # 空白正式关卡模板（四层 + RuntimeObjects + LightPathLayer + 合法 Emitter/Crystal 起始内容）。
 const TEMPLATE_PATH: String = "res://levels/templates/level_template.tscn"
@@ -77,6 +80,8 @@ func _prepare_and_save(root: Node, display_name: String, chapter: String, campai
 	(root as Node2D).set_meta(LEVEL_ID_META, level_id)
 	(root as Node2D).set_meta(DISPLAY_NAME_META, display_name)
 	var remap: Dictionary = _StableIdService.regenerate_all(root)
+	# AF-09 消费重映射表：业务 meta 中的旧稳定 ID 引用（Objective 条件/组成员、Control 连接）同步重建。
+	_BusinessData.apply_id_remap(root, remap)
 	var validation: Variant = _LevelValidator.new().validate(root)
 	var packed := PackedScene.new()
 	if packed.pack(root) != OK:

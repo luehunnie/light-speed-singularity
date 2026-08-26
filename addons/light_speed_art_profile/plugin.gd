@@ -23,6 +23,8 @@ func _enter_tree() -> void:
 	# 明确依赖注入：把真实 EditorUndoRedoManager 经 Dock 交给操作子面板，
 	# 子面板不在运行期自行查找编辑器单例，避免 UndoRedo 管理器类型与调用形式不一致。
 	_dock.set_editor_undo_redo(get_undo_redo())
+	# 注入当前编辑场景根提供器：同 Profile 多实例刷新与“创建并绑定视觉配置”路径推导使用。
+	_dock.set_scene_root_provider(Callable(EditorInterface, "get_edited_scene_root"))
 	_selection = get_editor_interface().get_selection()
 	_selection_changed_callable = Callable(self, "_on_selection_changed")
 	if _selection != null and not _selection.selection_changed.is_connected(_selection_changed_callable):

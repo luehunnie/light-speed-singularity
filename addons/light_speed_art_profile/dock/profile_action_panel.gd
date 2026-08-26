@@ -16,6 +16,9 @@ const _EditServiceScript: GDScript = preload(
 const _SaveServiceScript: GDScript = preload(
 	"res://addons/light_speed_art_profile/editing/profile_save_service.gd"
 )
+const _BindServiceScript: GDScript = preload(
+	"res://addons/light_speed_art_profile/editing/visual_profile_bind_service.gd"
+)
 const _VisualStatePanelScript: GDScript = preload(
 	"res://addons/light_speed_art_profile/dock/visual_state_panel.gd"
 )
@@ -26,9 +29,12 @@ const _SavePanelScript: GDScript = preload(
 # 服务由本编排器持有；通过属性 setter 在测试整体替换时同步转发给对应子面板。
 var _edit_service_ref: RefCounted = _EditServiceScript.new()
 var _save_service_ref: RefCounted = _SaveServiceScript.new()
+var _bind_service_ref: RefCounted = _BindServiceScript.new()
 
 # Dock 注入：返回浏览器当前选中 ArtAssetEntry 或 null；只读，转发给 VisualStatePanel。
 var _browser_entry_provider: Callable = Callable()
+# Dock 注入：返回当前编辑场景根 Node 或 null；只读，转发给 VisualStatePanel（多实例刷新 / 创建绑定）。
+var _scene_root_provider: Callable = Callable()
 
 # 当前激活的正式视觉目标；未确定时为 null。
 var _active_visual: ObjectVisualView = null
@@ -64,6 +70,16 @@ var _save_service: RefCounted:
 			_save_panel.set_save_service(value)
 
 
+## BindService 属性：读取返回当前服务；赋值时同步转发给 VisualStatePanel，供测试整体替换后立即生效。
+var _bind_service: RefCounted:
+	get:
+		return _bind_service_ref
+	set(value):
+		_bind_service_ref = value
+		if _visual_state_panel != null and is_instance_valid(_visual_state_panel):
+			_visual_state_panel.set_bind_service(value)
+
+
 ## 初始化面板控件树。无参数无返回；_ready 在编辑器入树时触发，测试由 Dock 显式调用 _ensure_ui。
 func _ready() -> void:
 	_ensure_ui()
@@ -83,6 +99,9 @@ func _ensure_ui() -> void:
 	_visual_state_panel.set_browser_entry_provider(_browser_entry_provider)
 	_visual_state_panel.set_editor_undo_redo(_editor_undo_redo)
 	_visual_state_panel.set_edit_service(_edit_service_ref)
+	_visual_state_panel.set_bind_service(_bind_service_ref)
+	_visual_state_panel.set_scene_root_provider(_scene_root_provider)
+	_visual_state_panel.set_refresh_for_view_provider(Callable(self, "show_for_view"))
 	_visual_state_panel.set_status_label(_operation_status)
 	add_child(_visual_state_panel)
 	_visual_state_panel._ensure_ui()
@@ -103,11 +122,40 @@ func set_browser_entry_provider(cb: Callable) -> void:
 		_visual_state_panel.set_browser_entry_provider(cb)
 
 
-## Dock 注入真实编辑器 UndoRedo 管理器；同时转发给已存在的 VisualStatePanel。无返回值。
+## Dock 注入编辑场景根提供器；同时转发给已存在的 VisualStatePanel。无返回值。
+func set_scene_root_provider(cb: Callable) -> void:
+	_scene_root_provider = cb
+	if _visual_state_panel != null and is_instance_valid(_visual_state_panel):
+		_visual_state_panel.set_scene_root_provider(cb)
+
+
+## Dock 注入真实编辑器 UndoRedo 管理器；同时转发给已存在的 VisualStatePanel，并把 version_changed
+## 连接为统一 Undo/Redo 刷新钩子（见 _on_undo_redo_history_changed）。无返回值。
 func set_editor_undo_redo(undo_redo) -> void:
+	_disconnect_undo_redo_history()
 	_editor_undo_redo = undo_redo
 	if _visual_state_panel != null and is_instance_valid(_visual_state_panel):
 		_visual_state_panel.set_editor_undo_redo(undo_redo)
+	if undo_redo != null and undo_redo.has_signal("version_changed"):
+		undo_redo.version_changed.connect(_on_undo_redo_history_changed)
+
+
+## 断开旧 UndoRedo 管理器上的统一刷新钩子；替换 / 清空注入时调用。无返回值。
+func _disconnect_undo_redo_history() -> void:
+	if _editor_undo_redo != null and is_instance_valid(_editor_undo_redo) \
+			and _editor_undo_redo.has_signal("version_changed") \
+			and _editor_undo_redo.version_changed.is_connected(_on_undo_redo_history_changed):
+		_editor_undo_redo.version_changed.disconnect(_on_undo_redo_history_changed)
+
+
+## Undo/Redo 历史变化统一刷新钩子（Ctrl+Z / Ctrl+Y / 动作提交均触发 version_changed）：
+## 按当前 active visual 整体重建状态列表、当前纹理信息、库存图标区与创建绑定区——
+## 覆盖库存图标 apply/clear 的撤销重做、创建绑定的解绑 / 重绑（绑定状态切换即刷新诊断），
+## 无轮询、不要求重新选择节点；无 active visual 时面板本就处于清空态，直接返回。无返回值。
+func _on_undo_redo_history_changed() -> void:
+	if _active_visual == null or not is_instance_valid(_active_visual):
+		return
+	show_for_view(_active_visual)
 
 
 ## 只读边界：返回当前激活视觉目标；未选择或失效返回 null。

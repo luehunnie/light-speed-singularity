@@ -19,9 +19,21 @@ const _GridCoordinateRules: GDScript = preload("res://gameplay/grid/grid_coordin
 const _EmitterConfigNode: GDScript = preload("res://gameplay/mechanisms/emitters/emitter_config_node.gd")
 const _FixedEmitter: GDScript = preload("res://gameplay/mechanisms/emitters/fixed_emitter.gd")
 const _EmissionPreview: GDScript = preload("res://gameplay/mechanisms/emitters/emission_preview.gd")
+const _MirrorScript: GDScript = preload("res://gameplay/mechanisms/mirrors/single_cell_mirror.gd")
 
 var _failures: PackedStringArray = PackedStringArray()
 var _checks: int = 0
+
+
+## 入树前固定实例级 fixture（场景是活体作者 fixture，可携带 authored 库存/预置机关）：
+## 镜面×3 库存 metadata + 剥离场景 RuntimeObjects 内 authored 镜面，保持本测试光路基线不随场景内容漂移。
+func _prepare_fixture(node: Node2D) -> void:
+	node.set_meta("inventory_entries", [
+		{"content_type_id": "basic_single_cell_mirror", "initial_quantity": 3, "order": 0},
+	])
+	for child: Node in node.get_node("RuntimeObjects").get_children():
+		if child.get_script() == _MirrorScript:
+			child.free()
 
 
 ## SceneTree 初始化入口：逐用例独立实例化场景，最后统一报告并退出。
@@ -51,6 +63,7 @@ func _initialize() -> void:
 ## 实例化并挂入 root，泵一帧触发真实 _ready。
 func _ready_instance(scene: PackedScene) -> Node2D:
 	var node: Node2D = scene.instantiate() as Node2D
+	_prepare_fixture(node)
 	root.add_child(node)
 	await process_frame
 	return node
@@ -124,6 +137,7 @@ func _test_02_moved_emitter(scene: PackedScene) -> void:
 	const NAME: String = "02_移动发射器改变起点"
 	const MOVED: Vector2i = Vector2i(1, 6)
 	var node: Node2D = scene.instantiate() as Node2D
+	_prepare_fixture(node)
 	var emitter: _EmitterConfigNode = _emitter(node)
 	_check(NAME, emitter != null, "入树前 Emitter 缺失。")
 	if emitter == null:
@@ -165,6 +179,7 @@ func _test_03_eight_directions(scene: PackedScene) -> void:
 	]
 	for dir: int in dirs:
 		var node: Node2D = scene.instantiate() as Node2D
+		_prepare_fixture(node)
 		var emitter: _EmitterConfigNode = _emitter(node)
 		if emitter == null:
 			_check(NAME, false, "方向 %d：Emitter 缺失。" % [dir])
@@ -273,6 +288,7 @@ func _test_06_reset_clears_path(scene: PackedScene) -> void:
 func _test_07_particle_acceptance(scene: PackedScene) -> void:
 	const NAME: String = "07_PARTICLE合法构造"
 	var node: Node2D = scene.instantiate() as Node2D
+	_prepare_fixture(node)
 	var emitter: _EmitterConfigNode = _emitter(node)
 	_check(NAME, emitter != null, "入树前 Emitter 缺失。")
 	if emitter == null:

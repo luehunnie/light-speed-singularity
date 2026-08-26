@@ -14,10 +14,19 @@ var _checks: int = 0
 
 
 func _initialize() -> void:
+	_run_tests()
+
+
+## 顺序运行全部用例；06 前泵一帧——守卫判据 is_inside_tree 需节点真实入树，
+## 而 _initialize 期间 get_root().add_child 不会同步触发 ENTER_TREE（headless --script 事实）。
+func _run_tests() -> void:
 	_test_01_commit_undo_redo()
 	_test_02_properties()
 	_test_03_null_direct_mode()
 	_test_04_invalid_structure_rejected()
+	_test_05_palette_shape_anchor()
+	await process_frame
+	_test_06_eurm_undo_target_guard()
 	_report()
 	quit(0 if _failures.is_empty() else 1)
 
@@ -81,6 +90,63 @@ func _test_04_invalid_structure_rejected() -> void:
 	_check(NAME, not _EditorTransaction.commit(undo, "非法", bad), "缺 target 应整体拒绝。")
 	_check(NAME, not _EditorTransaction.commit(undo, "空操作", []), "空操作列表应拒绝。")
 	node.free()
+
+
+## 5. Palette 放置事务形状（AF-09 P0）：owner 只登记 do 侧；anchor 传关卡根。
+## commit 即 add_child+owner；undo 仅 remove_child（无 owner undo 属性）；redo 恢复同一节点与 owner。
+## 真实 EditorUndoRedoManager 的 common_parent 修复验收留编辑器 Human Gate。
+func _test_05_palette_shape_anchor() -> void:
+	const NAME: String = "05_放置形状与锚点"
+	var root := Node2D.new()
+	var container := Node2D.new()
+	container.name = &"RuntimeObjects"
+	root.add_child(container)
+	var placed := Node2D.new()
+	var undo := UndoRedo.new()
+	var operations: Array = [
+		{"target": container, "do": ["add_child", [placed]], "undo": ["remove_child", [placed]]},
+		{"target": placed, "do_properties": [["owner", root]]},
+	]
+	_check(NAME, _EditorTransaction.commit(undo, "Palette 放置", operations, root),
+		"带锚点（第 4 参）事务应提交成功。")
+	_check(NAME, placed.get_parent() == container, "commit 应立即把 placed 加入容器。")
+	_check(NAME, placed.owner == root, "do_properties 应把 owner 设为关卡根。")
+	undo.undo()
+	_check(NAME, placed.get_parent() == null, "undo 应仅移除节点（不再登记 owner undo 属性）。")
+	_check(NAME, is_instance_valid(placed), "undo 后节点应仍存活（供 redo 重放同一节点）。")
+	undo.redo()
+	_check(NAME, placed.get_parent() == container and placed.owner == root,
+		"redo 应恢复同一节点与 owner。")
+	undo.undo()
+	placed.free()
+	root.free()
+
+
+## 6. EURM undo 段守卫：未入树节点的 undo 段应被识别（真实编辑器分支整体拒绝的判定依据）；
+## do-only（引擎实例化事务同形）不受限。headless 无法实例化 EditorUndoRedoManager，直测判定函数。
+func _test_06_eurm_undo_target_guard() -> void:
+	const NAME: String = "06_EURM_undo目标守卫"
+	var root := Node2D.new()
+	var container := Node2D.new()
+	root.add_child(container)
+	# 守卫判据是 is_inside_tree：root 须真实入树（headless 下挂在 SceneTree 根），才与编辑器事实一致。
+	get_root().add_child(root)
+	var detached := Node2D.new()
+	var bad: Array = [
+		{"target": container, "do": ["add_child", [detached]], "undo": ["remove_child", [detached]]},
+		{"target": detached, "undo_properties": [["owner", null]]},
+	]
+	_check(NAME, _EditorTransaction._first_out_of_tree_undo_target(bad) == detached,
+		"未入树节点登记 undo 属性应被守卫识别。")
+	var shaped: Array = [
+		{"target": container, "do": ["add_child", [detached]], "undo": ["remove_child", [detached]]},
+		{"target": detached, "do_properties": [["owner", root]]},
+	]
+	_check(NAME, _EditorTransaction._first_out_of_tree_undo_target(shaped) == null,
+		"修复后的放置形状（do-only owner）不应触发守卫。")
+	get_root().remove_child(root)
+	detached.free()
+	root.free()
 
 
 func _check(group: String, condition: bool, message: String) -> void:

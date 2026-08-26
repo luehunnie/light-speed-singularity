@@ -106,7 +106,7 @@ func _validate_unexpected_tile_layers(root: Node2D, by_name: Dictionary, issues:
 					"存在非正式角色名的 TileMapLayer：%s。" % role_name, root.get_path_to(child))
 
 
-## 四个逻辑 TileMapLayer 与 RuntimeObjects 必须为零位移/零旋转/单位缩放。
+## 四个逻辑 TileMapLayer 与 RuntimeObjects 必须为零位移/零旋转/单位缩放；其祖先链（含关卡根）同检（AF-09 P0）。
 func _validate_logic_transforms(root: Node2D, valid_direct: Dictionary, issues: Array) -> void:
 	for role in _TILE_ROLES + ["RuntimeObjects"]:
 		var node: Node = valid_direct.get(role, null)
@@ -115,6 +115,29 @@ func _validate_logic_transforms(root: Node2D, valid_direct: Dictionary, issues: 
 		if not _is_identity_transform(node as Node2D):
 			_add_struct(issues, _err(), &"logic_transform_invalid",
 				"角色 %s 的逻辑 transform 必须为零位移/零旋转/单位缩放。" % role, root.get_path_to(node))
+	_validate_ancestor_transforms(root, valid_direct, issues)
+
+
+## 祖先 transform 校验（AF-09 P0 幽灵墙阻断）：角色节点到关卡根（含根自身）链上任何非 identity
+## position/rotation/scale 都报 ancestor_transform_invalid（ERROR）——格子（WallLayer 等）是唯一事实，
+## 祖先位移使视觉随节点移动而碰撞/占位不动，形成视觉与玩法分裂；覆盖“移动 Walls 父节点”类操作。
+## node_path 指向可修复节点；同一祖先去重只报一次；到关卡根即止，不越入宿主。
+func _validate_ancestor_transforms(root: Node2D, valid_direct: Dictionary, issues: Array) -> void:
+	var seen: Dictionary = {}
+	for role in _TILE_ROLES + ["RuntimeObjects"]:
+		var node: Node = valid_direct.get(role, null)
+		if node == null:
+			continue
+		var ancestor: Node = node.get_parent()
+		while ancestor != null:
+			if not seen.has(ancestor) and ancestor is Node2D and not _is_identity_transform(ancestor):
+				seen[ancestor] = true
+				_add_struct(issues, _err(), &"ancestor_transform_invalid",
+					"角色 %s 的祖先 %s transform 非单位变换：格子是唯一墙体/占位事实，节点位移会造成视觉与碰撞分裂。" % [role, ancestor.name],
+					root.get_path_to(ancestor))
+			if ancestor == root:
+				break
+			ancestor = ancestor.get_parent()
 
 
 ## 四个正式 TileMapLayer 必须绑定非空 TileSet（不锁死资源路径）。

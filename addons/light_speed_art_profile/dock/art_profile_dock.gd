@@ -17,6 +17,7 @@ const _VisualTargetResult: GDScript = preload("res://addons/light_speed_art_prof
 const _BrowserViewScript: GDScript = preload("res://addons/light_speed_art_profile/browser/art_asset_browser_view.gd")
 # 子面板与新增服务通过 preload 引用，规避新 class_name 全局缓存未重建时的类型解析问题。
 const _ActionPanelScript: GDScript = preload("res://addons/light_speed_art_profile/dock/profile_action_panel.gd")
+const _TilesetPanelScript: GDScript = preload("res://addons/light_speed_art_profile/tileset/tileset_replace_panel.gd")
 
 var _resolver: RefCounted = _VisualTargetResolver.new()
 
@@ -30,6 +31,10 @@ var _target_selector_label: Label = null
 var _target_selector: OptionButton = null
 # 以基类型 VBoxContainer 持有子面板，避免引用尚未进入全局缓存的新 class_name（见 MCP 新 class_name 缓存坑）。
 var _action_panel: VBoxContainer = null
+# TileSet 图集整套替换子面板（TileSet 美术工作流 v1）；同样以基类型鸭子类型调用。
+var _tileset_panel: VBoxContainer = null
+# ObjectVisual 专属字段控件（标题+值成对登记）：TileMapLayer 模式下整体隐藏，实现两区互斥。
+var _objectvisual_field_controls: Array = []
 var _browser_view: LightSpeedArtProfileArtAssetBrowserView = null
 # 由 plugin.gd 注入的真实编辑器 UndoRedo 管理器；子面板创建时一并转交，不在此处自行查找编辑器单例。
 var _editor_undo_redo = null
@@ -40,6 +45,9 @@ var _editor_undo_redo = null
 func _ready() -> void:
 	_ensure_ui()
 	_action_panel.clear_action()
+	# 初始互斥状态：无选择即隐藏 TileSet 面板，等待 plugin 首个选择快照再切换。
+	if _tileset_panel != null and is_instance_valid(_tileset_panel):
+		_tileset_panel.visible = false
 	_clear_details("请先在场景树中选择一个对象。")
 
 
@@ -49,14 +57,38 @@ func set_editor_undo_redo(undo_redo) -> void:
 	_editor_undo_redo = undo_redo
 	if _action_panel != null and is_instance_valid(_action_panel):
 		_action_panel.set_editor_undo_redo(undo_redo)
+	if _tileset_panel != null and is_instance_valid(_tileset_panel):
+		_tileset_panel.set_editor_undo_redo(undo_redo)
+
+
+## 注入当前编辑场景根提供器并转发给操作子面板；由 plugin.gd 在启用时调用。
+## cb 无参数，返回当前编辑场景根 Node 或 null；同 Profile 多实例刷新与创建绑定使用。无返回值。
+func set_scene_root_provider(cb: Callable) -> void:
+	if _action_panel != null and is_instance_valid(_action_panel):
+		_action_panel.set_scene_root_provider(cb)
 
 
 ## 接收插件传入的当前选择并刷新展示。
 ## selected_nodes 是 EditorSelection 快照；无返回值；只读解析，切换对象时清除旧编辑状态。
+## 路由：单选真实 TileMapLayer（is 判定覆盖脚本子类）优先进入 TileSet 替换模式，
+##       隐藏 ObjectVisual 专属区且不走 Resolver 的 UNSUPPORTED 路径；
+##       其余选择（含父 Node2D 猜子节点、空选、多选）恢复 ObjectVisual 区并清空 TileSet 面板。
 func show_selection(selected_nodes: Array) -> void:
 	_ensure_ui()
 	_clear_target_selector()
 	_action_panel.clear_action()
+	var single: Node = selected_nodes[0] as Node if selected_nodes.size() == 1 else null
+	# is 判定同时覆盖继承 TileMapLayer 的脚本子类；只认选中节点自身，不把 Node2D 父节点当 TileMap。
+	var tilemap_mode: bool = single != null and is_instance_valid(single) and single is TileMapLayer
+	_set_objectvisual_area_visible(not tilemap_mode)
+	# TileSet 面板与 ObjectVisual 区互斥显示；非 TileMapLayer 选择清空其目标与一次性确认 token。
+	if _tileset_panel != null and is_instance_valid(_tileset_panel):
+		_tileset_panel.visible = tilemap_mode
+		_tileset_panel.show_selection_node(single if tilemap_mode else null)
+	if tilemap_mode:
+		_selected_value.text = single.name
+		_clear_details("已选择 TileMapLayer；在下方 TileSet 区域输入新纹理路径并分析影响。")
+		return
 	if selected_nodes.is_empty():
 		_clear_details("请先在场景树中选择一个对象。")
 		_selected_value.text = ""
@@ -100,7 +132,7 @@ func _show_single_target(selected: Node, result: RefCounted) -> void:
 	_set_visual_fields(primary)
 	_action_panel.show_for_view(primary)
 	if primary.visual_profile == null:
-		_status_label.text = "该视觉节点尚未配置视觉配置文件。"
+		_status_label.text = "该视觉节点尚未配置视觉配置文件；可在下方选择素材后创建并绑定。"
 	elif selected is EmissionPreview:
 		_status_label.text = "该节点用于发射方向预览。已为你定位到所属发射器的正式视觉。"
 	else:
@@ -259,7 +291,7 @@ func _ensure_ui() -> void:
 	upper_scroll.add_child(profile_section)
 	# 主上下文字段置于顶部，便于用户确认正在编辑的对象与视觉。
 	_selected_value = _add_field(profile_section, "当前对象")
-	_visual_value = _add_field(profile_section, "可替换视觉")
+	_visual_value = _add_field(profile_section, "可替换视觉", true)
 	# 多目标选择器：默认隐藏，仅 MULTIPLE_TARGETS 时显示。
 	_target_selector_label = Label.new()
 	_target_selector_label.text = "该组件包含多个可替换视觉，请选择："
@@ -282,10 +314,15 @@ func _ensure_ui() -> void:
 	_action_panel.set_editor_undo_redo(_editor_undo_redo)
 	profile_section.add_child(_action_panel)
 	_action_panel._ensure_ui()
+	# TileSet 图集替换面板：同一滚动区内最小装配，业务与守卫全部在面板/服务内。
+	_tileset_panel = _TilesetPanelScript.new() as VBoxContainer
+	_tileset_panel.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_tileset_panel.set_editor_undo_redo(_editor_undo_redo)
+	profile_section.add_child(_tileset_panel)
 	# 诊断字段置于底部：所属组件 / 视觉配置文件 / 默认状态，不挤占顶部状态选择区。
-	_component_value = _add_field(profile_section, "所属组件")
-	_profile_value = _add_field(profile_section, "视觉配置文件")
-	_default_state_value = _add_field(profile_section, "默认状态")
+	_component_value = _add_field(profile_section, "所属组件", true)
+	_profile_value = _add_field(profile_section, "视觉配置文件", true)
+	_default_state_value = _add_field(profile_section, "默认状态", true)
 	# 下半区：美术资产浏览器，保留自身最小高度，与上方视觉配置隔离。
 	_browser_view = _BrowserViewScript.new() as LightSpeedArtProfileArtAssetBrowserView
 	_browser_view.size_flags_vertical = Control.SIZE_EXPAND_FILL
@@ -302,9 +339,10 @@ func _on_browser_selection_changed() -> void:
 
 
 ## 新增一组字段标签。
-## parent 为字段所属容器；title 为字段名；返回可后续写入的值 Label。
+## parent 为字段所属容器；title 为字段名；hideable 标记 ObjectVisual 专属字段（随模式互斥整体隐藏）；
+## 返回可后续写入的值 Label。
 ## 值 Label 使用 clip_text + 省略号，长路径截断显示、完整内容交由 tooltip，杜绝窄 Dock 逐字符竖排。
-func _add_field(parent: Control, title: String) -> Label:
+func _add_field(parent: Control, title: String, hideable: bool = false) -> Label:
 	var name_label := Label.new()
 	name_label.text = title
 	parent.add_child(name_label)
@@ -313,7 +351,21 @@ func _add_field(parent: Control, title: String) -> Label:
 	value_label.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
 	value_label.text = ""
 	parent.add_child(value_label)
+	if hideable:
+		_objectvisual_field_controls.append(name_label)
+		_objectvisual_field_controls.append(value_label)
 	return value_label
+
+
+## ObjectVisual 专属区互斥可见性：TileMapLayer 模式下整体隐藏（字段对 + 操作子面板），
+## 其余选择恢复显示；目标选择器由 _clear_target_selector 单独管理。
+## visible_now 为目标可见状态；无返回值；只改 Dock 内控件 visible，不改数据、不触发信号。
+func _set_objectvisual_area_visible(visible_now: bool) -> void:
+	for control: Control in _objectvisual_field_controls:
+		if is_instance_valid(control):
+			control.visible = visible_now
+	if _action_panel != null and is_instance_valid(_action_panel):
+		_action_panel.visible = visible_now
 
 
 ## 清空目标与状态展示。

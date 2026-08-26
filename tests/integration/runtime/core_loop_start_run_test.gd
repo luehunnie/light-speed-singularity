@@ -21,6 +21,18 @@ const _SCENE_PATH: String = "res://levels/prototypes/core_loop_prototype.tscn"
 const _PULSE_SETTLE_MS: int = 1150
 
 const _GridCoordinateRules: GDScript = preload("res://gameplay/grid/grid_coordinate_rules.gd")
+const _MirrorScript: GDScript = preload("res://gameplay/mechanisms/mirrors/single_cell_mirror.gd")
+
+
+## 入树前固定实例级 fixture（场景是活体作者 fixture，可携带 authored 库存/预置机关）：
+## 镜面×3 库存 metadata + 剥离场景 RuntimeObjects 内 authored 镜面，保持本测试运行期 UI 基线不随场景内容漂移。
+func _prepare_fixture(node: Node2D) -> void:
+	node.set_meta("inventory_entries", [
+		{"content_type_id": "basic_single_cell_mirror", "initial_quantity": 3, "order": 0},
+	])
+	for child: Node in node.get_node("RuntimeObjects").get_children():
+		if child.get_script() == _MirrorScript:
+			child.free()
 
 ## 累积失败项（每项为“[组名] 原因”）。
 var _failures: PackedStringArray = PackedStringArray()
@@ -55,6 +67,7 @@ func _initialize() -> void:
 ## 实例化并挂入 root，泵一帧触发真实 _ready（构造 RunStartView 与运行期编排）。
 func _ready_instance(scene: PackedScene) -> Node2D:
 	var node: Node2D = scene.instantiate() as Node2D
+	_prepare_fixture(node)
 	root.add_child(node)
 	await process_frame
 	return node

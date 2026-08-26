@@ -42,7 +42,7 @@ class _SpyEdit extends RefCounted:
 		return null
 	func can_replace(view, state_id, texture, resource_path) -> Dictionary:
 		return {ok = true, reason = "", skipped = false}
-	func replace_with_undo_redo(undo_redo, view, state_id, new_texture, action_name) -> Dictionary:
+	func replace_with_undo_redo(undo_redo, view, state_id, new_texture, action_name, scene_root = null) -> Dictionary:
 		replace_count += 1
 		captured_ur = undo_redo
 		return return_result

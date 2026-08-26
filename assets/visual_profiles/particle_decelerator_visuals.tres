@@ -1,0 +1,51 @@
+[gd_resource type="Resource" script_class="ObjectVisualProfile" format=3 uid="uid://bdecvisuals01"]
+
+[ext_resource type="Script" uid="uid://djtcgpsdp3a5x" path="res://gameplay/visuals/object_visuals/object_visual_profile.gd" id="1_profile"]
+[ext_resource type="Script" uid="uid://b562k3phylvi3" path="res://gameplay/visuals/visual_state_texture.gd" id="2_state"]
+[ext_resource type="Texture2D" uid="uid://dhtnefekshe5l" path="res://assets/art/speed_check/light_down_speed_mechine.png" id="3_tex"]
+
+[sub_resource type="Resource" id="VisualStateTexture_right"]
+script = ExtResource("2_state")
+state_id = &"right"
+world_texture = ExtResource("3_tex")
+
+[sub_resource type="Resource" id="VisualStateTexture_down_right"]
+script = ExtResource("2_state")
+state_id = &"down_right"
+world_texture = ExtResource("3_tex")
+
+[sub_resource type="Resource" id="VisualStateTexture_down"]
+script = ExtResource("2_state")
+state_id = &"down"
+world_texture = ExtResource("3_tex")
+
+[sub_resource type="Resource" id="VisualStateTexture_down_left"]
+script = ExtResource("2_state")
+state_id = &"down_left"
+world_texture = ExtResource("3_tex")
+
+[sub_resource type="Resource" id="VisualStateTexture_left"]
+script = ExtResource("2_state")
+state_id = &"left"
+world_texture = ExtResource("3_tex")
+
+[sub_resource type="Resource" id="VisualStateTexture_up_left"]
+script = ExtResource("2_state")
+state_id = &"up_left"
+world_texture = ExtResource("3_tex")
+
+[sub_resource type="Resource" id="VisualStateTexture_up"]
+script = ExtResource("2_state")
+state_id = &"up"
+world_texture = ExtResource("3_tex")
+
+[sub_resource type="Resource" id="VisualStateTexture_up_right"]
+script = ExtResource("2_state")
+state_id = &"up_right"
+world_texture = ExtResource("3_tex")
+
+[resource]
+script = ExtResource("1_profile")
+inventory_icon = ExtResource("3_tex")
+default_state_id = &"right"
+states = Array[ExtResource("2_state")]([SubResource("VisualStateTexture_right"), SubResource("VisualStateTexture_down_right"), SubResource("VisualStateTexture_down"), SubResource("VisualStateTexture_down_left"), SubResource("VisualStateTexture_left"), SubResource("VisualStateTexture_up_left"), SubResource("VisualStateTexture_up"), SubResource("VisualStateTexture_up_right")])

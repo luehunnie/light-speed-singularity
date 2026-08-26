@@ -68,6 +68,14 @@ enum ParticleDirection {
 }
 
 
+# 内容状态 ID 契约：必须与 emitter_visuals.tres 中 states 的 state_id 保持一致。
+# 形态轴 = 光形态（RAY→ray / PARTICLE→particle，与公共 LightForm 两种既有形态一一对应，不发明未来形态）；
+# default 为回退态；三态当前共享同一纹理，Artwork 后续可经 profile 逐态替换。
+const STATE_DEFAULT: StringName = &"default"
+const STATE_RAY: StringName = &"ray"
+const STATE_PARTICLE: StringName = &"particle"
+
+
 @export_group("发射形态")
 ## 当前默认发射形态。
 @export var default_light_form: LightForm = LightForm.RAY : set = _set_default_light_form
@@ -148,10 +156,11 @@ static func _is_valid_particle_direction(value: int) -> bool:
 # 固定直属子节点角色名仅用于预制场景内部接线，不作为稳定 emitter_id；单向同步配置到视图，子节点缺失安全跳过。
 
 ## 入树时将当前配置单向同步给两个可选直属子节点；不修改自身 position/cell，不执行发射。
-## 同步顺序：Visual Profile → EmitterVisual 朝向 → EmissionPreview 状态（D3C-2.5）。
+## 同步顺序：Visual Profile → EmitterVisual 内容状态（形态轴）→ EmitterVisual 朝向 → EmissionPreview 状态（D3C-2.5）。
 ## 基类 GridPlacedObject 未定义 _ready，故不调 super。
 func _ready() -> void:
 	_refresh_visual()
+	_refresh_visual_state()
 	_refresh_visual_orientation()
 	_refresh_preview()
 
@@ -178,6 +187,34 @@ func _refresh_visual() -> void:
 	if visual == null:
 		return
 	visual.set_profile(visual_profile)
+
+
+## 将当前 default_light_form 对应的内容状态写入 EmitterVisual（配置轴）。
+## 经 ObjectVisualView.set_content_state 正式契约驱动纹理选取，不并行维护第二套纹理切换。
+func _refresh_visual_state() -> void:
+	set_visual_light_form(default_light_form)
+
+
+## 运行期形态→视觉正式入口：把给定 LightForm 数值映射为内容状态并驱动 EmitterVisual。
+## 供 Q 形态切换 / R 恢复初始形态后由关卡核心调用（形态的运行期事实由关卡运行时拥有，本节点只收渲染结果）；
+## 不回写 default_light_form（配置事实与运行期事实分离），不做权限判定（权限门在 LevelRuntimeController）。
+## EmitterVisual 缺失时安全跳过，不创建子节点。
+func set_visual_light_form(light_form: int) -> void:
+	var visual := _get_emitter_visual()
+	if visual == null:
+		return
+	visual.set_content_state(content_state_id_for_light_form(light_form))
+
+
+## 将公共 LightForm 数值映射为内容状态 ID；非法值 push_error 并回退 default，不产生第三态。
+static func content_state_id_for_light_form(light_form: int) -> StringName:
+	match light_form:
+		LightForm.RAY:
+			return STATE_RAY
+		LightForm.PARTICLE:
+			return STATE_PARTICLE
+	push_error("EmitterConfigNode：非法 LightForm 值 %d，内容状态回退 default。" % [light_form])
+	return STATE_DEFAULT
 
 
 ## 将当前活动方向单向同步为 EmitterVisual.rotation；缺失则跳过，不创建子节点（D3C-2.5）。
@@ -213,6 +250,7 @@ func _set_default_light_form(next: LightForm) -> void:
 	if default_light_form == next:
 		return
 	default_light_form = next
+	_refresh_visual_state()
 	_refresh_visual_orientation()
 	_refresh_preview()
 	configuration_changed.emit()
