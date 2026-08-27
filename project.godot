@@ -22,7 +22,7 @@ window/size/viewport_height=1080
 
 [editor_plugins]
 
-enabled=PackedStringArray("res://addons/light_speed_art_profile/plugin.cfg", "res://addons/light_speed_level_authoring/plugin.cfg")
+enabled=PackedStringArray("res://addons/light_speed_level_authoring/plugin.cfg", "res://addons/light_speed_visual_workbench/plugin.cfg")
 
 [input]
 
