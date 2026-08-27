@@ -6,16 +6,10 @@ extends SceneTree
 ## 由 Godot --script 运行，全部通过 quit(0)，任一失败 quit(1)。
 
 const _ResolverScript: GDScript = preload(
-	"res://addons/light_speed_art_profile/target/visual_target_resolver.gd"
+	"res://addons/light_speed_visual_workbench/backend/target/visual_target_resolver.gd"
 )
 const _ResultScript: GDScript = preload(
-	"res://addons/light_speed_art_profile/target/visual_target_result.gd"
-)
-const _PluginScript: GDScript = preload(
-	"res://addons/light_speed_art_profile/plugin.gd"
-)
-const _DockScene: PackedScene = preload(
-	"res://addons/light_speed_art_profile/dock/art_profile_dock.tscn"
+	"res://addons/light_speed_visual_workbench/backend/target/visual_target_result.gd"
 )
 const _ObjectVisualView: GDScript = preload(
 	"res://gameplay/visuals/object_visuals/object_visual_view.gd"
@@ -42,7 +36,6 @@ var _resolver = _ResolverScript.new()
 
 
 func _initialize() -> void:
-	_test_01_plugin_and_dock_parse()
 	_test_02_null_no_selection()
 	_test_03_direct_visual_no_component()
 	_test_04_direct_visual_inside_component()
@@ -56,14 +49,6 @@ func _initialize() -> void:
 	_report()
 	quit(0 if _failures.is_empty() else 1)
 
-
-## 1. 插件入口与 Dock 场景可解析。
-func _test_01_plugin_and_dock_parse() -> void:
-	const NAME: String = "01_插件与Dock可解析"
-	var dock = _DockScene.instantiate()
-	_check(NAME, _PluginScript.source_code.contains("extends EditorPlugin"), "plugin.gd 应继承 EditorPlugin。")
-	_check(NAME, dock is VBoxContainer, "Dock 场景根节点应为 VBoxContainer。")
-	dock.free()
 
 
 ## 2. null 输入返回 NO_TARGET + no_selection。
@@ -229,7 +214,7 @@ func _check(name: String, ok: bool, detail: String) -> void:
 
 ## 输出测试摘要。
 func _report() -> void:
-	var group_count: int = 11
+	var group_count: int = 10
 	var passed_checks: int = _checks - _failures.size()
 	print("==== VisualTargetResolver 选择路径测试摘要 ====")
 	print("测试组数：%d" % group_count)

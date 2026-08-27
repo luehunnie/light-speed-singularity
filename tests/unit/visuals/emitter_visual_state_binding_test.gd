@@ -16,10 +16,10 @@ const _EMITTER_SCRIPT: GDScript = preload(
 const _EMITTER_PROFILE_PATH: String = "res://assets/visual_profiles/emitter_visuals.tres"
 const _CORE_LOOP_SCRIPT_PATH: String = "res://levels/prototypes/core_loop_prototype.gd"
 const _ResolverScript: GDScript = preload(
-	"res://addons/light_speed_art_profile/target/visual_target_resolver.gd"
+	"res://addons/light_speed_visual_workbench/backend/target/visual_target_resolver.gd"
 )
 const _ResultScript: GDScript = preload(
-	"res://addons/light_speed_art_profile/target/visual_target_result.gd"
+	"res://addons/light_speed_visual_workbench/backend/target/visual_target_result.gd"
 )
 const _ObjectVisualProfile: GDScript = preload(
 	"res://gameplay/visuals/object_visuals/object_visual_profile.gd"

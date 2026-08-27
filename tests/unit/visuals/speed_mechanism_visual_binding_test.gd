@@ -23,10 +23,10 @@ const _ACCEL_PROFILE_PATH: String = "res://assets/visual_profiles/particle_accel
 const _DECEL_PROFILE_PATH: String = "res://assets/visual_profiles/particle_decelerator_visuals.tres"
 const _MIRROR_PROFILE_PATH: String = "res://assets/visual_profiles/single_cell_mirror_visuals.tres"
 const _ResolverScript: GDScript = preload(
-	"res://addons/light_speed_art_profile/target/visual_target_resolver.gd"
+	"res://addons/light_speed_visual_workbench/backend/target/visual_target_resolver.gd"
 )
 const _ResultScript: GDScript = preload(
-	"res://addons/light_speed_art_profile/target/visual_target_result.gd"
+	"res://addons/light_speed_visual_workbench/backend/target/visual_target_result.gd"
 )
 const _ObjectVisualProfile: GDScript = preload(
 	"res://gameplay/visuals/object_visuals/object_visual_profile.gd"

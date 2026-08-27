@@ -7,10 +7,10 @@ extends SceneTree
 ## 由 Godot --script 运行，全部通过 quit(0)，任一失败 quit(1)。
 
 const _CatalogScript: GDScript = preload(
-	"res://addons/light_speed_art_profile/browser/art_asset_catalog.gd"
+	"res://addons/light_speed_visual_workbench/backend/browser/art_asset_catalog.gd"
 )
 const _EntryScript: GDScript = preload(
-	"res://addons/light_speed_art_profile/browser/art_asset_entry.gd"
+	"res://addons/light_speed_visual_workbench/backend/browser/art_asset_entry.gd"
 )
 
 var _failures: PackedStringArray = PackedStringArray()

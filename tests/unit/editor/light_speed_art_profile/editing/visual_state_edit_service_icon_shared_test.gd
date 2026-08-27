@@ -7,7 +7,7 @@ extends SceneTree
 ## 由 Godot --script 运行，全部通过 quit(0)，任一失败 quit(1)。
 
 const _EditServiceScript: GDScript = preload(
-	"res://addons/light_speed_art_profile/editing/visual_state_edit_service.gd"
+	"res://addons/light_speed_visual_workbench/backend/editing/visual_state_edit_service.gd"
 )
 const _ObjectVisualProfile: GDScript = preload(
 	"res://gameplay/visuals/object_visuals/object_visual_profile.gd"

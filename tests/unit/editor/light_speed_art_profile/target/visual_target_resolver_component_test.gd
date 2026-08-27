@@ -6,10 +6,10 @@ extends SceneTree
 ## 由 Godot --script 运行，全部通过 quit(0)，任一失败 quit(1)。
 
 const _ResolverScript: GDScript = preload(
-	"res://addons/light_speed_art_profile/target/visual_target_resolver.gd"
+	"res://addons/light_speed_visual_workbench/backend/target/visual_target_resolver.gd"
 )
 const _ResultScript: GDScript = preload(
-	"res://addons/light_speed_art_profile/target/visual_target_result.gd"
+	"res://addons/light_speed_visual_workbench/backend/target/visual_target_result.gd"
 )
 const _ObjectVisualView: GDScript = preload(
 	"res://gameplay/visuals/object_visuals/object_visual_view.gd"

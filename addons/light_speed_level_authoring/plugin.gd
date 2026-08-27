@@ -40,6 +40,9 @@ const HOST_SCENE_PATH: String = "res://gameplay/runtime/level_runtime_host.tscn"
 const _COLOR_VALID: Color = Color(0.25, 1.0, 0.4, 0.30)
 const _COLOR_INVALID: Color = Color(1.0, 0.25, 0.2, 0.38)
 
+# Dock 页签中文标题（仅改用户可见名，不扩大功能）。
+const DOCK_TITLE: String = "关卡编辑器"
+
 var _dock: Control = null
 var _editor_selection: EditorSelection = null
 var _last_selection_transform_hash: int = -1
@@ -47,6 +50,7 @@ var _last_selection_transform_hash: int = -1
 
 func _enter_tree() -> void:
 	_dock = _LevelAuthoringDock.new()
+	_dock.name = DOCK_TITLE
 	_dock.set_editor_bridge(_EditorBridge.new())
 	_dock.set_undo_redo(get_undo_redo())
 	add_control_to_dock(DOCK_SLOT_RIGHT_BL, _dock)
