@@ -153,6 +153,8 @@ const _LevelTileLayerSnapshot: GDScript = preload("res://gameplay/world/level_ti
 const _LevelObjectRegistry: GDScript = preload("res://gameplay/level/level_object_registry.gd")
 # 目标完成事实唯一所有者（D3-D）：按 cell 激活水晶、判断完成、运行期重置水晶；核心只读取 is_completed()/reset_runtime()，不保留第二套目标业务实现。
 const _ObjectiveController: GDScript = preload("res://gameplay/objectives/objective_controller.gd")
+# S3-05 Objective meta 只读解析器：objective_conditions/objective_groups meta → 统一目标模型（无/非法 meta 安全回退水晶原型路径）。
+const _ObjectiveMetaReader: GDScript = preload("res://gameplay/objectives/objective_meta_reader.gd")
 # 固定发射器与发射请求数据；运行期格子和方向唯一所有者为 FixedEmitter，由 EmitterConfigNode 启动快照构造。
 const _FixedEmitter: GDScript = preload("res://gameplay/mechanisms/emitters/fixed_emitter.gd")
 # 发射器关卡配置节点：承载唯一持久化位置事实 position 与光线方向事实 ray_default_direction。
@@ -285,6 +287,11 @@ func _ready() -> void:
 				"水晶注册失败：crystal_id=%s cell=%s" % [crystal.get_crystal_id(), crystal.cell])
 	# 目标完成事实所有者：在 Registry 填充后构造，唯一持有水晶激活/完成判断/运行期重置。
 	_objective_controller = _ObjectiveController.new(_level_object_registry)
+	# S3-05 薄绑定：读内容根 objective meta 构造统一目标模型接入既有 controller 生命周期
+	#（target_id 经 Registry 解析；无 meta/非法形状返回 null 保持原型回退，Reset/run-end 复用 reset_runtime 委托链）。
+	var objective_model: Variant = _ObjectiveMetaReader.build_model(_content_root, _level_object_registry)
+	if objective_model != null:
+		_objective_controller.set_objective_model(objective_model)
 	# 在所有真实依赖初始化后构造只读查询门面；水晶查询走 Registry，机关节点经核心 _resolve_mechanism_node
 	# 只读 Callable 解析（玩家放置映射 PlacementController.get_placed_node 优先，AF-10 起回退预置机关收编映射），
 	# 不共享可写映射。

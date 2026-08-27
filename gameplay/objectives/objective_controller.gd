@@ -9,8 +9,8 @@ extends RefCounted
 ## 不负责运行状态机、pulse_generation、光线传播、光路视觉、库存/放置/拖拽、发射器、UI、Diagnostics、场景树；五态（SETUP/READY_TO_FIRE/PULSE_ACTIVE/MOVE_WINDOW/COMPLETED）仍由运行状态控制器唯一持有，本类不调用其接口。
 ## 完成规则（水晶原型路径）：Registry 无水晶时永远未完成（空集合不误判完成）；所有已登记水晶激活后完成；任一未激活则未完成；重复激活安全无副作用；reset_runtime 后完成事实归 false。
 ## 时间 seam：统一状态依赖窗口超时判定，时间戳经可注入 Callable 取得（测试可控，正式取引擎毫秒钟）。
-## AF-04 刻意不接线（同 AF-02/03 先例）：Ray/Particle 驱动器仍走 try_activate_crystal_at 原型路径；
-##   命中事实改经 ObjectiveHitContext + apply_hit 的接线留 GUI 验收批次。
+## S3-05 运行期接线：Ray/Particle 驱动器命中点已改经 apply_hit(ObjectiveHitContext)（不再直调 try_activate_crystal_at）；
+##   绑定路径命中通过后由本类调用 try_activate_crystal_at 做水晶点亮视觉联动（失败不得点亮）。
 
 
 # 用 preload 引用 LevelObjectRegistry 类型，避开 MCP run_project 不重建全局 class_name 缓存的问题。
@@ -46,7 +46,8 @@ func has_objective_model() -> bool:
 
 
 ## 应用一次目标命中事实（Guide B §25.1 ObjectiveHitContext）。
-## [br]已绑定模型：按格路由求值（条件 AND / Base Success），通过则登记成功并通报所属组，返回是否通过。
+## [br]已绑定模型：按格路由求值（条件 AND / Base Success），通过则登记成功、通报所属组并调用
+## [br]  try_activate_crystal_at 做点亮视觉联动（条件失败不点亮）；返回是否通过。
 ## [br]未绑定模型：等价水晶原型路径（Base Success 语义），委托 try_activate_crystal_at。
 func apply_hit(hit: Variant) -> bool:
 	var hit_context: _ObjectiveHitContext = hit as _ObjectiveHitContext
@@ -54,7 +55,10 @@ func apply_hit(hit: Variant) -> bool:
 		return false
 	if _objective_model == null:
 		return try_activate_crystal_at(hit_context.get_cell())
-	return _objective_model.apply_hit(hit_context, _now_seconds())
+	var passed: bool = _objective_model.apply_hit(hit_context, _now_seconds())
+	if passed:
+		try_activate_crystal_at(hit_context.get_cell())
+	return passed
 
 
 ## 当前时间秒（时间 seam 优先；未注入取引擎毫秒钟）。

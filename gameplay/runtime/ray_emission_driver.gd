@@ -5,7 +5,7 @@ extends RefCounted
 ## 职责（唯一）：接收**已完成 preflight 的 immutable Ray fire data**（generation / emission_id / start_cell / direction），执行一次 Ray 传播并完成本 emission：
 ##   - 防御性校验 immutable direction（失败返回 false，交 LRC rollback；正常路径 LRC 已 preflight，此处为 clean failure boundary）；
 ##   - 调 RayExecutionModule.execute（无副作用纯计算，传入构造期注入的 light_world_query 与冻结 max_steps）；
-##   - 逐 step 应用副作用（同一格先 show_step 再 try_activate_crystal_at——视觉→水晶顺序冻结）；
+##   - 逐 step 应用副作用（同一格先 show_step 再 apply_hit 水晶命中——视觉→水晶顺序冻结，S3-05 起命中经 ObjectiveHitContext）；
 ##   - 应用完 steps 后回调 on_steps_applied（LRC 据此刷新完成标签，driver 不读 Objective 完成真值）；
 ##   - 管理本 Ray 的 visual delay（SceneTreeTimer），到期后回调 finish_emission(generation, emission_id) 交 LRC 聚合结算。
 ## 严禁拥有（硬边界——本驱动绝不做以下任何一项）：
@@ -19,7 +19,7 @@ extends RefCounted
 ##   dispatch 后修改 FixedEmitter 不影响已发 Ray（M4-E2.1 must-fix：消除 _execute_ray_emission 重读 build_fire_request 的 mutable re-read）。
 ## 位置：gameplay/runtime 下；纯执行驱动器，由 LevelRuntimeController 唯一持有；不 preload 任何 controller / Registry / RunState / cooldown / visual event。
 ## 依赖：RayExecutionModule（静态执行）/ RayExecutionResult（结果类型）/ LightEmissionTypes（is_valid_direction 防御性校验）经 preload；
-##   light_visual_controller（show_step）/ objective_controller（try_activate_crystal_at）/ light_world_query（RayExecutionModule.execute 参数）
+##   light_visual_controller（show_step）/ objective_controller（apply_hit；S3-05 起经 ObjectiveHitContext 命中事实）/ light_world_query（RayExecutionModule.execute 参数）
 ##   为构造期注入的共享引用；finish_emission / on_steps_applied 为回调 LRC 的 outward Callable。
 ## 类型约束：调用方一律通过 preload() 引用以避开全局 class_name 缓存问题。
 
@@ -27,11 +27,12 @@ extends RefCounted
 const _RayExecutionModule: GDScript = preload("res://gameplay/light/ray_execution_module.gd")
 const _RayExecutionResult: GDScript = preload("res://gameplay/light/ray_execution_result.gd")
 const _LightEmissionTypes: GDScript = preload("res://gameplay/light/light_emission_types.gd")
+const _ObjectiveHitContext: GDScript = preload("res://gameplay/objectives/objective_hit_context.gd")
 
 
 ## LightVisualController 共享引用（show_step 创建/记录本 emission 的逐格光路视觉）。
 var _light_visual_controller: Variant
-## ObjectiveController 共享引用（try_activate_crystal_at 激活光路上的水晶）。
+## ObjectiveController 共享引用（apply_hit 应用光路上的水晶命中事实；未绑定模型等价原型激活）。
 var _objective_controller: Variant
 ## 只读世界查询（RayExecutionModule.execute 的 world_query 参数；边界/墙体/水晶/机关只读契约）。
 var _light_world_query: Variant
@@ -104,9 +105,11 @@ func dispatch(
 	return true
 
 
-## 逐格按 steps 顺序应用副作用：同一格先创建光路视觉（per-emission，携带 emission_id/generation）再尝试激活水晶；不重新计算路径、不改占用/机关/RunState/库存。
+## 逐格按 steps 顺序应用副作用：同一格先创建光路视觉（per-emission，携带 emission_id/generation）再应用水晶命中；不重新计算路径、不改占用/机关/RunState/库存。
 ## [br]emission_id 使本段视觉归属本次 Ray emission（新 Ray 不清旧 Ray；本 Ray finish 只清自身）；generation 为 visual version metadata（非 gameplay 真值）。
-## [br]顺序冻结：show_step 必须早于 try_activate_crystal_at（与旧 fire_light 循环一致；源码扫描测试锁定本顺序）。
+## [br]顺序冻结：show_step 必须早于 apply_hit 水晶命中（与旧 fire_light 循环一致；源码扫描测试锁定本顺序）。
+## [br]水晶命中（S3-05）：经 ObjectiveHitContext.create_for_ray(cell, 入射方向, emission_id, generation) 构造不可变命中事实交
+## [br]  ObjectiveController.apply_hit——未绑定模型等价旧 try_activate_crystal_at 原型激活；绑定模型按条件路由（通过才点亮）。
 ## [br]反射格（D7-R5 视觉修复）：某格的进入方向与下一步的进入方向不同 = 该格机关改向（镜面）——
 ##   本格改画两段半光束（入射半段 + 出射半段，经 show_reflection_step 在格中心拼出拐角），
 ##   不再画贯穿整格的入射段（旧画法使光束视觉上穿过镜面格远端、且拐角处留半格断口，用户 GUI 验收截图暴露）。
@@ -126,7 +129,12 @@ func _apply_ray_execution_result(result: _RayExecutionResult, emission_id: int, 
 		else:
 			_light_visual_controller.show_step(emission_id, generation, step.cell, step.incoming_direction)
 		if step.has_crystal:
-			_objective_controller.try_activate_crystal_at(step.cell)
+			# S3-05 正式命中点：命中事实经 ObjectiveHitContext.create_for_ray 交 ObjectiveController.apply_hit
+			#（未绑定模型时 apply_hit 等价水晶原型激活；绑定模型时按条件路由，通过才点亮）。
+			var hit: Variant = _ObjectiveHitContext.create_for_ray(
+				step.cell, step.incoming_direction, emission_id, generation)
+			if hit != null:
+				_objective_controller.apply_hit(hit)
 
 
 ## 等待 Ray 视觉持续时间后回调 LRC finish_emission（generation, emission_id）（M4-E2.1 per-emission；driver 管理 visual delay）。

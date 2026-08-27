@@ -165,7 +165,7 @@ func _test_08_ray_execution_called_once() -> void:
 		_check(NAME, env.light_world_query_spy.total_query_calls() > 0, "Ray 执行总查询次数应 >0（实际 %d）。" % [env.light_world_query_spy.total_query_calls()])
 
 
-## 9. 每 step 保持视觉→水晶顺序：M4-E2.1 起 _apply_ray_execution_result 迁入 RayEmissionDriver，扫描其源码确认 show_step 早于 try_activate_crystal_at（不再扫 LRC——Ray 执行细节已拆出）。
+## 9. 每 step 保持视觉→水晶顺序：M4-E2.1 起 _apply_ray_execution_result 迁入 RayEmissionDriver，扫描其源码确认 show_step 早于 apply_hit 水晶命中（S3-05 起经 ObjectiveHitContext；不再扫 LRC——Ray 执行细节已拆出）。
 func _test_09_visual_before_crystal_order() -> void:
 	const NAME: String = "09_视觉早于水晶顺序"
 	var src: String = FileAccess.get_file_as_string("res://gameplay/runtime/ray_emission_driver.gd")
@@ -176,10 +176,10 @@ func _test_09_visual_before_crystal_order() -> void:
 			next_fn = src.length()
 		var body: String = src.substr(fn_start, next_fn - fn_start)
 		var show_idx: int = body.find("_light_visual_controller.show_step")
-		var obj_idx: int = body.find("_objective_controller.try_activate_crystal_at")
+		var obj_idx: int = body.find("_objective_controller.apply_hit")
 		_check(NAME, show_idx != -1, "应调用 show_step。")
-		_check(NAME, obj_idx != -1, "应调用 try_activate_crystal_at。")
-		_check(NAME, show_idx < obj_idx, "视觉创建必须早于水晶激活（show @ %d < objective @ %d）。" % [show_idx, obj_idx])
+		_check(NAME, obj_idx != -1, "应调用 apply_hit。")
+		_check(NAME, show_idx < obj_idx, "视觉创建必须早于水晶命中（show @ %d < objective @ %d）。" % [show_idx, obj_idx])
 
 
 ## 10. SETUP 拒绝正式发射入口：未 begin_runtime（仍 SETUP）时 request_fire 必须被完整拒绝。

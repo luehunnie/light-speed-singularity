@@ -312,7 +312,7 @@ func _test_19_no_state_mutation() -> void:
 		_check(NAME, src.find(token) == -1, "控制器源码不应包含状态/传播相关令牌：%s" % [token])
 
 
-## 20. 应用结果仍保持视觉→水晶顺序（M4-E2.1：_apply_ray_execution_result 迁入 RayEmissionDriver，扫描其源码确认 show_step 早于 try_activate_crystal_at，且无第二套视觉创建实现）。
+## 20. 应用结果仍保持视觉→水晶顺序（M4-E2.1：_apply_ray_execution_result 迁入 RayEmissionDriver，扫描其源码确认 show_step 早于 apply_hit 水晶命中，且无第二套视觉创建实现；S3-05 起命中经 ObjectiveHitContext→apply_hit）。
 func _test_20_wiring_visual_before_crystal() -> void:
 	const NAME: String = "20_视觉→水晶顺序接线"
 	var src: String = FileAccess.get_file_as_string("res://gameplay/runtime/ray_emission_driver.gd")
@@ -323,10 +323,10 @@ func _test_20_wiring_visual_before_crystal() -> void:
 			next_fn = src.length()
 		var body: String = src.substr(fn_start, next_fn - fn_start)
 		var show_idx: int = body.find("_light_visual_controller.show_step")
-		var crystal_idx: int = body.find("try_activate_crystal_at")
+		var crystal_idx: int = body.find("_objective_controller.apply_hit")
 		_check(NAME, show_idx != -1, "_apply_ray_execution_result 应调用 _light_visual_controller.show_step。")
-		_check(NAME, crystal_idx != -1, "_apply_ray_execution_result 应调用 try_activate_crystal_at。")
-		_check(NAME, show_idx < crystal_idx, "视觉创建必须在水晶激活之前（show_step @ %d < try_activate @ %d）。" % [show_idx, crystal_idx])
+		_check(NAME, crystal_idx != -1, "_apply_ray_execution_result 应调用 _objective_controller.apply_hit。")
+		_check(NAME, show_idx < crystal_idx, "视觉创建必须在水晶命中之前（show_step @ %d < apply_hit @ %d）。" % [show_idx, crystal_idx])
 		# 不得保留第二套视觉创建实现。
 		_check(NAME, body.find("add_light_visual") == -1, "不得在 _apply_ray_execution_result 保留 add_light_visual 第二套实现。")
 
@@ -421,14 +421,15 @@ class FakeVisualRecorder:
 		return true
 
 
-## 替身目标记录器：记录 try_activate_crystal_at 的格（供组 22 断言反射格水晶处理不被影响）。
+## 替身目标记录器：记录 apply_hit 收到的命中格（S3-05 起 driver 经 ObjectiveHitContext→apply_hit；供组 22 断言反射格水晶处理不被影响）。
 class FakeObjectiveRecorder:
 	extends RefCounted
 
 	var activated_cells: Array = []
 
-	func try_activate_crystal_at(cell: Vector2i) -> void:
-		activated_cells.append(cell)
+	func apply_hit(hit: Variant) -> bool:
+		activated_cells.append(hit.get_cell())
+		return true
 
 
 ## 四方向映射共用断言：show_step 后片段 _direction 等于传入方向，且该方向映射到预期形态状态。

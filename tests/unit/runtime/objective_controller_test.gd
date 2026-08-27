@@ -307,9 +307,9 @@ func _test_18_core_no_legacy_objective_functions() -> void:
 		_check(NAME, src.find(token) == -1, "核心不应再保留旧目标业务函数/字段：%s" % [token])
 
 
-## 19. 逐 step 接线仍是视觉早于 Objective 激活（M4-E2.1：_apply_ray_execution_result 迁入 RayEmissionDriver，扫描其源码确认 show_step 早于 _objective_controller.try_activate_crystal_at）。
+## 19. 逐 step 接线仍是视觉早于 Objective 命中（M4-E2.1：_apply_ray_execution_result 迁入 RayEmissionDriver；S3-05 起扫描其源码确认 show_step 早于 _objective_controller.apply_hit，命中经 ObjectiveHitContext）。
 func _test_19_wiring_visual_before_objective() -> void:
-	const NAME: String = "19_视觉早于Objective激活"
+	const NAME: String = "19_视觉早于Objective命中"
 	var src: String = FileAccess.get_file_as_string("res://gameplay/runtime/ray_emission_driver.gd")
 	var fn_start: int = src.find("func _apply_ray_execution_result")
 	if _check(NAME, fn_start != -1, "未找到 _apply_ray_execution_result（应在 RayEmissionDriver 内）。"):
@@ -318,10 +318,10 @@ func _test_19_wiring_visual_before_objective() -> void:
 			next_fn = src.length()
 		var body: String = src.substr(fn_start, next_fn - fn_start)
 		var show_idx: int = body.find("_light_visual_controller.show_step")
-		var obj_idx: int = body.find("_objective_controller.try_activate_crystal_at")
+		var obj_idx: int = body.find("_objective_controller.apply_hit")
 		_check(NAME, show_idx != -1, "_apply_ray_execution_result 应调用 _light_visual_controller.show_step。")
-		_check(NAME, obj_idx != -1, "_apply_ray_execution_result 应调用 _objective_controller.try_activate_crystal_at。")
-		_check(NAME, show_idx < obj_idx, "视觉创建必须在 Objective 激活之前（show_step @ %d < objective @ %d）。" % [show_idx, obj_idx])
+		_check(NAME, obj_idx != -1, "_apply_ray_execution_result 应调用 _objective_controller.apply_hit。")
+		_check(NAME, show_idx < obj_idx, "视觉创建必须在 Objective 命中之前（show_step @ %d < apply_hit @ %d）。" % [show_idx, obj_idx])
 
 
 ## 20. Objective 不直接调用运行状态控制器（静态迁移验证：与 test 13 互补，独立列出供回归锁定）。
