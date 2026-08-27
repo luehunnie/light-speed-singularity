@@ -24,13 +24,15 @@ func _initialize() -> void:
 	quit(0 if _failures.is_empty() else 1)
 
 
-## G1 旧插件删除红线：light_speed_art_profile 目录不存在；addons 下仅关卡编辑器与外观编辑器两插件。
+## G1 旧插件删除红线：light_speed_art_profile 目录不存在；addons 下含关卡/外观两插件
+##（S3-04 起合法新增 light_speed_ui_authoring，不再冻结精确目录数）。
 func _test_old_plugin_deleted() -> void:
 	const NAME: String = "G1_旧插件已删除"
 	_check(NAME, not DirAccess.dir_exists_absolute("res://addons/light_speed_art_profile"), "旧 art_profile 插件目录应已删除。")
 	var addons: Array = DirAccess.get_directories_at("res://addons")
-	var expected: Array = ["light_speed_level_authoring", "light_speed_visual_workbench"]
-	_check(NAME, _same_set(addons, expected), "addons 应只剩两个插件目录，实际 %s。" % ", ".join(PackedStringArray(addons)))
+	_check(NAME, addons.has("light_speed_level_authoring") and addons.has("light_speed_visual_workbench"), "addons 应含关卡编辑器与外观编辑器插件，实际 %s。" % ", ".join(PackedStringArray(addons)))
+	for entry: String in addons:
+		_check(NAME, entry.begins_with("light_speed_"), "addons 目录应全为 light_speed_ 家族插件，实际 %s。" % entry)
 
 
 ## G2 Workbench 唯一 UI 注册 + 中文名：恰一次 Dock 注册、DOCK_TITLE 中文化、两插件 cfg 均中文名。
