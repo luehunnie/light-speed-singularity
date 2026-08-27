@@ -33,11 +33,12 @@ class _StubWorldQuery extends RefCounted:
 		return null
 
 
-## 无副作用 Objective stub（driver BatchEvent MOVE.has_crystal → try_activate_crystal_at；本测试无水晶，仅满足签名）。
+## 无副作用 Objective stub（driver BatchEvent MOVE.has_crystal → apply_hit；S3-05 起经 ObjectiveHitContext，本测试无水晶，仅满足签名）。
 class _StubObjective extends RefCounted:
 	var activate_calls: int = 0
-	func try_activate_crystal_at(_cell: Vector2i) -> void:
+	func apply_hit(_hit: Variant) -> bool:
 		activate_calls += 1
+		return true
 
 
 ## 重入 sink：on_drained 回调内同步 emit 新 Particle + start_pump_if_idle（模拟上层在 drained callback 中产生新粒）。

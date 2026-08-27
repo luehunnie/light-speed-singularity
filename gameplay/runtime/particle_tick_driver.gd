@@ -14,7 +14,7 @@ extends RefCounted
 ##   （gen 仍匹配 + 仍 PULSE_ACTIVE + scheduler.is_drained() 仍 true）才 on_drained。TERMINATE callback 同步创建新 Particle 时不再 drained →
 ##   旧链 return false 停止、新泵由 callback 启动、**不报告** subsystem drained（杜绝 stale on_drained 与“有粒无泵”）。
 ## 位置：gameplay/runtime 下；纯驱动协作器，由 LevelRuntimeController 唯一持有；不拥有 RunState/Objective/Registry/Cooldown/generation 真值——全部经 ref / Callable 读 LRC。
-## 依赖：scheduler（ParticleScheduler 引用，advance/snapshot/get_current_*/is_drained）、pump（ParticleTickPump 或测试替身，run 签名一致）、objective（try_activate_crystal_at）、
+## 依赖：scheduler（ParticleScheduler 引用，advance/snapshot/get_current_*/is_drained）、pump（ParticleTickPump 或测试替身，run 签名一致）、objective（apply_hit 水晶命中）、
 ##   publish_event Callable（发布 TICK_BATCH_COMMITTED）、get_generation Callable（读 _runtime_generation 真值）、is_pulse_active Callable、
 ##   on_particle_terminated Callable（→ LRC._on_particle_terminated，逐 runtime 结算）、on_drained Callable（→ LRC._on_particle_subsystem_drained，纯技术停泵事实）。
 ## 不负责（硬边界）：不自增 / 自产 generation（真值 LRC._runtime_generation）；不操作 RunState / Registry / Cooldown；不知 emission_id（TERMINATE 只上报 runtime_id，emission 反查归 LRC/Registry）；
@@ -24,13 +24,14 @@ extends RefCounted
 
 const _ParticleStepExecutor: GDScript = preload("res://gameplay/particle/particle_step_executor.gd")
 const _ParticleVisualEvent: GDScript = preload("res://gameplay/visuals/particles/particle_visual_event.gd")
+const _ObjectiveHitContext: GDScript = preload("res://gameplay/objectives/objective_hit_context.gd")
 
 
 ## ParticleScheduler 引用（advance_one_tick / is_drained / get_current_* / get_particle_state_snapshot）。scheduler 由 LRC 拥有，本类持共享引用。
 var _scheduler: Variant
 ## ParticleTickPump 引用（正式 / 测试替身，run 签名一致）。pump 由 LRC 注入本类驱动。
 var _pump: Variant
-## ObjectiveController 引用（BatchEvent MOVE.has_crystal → try_activate_crystal_at）。
+## ObjectiveController 引用（BatchEvent MOVE.has_crystal → apply_hit 水晶命中；S3-05 起经 ObjectiveHitContext）。
 var _objective: Variant
 ## 发布 TICK_BATCH_COMMITTED 的 outward Callable（与 LRC 同源，转发 builder 产物）。
 var _publish_event: Callable
@@ -102,7 +103,7 @@ func on_tick(expected_generation: int) -> bool:
 	if not bool(_is_pulse_active.call()):
 		_pump_active = false
 		return false
-	# ③ 推进一个整数 Tick + 应用本批 BatchEvents（Crystal 命中经 ObjectiveController 现有入口激活）+ 发布 TICK_BATCH_COMMITTED。
+	# ③ 推进一个整数 Tick + 应用本批 BatchEvents（Crystal 命中经 ObjectiveController.apply_hit 激活）+ 发布 TICK_BATCH_COMMITTED。
 	var events: Array = _process_tick(expected_generation)
 	# ④ 技术 drain 快照（无活动光粒）；仅用于停泵判定，不直接完成 emission / RunState。
 	var drained_provisional: bool = _scheduler.is_drained()
@@ -139,9 +140,21 @@ func _process_tick(expected_generation: int) -> Array:
 	return events
 
 
-## 按返回顺序应用一整批 BatchEvents；本批只消费 MOVE.has_crystal → ObjectiveController.try_activate_crystal_at。
+## 按返回顺序应用一整批 BatchEvents；本批只消费 MOVE.has_crystal → ObjectiveController.apply_hit 水晶命中。
+## [br]命中事实（S3-05）：经 ObjectiveHitContext.create_for_particle 构造——cell=entered_cell、入射方向=from_cell→entered_cell
+## [br]  （一步一格的进入方向；与事件 direction 离开方向区分）、emission_id/speed_tier 用事件既有值、generation 用事件 generation 快照；
+## [br]  构造非法（方向/档位越界）时 hit 为 null（构造方已 push_error），安全跳过本次命中。
+## [br]未绑定模型时 apply_hit 等价旧 try_activate_crystal_at 原型激活；绑定模型按条件路由（通过才点亮）。
 ## TERMINATE 不在此处理——scheduler 已完成 terminate + 批后移出；on_tick 据本批返回的 events 逐条 TERMINATE 上报 LRC（M4-E2 per-runtime 结算）。
 func _apply_batch_events(events: Array) -> void:
 	for event in events:
 		if event.outcome == _ParticleStepExecutor.Outcome.MOVE and event.has_crystal:
-			_objective.try_activate_crystal_at(event.entered_cell)
+			var hit: Variant = _ObjectiveHitContext.create_for_particle(
+				event.entered_cell,
+				event.entered_cell - event.from_cell,
+				event.emission_id,
+				event.generation,
+				event.speed_tier
+			)
+			if hit != null:
+				_objective.apply_hit(hit)

@@ -61,6 +61,7 @@ func _init(world_query: Variant) -> void:
 
 ## 单个 Tick 批次事件（有序产出，供未来 LRC 只读读取）。
 ## [br]runtime_id / generation：身份与版本。
+## [br]emission_id：本次发射身份（S3-05 纯加法；state.emission_id 透传，默认 0 = 未关联）。
 ## [br]outcome：MOVE / TERMINATE（值同 ParticleStepExecutor.Outcome）。
 ## [br]from_cell：本步起始格（移动前 cell）。
 ## [br]entered_cell：MOVE 时为进入格；TERMINATE 时为被阻挡的尝试格（未进入）。
@@ -78,6 +79,8 @@ class BatchEvent:
 
 	var runtime_id: int = 0
 	var generation: int = 0
+	## 发射身份透传（S3-05 纯加法；emit_particle 时写入 state，事件构造时读回）。
+	var emission_id: int = 0
 	var outcome: int = _ParticleStepExecutor.Outcome.MOVE
 	var from_cell: Vector2i = Vector2i.ZERO
 	var entered_cell: Vector2i = Vector2i.ZERO
@@ -222,6 +225,7 @@ func _apply_move_event(
 	var ev: BatchEvent = BatchEvent.new()
 	ev.runtime_id = runtime_id
 	ev.generation = state.get_generation()
+	ev.emission_id = state.get_emission_id()
 	ev.outcome = _ParticleStepExecutor.Outcome.MOVE
 	ev.from_cell = from_cell
 	ev.entered_cell = result.entered_cell
@@ -251,6 +255,7 @@ func _apply_terminate_event(
 	var ev: BatchEvent = BatchEvent.new()
 	ev.runtime_id = runtime_id
 	ev.generation = state.get_generation()
+	ev.emission_id = state.get_emission_id()
 	ev.outcome = _ParticleStepExecutor.Outcome.TERMINATE
 	ev.from_cell = from_cell
 	ev.entered_cell = result.entered_cell
