@@ -44,6 +44,7 @@ func _initialize() -> void:
 	_test_03_set_content_state_drives_artwork()
 	_test_04_inventory_icons_non_null()
 	_test_05_resolver_selects_mechanism_visual()
+	await _test_06_direction_rotation_and_arrow_fallback()
 	_report()
 	quit(0 if _failures.is_empty() else 1)
 
@@ -165,7 +166,7 @@ func _test_03_set_content_state_drives_artwork() -> void:
 func _test_04_inventory_icons_non_null() -> void:
 	const NAME: String = "04_三图标非空"
 	var icon_cases: Array = [
-		[_MIRROR_PROFILE_PATH, "flat_mirror.png", "镜面"],
+		[_MIRROR_PROFILE_PATH, "mirror_slash.png", "镜面"],
 		[_ACCEL_PROFILE_PATH, "light_up_speed_mechine.png", "加速器"],
 		[_DECEL_PROFILE_PATH, "light_down_speed_mechine.png", "减速器"],
 	]
@@ -205,6 +206,64 @@ func _test_05_resolver_selects_mechanism_visual() -> void:
 		_check(NAME, result.get_component_root() == node, "%s 组件根应为机关自身。" % entry[1])
 		node.free()
 
+## 6. direction 派生 Artwork 旋转 + DebugArrow 占位后备语义：
+##    旋转基准 = 加速器贴图（light_up，绿箭头绘制朝左）PI / 减速器贴图（light_down，红箭头绘制朝右）0；
+##    RIGHT/LEFT/UP 三档角度逐一按模 2π 对表（非公式回声；-π 与 +π 视觉等价按模判定，非边界 wrapf）；
+##    正式纹理可解析时箭头隐藏；profile 置空（纹理缺失）时箭头显示且末点指向 direction（DOWN → (0,28)）。
+##    headless --script 下 _initialize 不泵帧、_ready 不触发，故 add_child 后 await process_frame
+##    等 _ready/_refresh_direction_visual 完成再断言（repo 既有异步边界约定）。
+func _test_06_direction_rotation_and_arrow_fallback() -> void:
+	const NAME: String = "06_方向旋转与箭头后备"
+	var cases: Array = [
+		# [场景, 标签, RIGHT 期望角, LEFT 期望角(wrap), UP 期望角(wrap), LEFT/UP/DOWN 枚举值]
+		[_ACCEL_SCENE, "加速器", PI, 0.0, PI / 2.0, _ACCEL_SCRIPT.AcceleratorDirection.LEFT,
+			_ACCEL_SCRIPT.AcceleratorDirection.UP, _ACCEL_SCRIPT.AcceleratorDirection.DOWN],
+		[_DECEL_SCENE, "减速器", PI, 0.0, PI / 2.0, _DECEL_SCRIPT.DeceleratorDirection.LEFT,
+			_DECEL_SCRIPT.DeceleratorDirection.UP, _DECEL_SCRIPT.DeceleratorDirection.DOWN],
+	]
+	for entry: Array in cases:
+		var node: Node = (entry[0] as PackedScene).instantiate()
+		root.add_child(node)
+		await process_frame
+		var view: Node = node.get_node("VisualView")
+		var artwork: TextureRect = view.get_node("Artwork")
+		var arrow: Line2D = node.get_node("DebugArrow")
+		_check(
+			NAME,
+			is_equal_approx(wrapf(artwork.rotation - entry[2], -PI, PI), 0.0),
+			"%s 默认 RIGHT 旋转角（模 2π）期望 %f，实际 %f。" % [entry[1], entry[2], artwork.rotation]
+		)
+		_check(NAME, arrow.visible == false, "%s 正式纹理可解析时 DebugArrow 应隐藏。" % entry[1])
+		_check(
+			NAME,
+			artwork.pivot_offset == Vector2(32.0, 32.0),
+			"%s 旋转 pivot 应为纹理中心 (32,32)，实际 (%f,%f)。"
+				% [entry[1], artwork.pivot_offset.x, artwork.pivot_offset.y]
+		)
+		node.set_direction(entry[5])
+		_check(
+			NAME,
+			is_equal_approx(wrapf(artwork.rotation - entry[3], -PI, PI), 0.0),
+			"%s LEFT 旋转角（模 2π）期望 %f，实际 %f。" % [entry[1], entry[3], artwork.rotation]
+		)
+		_check(NAME, arrow.visible == false, "%s LEFT 下纹理可解析时 DebugArrow 仍应隐藏。" % entry[1])
+		node.set_direction(entry[6])
+		_check(
+			NAME,
+			is_equal_approx(wrapf(artwork.rotation - entry[4], -PI, PI), 0.0),
+			"%s UP 旋转角（模 2π）期望 %f，实际 %f。" % [entry[1], entry[4], artwork.rotation]
+		)
+		# 纹理缺失后备：置空 profile 后箭头显示且末点指向 direction（DOWN → (0,28)）。
+		view.set_profile(null)
+		node.set_direction(entry[7])
+		_check(NAME, arrow.visible == true, "%s 纹理缺失时 DebugArrow 应显示（占位后备）。" % entry[1])
+		_check(
+			NAME,
+			arrow.points[1] == Vector2(0.0, 28.0),
+			"%s 纹理缺失时箭头末点应指向 DOWN (0,28)，实际 %s。" % [entry[1], arrow.points[1]]
+		)
+		node.free()
+
 
 # ===== 断言与报告 =====
 
@@ -217,7 +276,7 @@ func _check(name: String, ok: bool, detail: String) -> void:
 
 ## 输出测试摘要。
 func _report() -> void:
-	var group_count: int = 7
+	var group_count: int = 8
 	var passed_checks: int = _checks - _failures.size()
 	print("==== 速度机关视觉绑定测试摘要 ====")
 	print("测试组数：%d" % group_count)

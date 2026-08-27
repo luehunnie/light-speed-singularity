@@ -10,10 +10,12 @@ extends PlaceableToken
 ## 拖拽预览复用同一内容状态，drag_texture 缺失时由 profile 自动回退到同状态 world_texture。
 ## 位置：gameplay/mechanisms/speed/ 下的第一个速度型机关。
 ## 依赖：PlaceableToken 的通用放置/拖拽显示模式与反馈、ObjectVisualView 的内容状态接口、Vector2i 八方向整数向量，
-## 以及本场景内作为调试后备的 DebugArrow 节点（正式纹理由 VisualView 承载，箭头默认隐藏）。
+## 以及本场景内作为调试后备的 DebugArrow 节点（正式纹理由 VisualView 承载，箭头仅在纹理缺失时显示）。
 ## 不负责：OccupancyRegistry 写入、库存、RunState 权限判断、鼠标输入、光粒传播循环、水晶点亮、通关判断。
-## 关键规则：direction 是方向的唯一事实来源；图片不得反过来决定逻辑；方向修改仅允许 SETUP，
-## 由关卡控制器在调用 cycle_direction() 前判断；速度修正仅对光粒形态生效。
+## 关键规则：direction 是方向的唯一事实来源；图片不得反过来决定逻辑；八方向向量与顺时针轮转事实
+## 唯一来源为 DirectionDomain（Guide §18，经 speed_direction_rules 换算，本脚本不自建映射表）；
+## 方向修改权限由关卡控制器统一限定在 SETUP；固定预放置的初始方向可经 Inspector/Typed 配置写入；
+## 速度修正仅对光粒形态生效。
 
 
 enum AcceleratorDirection {
@@ -29,19 +31,28 @@ enum AcceleratorDirection {
 
 
 ## 当前加速方向，是加速判定和视觉外观的唯一事实来源。
-## [br]默认 RIGHT 表示从机关栏新拿出的加速器箭头指向 →。
-var direction: AcceleratorDirection = AcceleratorDirection.RIGHT
+## [br]固定预放置实例可在 Inspector 中配置初始方向；默认 RIGHT 表示从机关栏新拿出的加速器箭头指向 →。
+@export_group("光粒方向")
+@export var direction: AcceleratorDirection = AcceleratorDirection.RIGHT : set = set_direction
 
 # 正式光交互契约（Guide §21）：形态声明入口 + interact_particle 入口；Result 经 preload 引用。
 const _LightInteractionResult: GDScript = preload(
 	"res://gameplay/light/interaction/light_interaction_result.gd"
 )
+# 速度机关方向公共规则（S3-01 统一八方向 API）：向量/轮转事实经此收敛到唯一 DirectionDomain。
+const _SpeedDirectionRules: GDScript = preload(
+	"res://gameplay/mechanisms/speed/speed_direction_rules.gd"
+)
 # Typed Configuration 类型引用继承 PlaceableToken._MechanismConfiguration（AF-03 / P0-4 apply_configuration 覆写）。
 # 本类型的正式 Stable Field ID（内容 Schema 身份，Guide §11.3）：加速方向字段（枚举值序与 AcceleratorDirection 一致）。
 const FIELD_DIRECTION: StringName = &"direction"
 
-# 调试箭头节点：正式纹理配置正常时默认隐藏，仅作占位后备，不参与玩法状态。
+# 调试箭头节点：正式纹理可解析时隐藏，仅作纹理缺失时的占位后备，不参与玩法状态。
 @onready var _debug_arrow: Line2D = $DebugArrow
+
+# 当前占位贴图（light_up_speed_mechine.png）的箭头绘制基准朝向为左（angle = PI）：
+# 程序旋转把该贴图转到 direction 实际指向。正式分方向美术落位后应把基准改为 0（贴图朝右）或移除程序旋转。
+const _ARTWORK_BASE_ANGLE: float = PI
 
 # 内容状态 ID 契约：必须与 particle_accelerator_visuals.tres 中 states 的 state_id 保持一致。
 const STATE_RIGHT: StringName = &"right"
@@ -65,25 +76,32 @@ func _ready() -> void:
 
 ## 按当前 direction 刷新视觉：写入 ObjectVisualView 内容状态，并更新调试箭头方向。
 ## [br]本函数无参数、无返回值。
-## [br]副作用：调用 _visual_view.set_content_state() 切换方向纹理，并更新 DebugArrow.points（调试后备，节点默认隐藏）。
+## [br]副作用：调用 _visual_view.set_content_state() 切换方向纹理并按 direction 派生 Artwork 旋转角，
+## 正式纹理可解析时隐藏 DebugArrow、缺失时显示并刷新其点位（占位后备）。
 ## [br]边界条件：若节点尚未 ready 则安全返回，避免在 @onready 变量初始化前解引用；
-## 切换显示模式（WORLD/DRAG_PREVIEW）不会改变内容状态，因此拖拽预览保留当前方向图片。
+## 切换显示模式（WORLD/DRAG_PREVIEW）不会改变内容状态与旋转，因此拖拽预览保留当前方向图片。
 func _refresh_direction_visual() -> void:
 	if not is_node_ready():
 		return
 
 	_visual_view.set_content_state(_content_state_id_for_direction())
+	_visual_view.set_artwork_rotation(
+		Vector2(direction_to_vector(direction)).angle() - _ARTWORK_BASE_ANGLE
+	)
 
-	var arrow_end: Vector2i = direction_to_vector(direction) * 28
-	_debug_arrow.points = PackedVector2Array([Vector2.ZERO, Vector2(arrow_end)])
+	var has_artwork: bool = _visual_view.has_resolved_texture()
+	_debug_arrow.visible = not has_artwork
+	if not has_artwork:
+		var arrow_end: Vector2i = direction_to_vector(direction) * 28
+		_debug_arrow.points = PackedVector2Array([Vector2.ZERO, Vector2(arrow_end)])
 
 
 ## 设置加速器的内部方向配置。
 ## [br]new_dir 是目标 AcceleratorDirection。
 ## [br]无返回值；副作用是写入 direction 并通过 _refresh_direction_visual() 同步视觉内容状态。
 ## [br]失败条件：传入 0~7 范围外的值时输出错误并保持原方向。
-## [br]边界条件：本函数不自行判断 SETUP/PULSE_ACTIVE/MOVE_WINDOW/COMPLETED；
-## 方向修改权限由关卡控制器的 can_edit_configuration() 控制；
+## [br]边界条件：本函数不自行判断运行状态；玩家交互权限由关卡控制器统一限定在 SETUP，
+## 固定预放置的初始方向可经 Inspector/apply_configuration 写入；
 ## 所有 direction 变化后立即同步视觉状态，保证图片与逻辑始终读取同一方向事实。
 func set_direction(new_dir: AcceleratorDirection):
 	if new_dir < 0 or new_dir > 7:
@@ -96,11 +114,10 @@ func set_direction(new_dir: AcceleratorDirection):
 
 ## 顺时针循环切换加速方向：RIGHT → DOWN_RIGHT → ... → UP_RIGHT → RIGHT。
 ## [br]本函数无参数、无返回值。
-## [br]副作用：通过 (direction + 1) % 8 修改 direction 并刷新视觉。
-## [br]边界条件：本函数只表达内部配置变化本身；是否允许玩家右键触发由关卡控制器判断，当前仅 SETUP 可触发。
+## [br]副作用：经 speed_direction_rules.cycle_clockwise（DirectionDomain 唯一顺序事实）修改 direction 并刷新视觉。
+## [br]边界条件：本函数只表达内部配置变化本身；玩家右键只由关卡控制器在 SETUP 调用。
 func cycle_direction() -> void:
-	direction = (direction + 1) % 8 as AcceleratorDirection
-	_refresh_direction_visual()
+	set_direction(_SpeedDirectionRules.cycle_clockwise(direction))
 
 
 ## 正式 Typed Configuration 应用（AF-03 / P0-4，覆写 PlaceableToken 契约）：
@@ -150,27 +167,10 @@ func _content_state_id_for_direction() -> StringName:
 ## 把 AcceleratorDirection 枚举值转换为对应的八方向单位向量。
 ## [br]dir 是目标方向枚举值。
 ## [br]返回 Vector2i 方向向量；非法方向返回 Vector2i.ZERO。
-## [br]本静态函数无副作用，不依赖实例状态，可供启动自检直接调用验证。
+## [br]本静态函数无副作用，不依赖实例状态，可供启动自检直接调用验证；
+## 向量事实唯一来源为 DirectionDomain（经 speed_direction_rules 换算，本脚本不自建映射表）。
 static func direction_to_vector(dir: AcceleratorDirection) -> Vector2i:
-	match dir:
-		AcceleratorDirection.RIGHT:
-			return Vector2i(1, 0)
-		AcceleratorDirection.DOWN_RIGHT:
-			return Vector2i(1, 1)
-		AcceleratorDirection.DOWN:
-			return Vector2i(0, 1)
-		AcceleratorDirection.DOWN_LEFT:
-			return Vector2i(-1, 1)
-		AcceleratorDirection.LEFT:
-			return Vector2i(-1, 0)
-		AcceleratorDirection.UP_LEFT:
-			return Vector2i(-1, -1)
-		AcceleratorDirection.UP:
-			return Vector2i(0, -1)
-		AcceleratorDirection.UP_RIGHT:
-			return Vector2i(1, -1)
-		_:
-			return Vector2i.ZERO
+	return _SpeedDirectionRules.direction_to_vector(dir)
 
 
 ## 启动自检：验证 8 方向向量映射无零向量返回。

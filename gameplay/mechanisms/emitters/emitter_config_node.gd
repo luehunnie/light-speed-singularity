@@ -15,10 +15,28 @@ extends GridPlacedObject
 ## 形态事实来源：公共 LightForm 契约为 LightEmissionTypes.LightForm（RAY=0/PARTICLE=1，冻结）；
 ##   本类 LightForm 枚举为 Inspector / 旧场景 / 旧测试兼容别名，数值与公共契约逐一对齐，合法性校验走公共契约。
 ## 方向映射：枚举到稳定 Vector2i 的换算唯一入口为 ray_direction_to_vector / particle_direction_to_vector，
-##   不在他处重复维护映射表；输出方向合法性统一由公共 LightEmissionTypes.is_valid_direction 判定，本类不另立八方向合法集合。
+##   向量与顺时针顺序事实唯一来源为 DirectionDomain（Guide §18 冻结，S3-01 统一八方向 API），本类不自建第二份向量表；
+##   输出方向合法性统一由公共 LightEmissionTypes.is_valid_direction 判定，本类不另立八方向合法集合。
 
 ## 公共光形态契约唯一来源（preload 避开全局 class 缓存问题）；本类 LightForm 仅作兼容别名，合法性校验委派此模块。
 const _LightEmissionTypes: GDScript = preload("res://gameplay/light/light_emission_types.gd")
+
+## 唯一八方向 Domain（Guide §18 冻结）：枚举换算的向量与顺序事实唯一来源。
+const _DirectionDomain: GDScript = preload("res://gameplay/light/direction_domain.gd")
+
+## RayDirection 枚举值序与 DirectionDomain.CLOCKWISE_ORDER 下标一一对齐（同序声明，unification 测试锁定）。
+## ParticleDirection 旧四正方向数值冻结（RIGHT=0/DOWN=1/LEFT=2/UP=3）+ 斜向追加，与 CLOCKWISE_ORDER 下标不同序，
+## 故按冻结数值建立「枚举值 → DirectionDomain token」桥（元素引用 Domain 常量，不复制 token 字符串或向量事实）。
+const _PARTICLE_DIRECTION_TOKENS: Array[StringName] = [
+	_DirectionDomain.CLOCKWISE_ORDER[0],
+	_DirectionDomain.CLOCKWISE_ORDER[2],
+	_DirectionDomain.CLOCKWISE_ORDER[4],
+	_DirectionDomain.CLOCKWISE_ORDER[6],
+	_DirectionDomain.CLOCKWISE_ORDER[1],
+	_DirectionDomain.CLOCKWISE_ORDER[3],
+	_DirectionDomain.CLOCKWISE_ORDER[5],
+	_DirectionDomain.CLOCKWISE_ORDER[7],
+]
 
 signal configuration_changed
 signal visual_profile_changed(profile: ObjectVisualProfile)
@@ -106,34 +124,22 @@ const STATE_PARTICLE: StringName = &"particle"
 # ===== 方向映射（枚举到 Vector2i 的唯一入口） =====
 
 ## RayDirection 到稳定 Vector2i 的唯一映射；非法值 push_error 并返回 ZERO。
+## 向量事实唯一来源为 DirectionDomain.to_vector（枚举值序与 CLOCKWISE_ORDER 对齐，本函数只做越界守卫）。
 static func ray_direction_to_vector(direction: RayDirection) -> Vector2i:
-	match direction:
-		RayDirection.RIGHT: return Vector2i(1, 0)
-		RayDirection.DOWN_RIGHT: return Vector2i(1, 1)
-		RayDirection.DOWN: return Vector2i(0, 1)
-		RayDirection.DOWN_LEFT: return Vector2i(-1, 1)
-		RayDirection.LEFT: return Vector2i(-1, 0)
-		RayDirection.UP_LEFT: return Vector2i(-1, -1)
-		RayDirection.UP: return Vector2i(0, -1)
-		RayDirection.UP_RIGHT: return Vector2i(1, -1)
-	push_error("EmitterConfigNode：非法 RayDirection 值 %d。" % [direction])
-	return Vector2i.ZERO
+	if direction < 0 or direction >= _DirectionDomain.CLOCKWISE_ORDER.size():
+		push_error("EmitterConfigNode：非法 RayDirection 值 %d。" % [direction])
+		return Vector2i.ZERO
+	return _DirectionDomain.to_vector(_DirectionDomain.CLOCKWISE_ORDER[direction])
 
 
 ## ParticleDirection 到稳定 Vector2i 的唯一映射（八方向）；非法值 push_error 并返回 ZERO。
+## 向量事实唯一来源为 DirectionDomain.to_vector，经 _PARTICLE_DIRECTION_TOKENS 按冻结枚举数值桥接；
 ## 输出八个向量经 LightEmissionTypes.is_valid_direction 全部合法，与光线方向向量共用同一公共合法集合。
 static func particle_direction_to_vector(direction: ParticleDirection) -> Vector2i:
-	match direction:
-		ParticleDirection.RIGHT: return Vector2i(1, 0)
-		ParticleDirection.DOWN: return Vector2i(0, 1)
-		ParticleDirection.LEFT: return Vector2i(-1, 0)
-		ParticleDirection.UP: return Vector2i(0, -1)
-		ParticleDirection.DOWN_RIGHT: return Vector2i(1, 1)
-		ParticleDirection.DOWN_LEFT: return Vector2i(-1, 1)
-		ParticleDirection.UP_LEFT: return Vector2i(-1, -1)
-		ParticleDirection.UP_RIGHT: return Vector2i(1, -1)
-	push_error("EmitterConfigNode：非法 ParticleDirection 值 %d。" % [direction])
-	return Vector2i.ZERO
+	if direction < 0 or direction >= _PARTICLE_DIRECTION_TOKENS.size():
+		push_error("EmitterConfigNode：非法 ParticleDirection 值 %d。" % [direction])
+		return Vector2i.ZERO
+	return _DirectionDomain.to_vector(_PARTICLE_DIRECTION_TOKENS[direction])
 
 
 # ===== 合法性校验 =====

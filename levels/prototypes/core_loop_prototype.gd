@@ -119,7 +119,6 @@ const _SingleCellMirrorScene: PackedScene = preload("res://gameplay/mechanisms/m
 # direction 唯一事实与八方向循环逻辑唯一存在于各机关脚本，核心保持「只转发、不实现」的边界。
 const _ParticleAccelerator: GDScript = preload("res://gameplay/mechanisms/speed/particle_accelerator.gd")
 const _ParticleDecelerator: GDScript = preload("res://gameplay/mechanisms/speed/particle_decelerator.gd")
-
 const _InventorySlotViewScript: GDScript = preload("res://gameplay/ui/inventory_slot_view.gd")
 # D7-3 正式「开始运行」UI 视图：拥有按钮/状态提示/invalid 最小反馈，只由真实 RunState 驱动；core_loop 只构造接线与公开转发。
 const _RunStartView: GDScript = preload("res://gameplay/ui/run_start_view.gd")
@@ -572,7 +571,8 @@ func get_mechanism_at(cell: Vector2i) -> StringName:
 ## action token 由 Definition.player_interaction_actions 声明（镜面 cycle_internal_state、加减速器 cycle_direction），
 ## 全程无类型分支；但 DefinitionSpawnService 官方声明本批不接线 core_loop（mechanism_id → stable_id 身份迁移
 ## 留待 GUI 验收批次），故此处以 is/as 类型分发临时承担「动作 → 机关方法」映射，迁移时整段替换为 execute_action。
-## [br]权限：仅 SETUP（can_edit_configuration 把关）；预置机关经 has_placed 守卫保持只读（本轮不开放右键）。
+## [br]权限：所有内部配置仅 SETUP 可编辑；固定预放置不入 PlacementController 放置表，始终拒绝右键，
+## 初始方向仅由 Inspector/Typed 配置写入；玩家库存放置实例只在 SETUP 内允许右键轮转。
 func _try_toggle_mechanism_at_mouse() -> void:
 	if is_dragging():
 		return
@@ -580,13 +580,12 @@ func _try_toggle_mechanism_at_mouse() -> void:
 	if _is_mouse_over_inventory_bar(viewport_mouse_position):
 		return
 	if not can_edit_configuration():
-		if OS.is_debug_build():
-			print_debug("CoreLoopPrototype: 当前运行状态锁定内部配置，忽略机关右键切换：%s。" % [_get_current_run_state()])
 		return
 
 	var target_cell: Vector2i = _GridCoordinateRules.world_to_cell(get_global_mouse_position())
 	var mechanism_id: StringName = get_mechanism_at(target_cell)
-	if mechanism_id == &"" or not _placement_controller.has_placed(mechanism_id):
+	var is_player_placed: bool = mechanism_id != &"" and _placement_controller.has_placed(mechanism_id)
+	if not is_player_placed:
 		return
 
 	var token: Variant = _placement_controller.get_placed_node(mechanism_id)
@@ -598,7 +597,8 @@ func _try_toggle_mechanism_at_mouse() -> void:
 ## 过渡：把「循环内部配置」动作映射到具体机关方法。
 ## [br]Guide §12 禁止 Runtime UI 做类型判断，正式方案由 PlayerInteractionActionService 按 action token 驱动；
 ## 本函数是身份迁移前的临时映射器，未来接入 DefinitionSpawnService 后删除本函数、改调 execute_action。
-## [br]边界：方向/朝向事实与循环逻辑唯一存在于各机关脚本（toggle_orientation / cycle_direction），核心不复制。
+## [br]边界：方向/朝向事实与循环逻辑唯一存在于各机关脚本（toggle_orientation / cycle_direction），核心不复制；
+## 权限已由调用入口统一执行 can_edit_configuration（SETUP-only）及 has_placed 注册身份守卫。
 func _apply_cycle_configuration_action(token: Variant) -> void:
 	if token is SingleCellMirror:
 		(token as SingleCellMirror).toggle_orientation()
