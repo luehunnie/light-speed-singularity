@@ -78,12 +78,7 @@
 - Global UI Visual Theme；
 - 其它正式视觉资源。
 
-现有 `addons/light_speed_art_profile/` 不再作为长期独立主入口，应逐步：
-
-- 保留有价值的底层 Resource / Resolver 能力；
-- 作为 Workbench 后端 Adapter；
-- 或被迁移吸收；
-- 禁止形成“旧 Art Profile 插件 + 新 Workbench”两个互相竞争的正式入口。
+原 `addons/light_speed_art_profile/` 已按本方向完成迁移吸收（旧插件删除，有价值的底层 Resource / Resolver 能力并入 Workbench 后端）。禁止恢复“旧 Art Profile 插件 + 新 Workbench”两个互相竞争的正式入口。
 
 ---
 
