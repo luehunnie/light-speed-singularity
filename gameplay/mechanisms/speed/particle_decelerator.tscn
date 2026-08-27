@@ -12,6 +12,7 @@ visual_profile = ExtResource("3_profile")
 initial_state_id = &"right"
 
 [node name="DebugArrow" type="Line2D" parent="." unique_id=229045295]
+visible = false
 points = PackedVector2Array(0, 0, 28, 0)
 width = 4.0
 default_color = Color(0.3, 0.4, 1, 1)

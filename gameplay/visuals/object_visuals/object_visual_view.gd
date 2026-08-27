@@ -192,6 +192,29 @@ func set_visual_visible(next_visible: bool) -> void:
 	visible = next_visible
 
 
+## 设置 Artwork 纹理的显示旋转（弧度，绕纹理中心；供单张贴图承载多方向语义的机关按方向事实派生）。
+## [br]angle 是目标旋转角（弧度）。
+## [br]无返回值；副作用：把 Artwork 的 pivot_offset 设为自身尺寸中心并写入 rotation。
+## [br]边界条件：_artwork 未就绪（_ready 前）时安全返回、不抛错；本函数不触碰纹理、内容状态、
+## 显示模式与反馈——refresh_visual() 只换 texture 不重置 rotation，旋转在状态/模式切换间自然保留。
+func set_artwork_rotation(angle: float) -> void:
+	if _artwork == null:
+		return
+	_artwork.pivot_offset = _artwork.size / 2.0
+	_artwork.rotation = angle
+
+
+## 查询当前内容状态在当前显示模式下是否解析到非空纹理。
+## [br]本函数无参数。
+## [br]返回是否存在可显示纹理；无副作用。
+## [br]边界条件：_artwork 未就绪（_ready 前）、visual_profile 为空或状态回退失败时返回 false；
+## 编辑器中 profile 脚本不可调用时同样返回 false（与 refresh_visual 的纹理解析口径一致）。
+func has_resolved_texture() -> bool:
+	if _artwork == null:
+		return false
+	return _resolve_texture() != null
+
+
 ## 按当前内容状态、显示模式与反馈状态合成并刷新全部视觉。
 ## [br]本函数无参数、无返回值。
 ## [br]副作用：按显示模式从 visual_profile 取纹理写入 Artwork.texture（取空则置 null），
