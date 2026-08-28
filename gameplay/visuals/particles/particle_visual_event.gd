@@ -41,6 +41,7 @@ const TERMINATION_NONE: String = "NONE"
 const TERMINATION_INACTIVE: String = "INACTIVE"
 const TERMINATION_OUT_OF_TERRAIN: String = "OUT_OF_TERRAIN"
 const TERMINATION_WALL: String = "WALL"
+const TERMINATION_MECHANISM_BLOCK: String = "MECHANISM_BLOCK"
 
 
 # ===== CLEARED reason 最小稳定语义（spec：不为未来所有清理原因设计复杂枚举） =====
@@ -158,5 +159,7 @@ static func _termination_reason_to_string(reason: int) -> String:
 			return TERMINATION_OUT_OF_TERRAIN
 		_ParticleStepExecutor.TerminationReason.WALL:
 			return TERMINATION_WALL
+		_ParticleStepExecutor.TerminationReason.MECHANISM_BLOCK:
+			return TERMINATION_MECHANISM_BLOCK
 		_:
 			return TERMINATION_NONE

@@ -16,7 +16,7 @@ extends RefCounted
 ##   （Guide §21 未声明形态 = 透明）；机关返回不合法 Result 由 Contract 层降级为透明 CONTINUE；
 ##   SpeedDelta 只读取机关请求的 ±1 档位增量，不 clamp、不计算下一步 Tick（§23 从下一传播步影响调度）；
 ##   OUTPUT_EVENT 本批仅经 Result 承载与校验，消费留 Control 域（P1），本类不处理；
-##   BLOCK 决策映射 continue_motion=false（Barrier 预留；当前无机关返回，executor 不消费该位）。
+##   BLOCK 决策映射 continue_motion=false（光屏障起被 executor 消费 → TERMINATE(MECHANISM_BLOCK)）。
 ## 类型约束：调用方一律通过 preload() 引用以避免 Godot MCP 运行期未重建全局 class 缓存导致的类型解析问题。
 
 
@@ -29,13 +29,13 @@ const _LightInteractionResult: GDScript = preload(
 
 
 ## 光粒机关效果（最小结构，为未来 Barrier 预留）。
-## [br]continue_motion：是否继续传播（Contract BLOCK 决策置 false；当前无机关返回 BLOCK，恒为 true）。
+## [br]continue_motion：是否继续传播（Contract BLOCK 决策置 false；光屏障六向非轴/能量不足时为 false）。
 ## [br]outgoing_direction：离开机关格的传播方向（契约机关 REDIRECT 改向；其余机关为入射方向）。
 ## [br]speed_delta：速度档位增量（契约机关 PARTICLE_SPEED_DELTA 的 ±1；其余为 0）。
 class MechanismEffect:
 	extends RefCounted
 
-	## 是否继续传播。Barrier / BLOCK 决策可置 false；当前正式机关恒为 true。
+	## 是否继续传播。BLOCK 决策机关（光屏障等）置 false；透明/改向/速度机关为 true。
 	var continue_motion: bool = true
 	## 离开机关格的传播方向。契约机关可 REDIRECT 改向；透明机关为入射方向。
 	var outgoing_direction: Vector2i = Vector2i.ZERO
