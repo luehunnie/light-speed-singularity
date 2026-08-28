@@ -1,7 +1,7 @@
 extends SceneTree
 
-## S3-04 Binding Slot 合同与独立结构 Validator 测试（GUI 冻结总结 v1.0 §82/§83）。
-## 覆盖：五类 Slot 冻结、meta 标记识别、既有宿主事实（复用不改行为）、
+## S3-04 Binding Slot 合同与独立结构 Validator 测试（GUI 冻结总结 v1.0 §82/§83；S3-07 五宿主同步）。
+## 覆盖：五类 Slot 冻结、meta 标记识别、五宿主事实（S3-07 全量落地）、
 ##       合格/缺失/重复/未知/脚本绑定/无锚点校验、只读性、与 D6-A fixture 零耦合、
 ##       UI 检查域发现三路（Node2D→CanvasLayer→Control / Control 根 / 无 Control）。
 ## 由 Godot --headless --script 运行；任一失败 quit(1)。fixture 全内存构造。
@@ -34,41 +34,42 @@ func _make_slot(slot_id: String) -> Control:
 	return control
 
 
-## 合格 UI fixture：根 Container + 两个 Container 子级各挂一个受保护 Slot（祖先为 Container 即满足布局约束）。
+## 合格 UI fixture：根 Container + 五类 Container 子级各挂一个受保护 Slot（祖先为 Container 即满足布局约束）。
 func _make_valid_ui() -> Control:
 	var ui_root: VBoxContainer = VBoxContainer.new()
 	ui_root.size = Vector2(1920, 1080)
-	var inv_host: HBoxContainer = HBoxContainer.new()
-	inv_host.size = Vector2(600, 80)
-	inv_host.set_meta(_contract.META_KEY, _contract.SLOT_INVENTORY)
-	ui_root.add_child(inv_host)
-	var fire_host: HBoxContainer = HBoxContainer.new()
-	fire_host.position = Vector2(0, 100)
-	fire_host.size = Vector2(300, 60)
-	fire_host.set_meta(_contract.META_KEY, _contract.SLOT_FIRE_RESET)
-	ui_root.add_child(fire_host)
+	for slot_id: String in _contract.SLOT_IDS:
+		var host: HBoxContainer = HBoxContainer.new()
+		host.size = Vector2(300, 60)
+		host.set_meta(_contract.META_KEY, slot_id)
+		ui_root.add_child(host)
 	return ui_root
 
 
-## G1 冻结合同：五类 Slot ID、中文标签、默认必要集合、meta 键。
+## G1 冻结合同：五类 Slot ID、中文标签、默认必要集合（S3-07 五宿主全量）、meta 键。
 func _test_frozen_contract() -> void:
 	const NAME: String = "G1_冻结合同"
 	_check(NAME, _contract.SLOT_IDS.size() == 5, "应冻结五类 Slot，实际 %d。" % _contract.SLOT_IDS.size())
 	_check(NAME, _contract.SLOT_IDS == ["inventory_host", "objective_host", "move_counter_host", "hint_host", "fire_reset_host"], "五类 Slot ID 应与 §82 一致。")
 	_check(NAME, _contract.SLOT_LABELS.size() == 5, "五类 Slot 均应有中文标签。")
-	_check(NAME, _contract.REQUIRED_DEFAULT == ["inventory_host", "fire_reset_host"], "默认必要集合应仅为当前真实宿主（S3-07 后扩展）。")
+	_check(NAME, _contract.REQUIRED_DEFAULT == _contract.SLOT_IDS, "默认必要集合应为五宿主全量（S3-07 落地）。")
 
 
-## G2 识别与既有宿主事实：meta 标记找 Slot；EXISTING_HOST_FACTS 指向真实脚本文件。
+## G2 识别与五宿主事实：meta 标记找 Slot；EXISTING_HOST_FACTS 覆盖五类且指向真实脚本文件。
 func _test_find_slots_and_existing_hosts() -> void:
 	const NAME: String = "G2_识别与宿主事实"
 	var ui_root: Control = _make_valid_ui()
 	root.add_child(ui_root)
 	var slots: Dictionary = _contract.find_slots(ui_root)
-	_check(NAME, slots.size() == 2, "应识别 2 个 Slot，实际 %d。" % slots.size())
-	_check(NAME, slots.has(_contract.SLOT_INVENTORY) and slots.has(_contract.SLOT_FIRE_RESET), "应按 meta 识别两类宿主。")
+	_check(NAME, slots.size() == 5, "应识别 5 个 Slot，实际 %d。" % slots.size())
+	for slot_id: String in _contract.SLOT_IDS:
+		_check(NAME, slots.has(slot_id), "应按 meta 识别宿主 %s。" % slot_id)
+	var fact_ids: Array = []
 	for fact: Dictionary in _contract.EXISTING_HOST_FACTS:
-		_check(NAME, FileAccess.file_exists(String(fact["script_path"])), "既有宿主事实应指向真实脚本：%s。" % String(fact["script_path"]))
+		fact_ids.append(String(fact["slot_id"]))
+		_check(NAME, FileAccess.file_exists(String(fact["script_path"])), "宿主事实应指向真实脚本：%s。" % String(fact["script_path"]))
+	for slot_id: String in _contract.SLOT_IDS:
+		_check(NAME, fact_ids.has(slot_id), "五类宿主事实应覆盖 %s，实际：%s。" % [slot_id, str(fact_ids)])
 	ui_root.free()
 
 
@@ -85,12 +86,17 @@ func _test_valid_structure() -> void:
 ## G4 违规五类：缺失必要 / 重复 / 未知 ID / 脚本绑定 / 无 Container 且无锚点。
 func _test_violations() -> void:
 	const NAME: String = "G4_违规检出"
-	# 缺失必要：只有 inventory。
+	# 缺失必要：只有 inventory（默认必要五宿主缺四应全部检出）。
 	var only_inv: Control = Control.new()
 	only_inv.add_child(_make_slot(_contract.SLOT_INVENTORY))
 	root.add_child(only_inv)
 	var missing: Array = _contract.validate_ui_structure(only_inv)
 	_check(NAME, missing.any(func(i): return String(i["check"]) == "missing_required_slot"), "缺失必要 Slot 应检出。")
+	var missing_count: int = 0
+	for issue: Dictionary in missing:
+		if String(issue["check"]) == "missing_required_slot":
+			missing_count += 1
+	_check(NAME, missing_count == 4, "默认五必要缺四应逐项检出，实际 %d。" % missing_count)
 	only_inv.free()
 	# 重复 + 未知：同 ID 两个 + 合同外 ID 一个。
 	var dup_root: Control = Control.new()
@@ -147,21 +153,18 @@ func _test_domain_discovery() -> void:
 	var level: Node2D = Node2D.new()
 	var canvas: CanvasLayer = CanvasLayer.new()
 	level.add_child(canvas)
-	var inv_host: HBoxContainer = HBoxContainer.new()
-	inv_host.set_meta(_contract.META_KEY, _contract.SLOT_INVENTORY)
-	inv_host.anchor_left = 0.5
-	canvas.add_child(inv_host)
-	var fire_host: HBoxContainer = HBoxContainer.new()
-	fire_host.set_meta(_contract.META_KEY, _contract.SLOT_FIRE_RESET)
-	fire_host.anchor_left = 0.5
-	canvas.add_child(fire_host)
+	for slot_id: String in _contract.SLOT_IDS:
+		var host: HBoxContainer = HBoxContainer.new()
+		host.set_meta(_contract.META_KEY, slot_id)
+		host.anchor_left = 0.5
+		canvas.add_child(host)
 	var world_rect: ColorRect = ColorRect.new()
 	level.add_child(world_rect)
 	root.add_child(level)
 	var domain: Array = _contract.find_ui_domain_roots(level)
-	_check(NAME, domain.size() == 2, "CanvasLayer 两直接 Control 子树应入域，实际 %d。" % domain.size())
+	_check(NAME, domain.size() == 5, "CanvasLayer 五直接 Control 子树应入域，实际 %d。" % domain.size())
 	_check(NAME, not domain.has(world_rect), "世界空间 Control（无 CanvasLayer/无 Slot）不应入域。")
-	_check(NAME, _contract.validate_ui_structure(level).is_empty(), "Node2D+CanvasLayer 合格结构应 0 issue（禁 Node.name/NodePath/坐标猜测）。")
+	_check(NAME, _contract.validate_ui_structure(level).is_empty(), "Node2D+CanvasLayer 五宿主合格结构应 0 issue（禁 Node.name/NodePath/坐标猜测）。")
 	level.free()
 	# Control 根保持兼容：域根即自身。
 	var ui_root: Control = _make_valid_ui()

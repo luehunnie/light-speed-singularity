@@ -1,9 +1,11 @@
 extends SceneTree
 
-## S3-04 UI Test Matrix 测试（GUI 冻结总结 v1.0 §86）。
+## S3-04 UI Test Matrix 测试（GUI 冻结总结 v1.0 §86；S3-07 五宿主同步）。
 ## 覆盖：冻结四组合、干净 fixture 零 issue、五类机械检查各自检出、只输出事实、
 ##       Node2D 载体三路（CanvasLayer 子树真实检查/Control 根兼容/无 Control root_missing）、
 ##       原型误报回归（统一 canvas 坐标/绘制叶重叠/Slot 缺失归 Slot Guard）。
+##       S3-07 起 fixture 五 Slot 齐备、required 一律取 SlotContract.REQUIRED_DEFAULT（五宿主全量）；
+##       G9 原型回归保留显式单 Slot required（刻意测「缺失 Slot 不由 Matrix 报」冻结语义）。
 ## 由 Godot --headless --script 运行；任一失败 quit(1)。fixture 全内存构造并入树。
 
 const _Matrix: GDScript = preload(
@@ -24,12 +26,14 @@ var _checks: int = 0
 var _matrix
 var _previews
 var _viewports
+var _contract
 
 
 func _initialize() -> void:
 	_matrix = _Matrix.new()
 	_previews = _PreviewData.new()
 	_viewports = _ViewportPresets.new()
+	_contract = _SlotContract.new()
 	_test_frozen_combos()
 	_test_clean_fixture()
 	_test_bounds()
@@ -51,22 +55,33 @@ func _check_kinds(issues: Array) -> Dictionary:
 	return kinds
 
 
-## 干净 UI fixture：1024x576 根（=最小正式视口，四组合全容纳）+ 两个不重叠 Slot。
+## 按 slot_id 取 fixture 直属 Slot 宿主（fixture 构造保证五宿主各一，不猜索引）。
+func _slot_by_id(ui_root: Control, slot_id: String) -> Control:
+	for child: Node in ui_root.get_children():
+		if String(child.get_meta("ui_binding_slot_id", "")) == slot_id:
+			return child as Control
+	return null
+
+
+## 干净 UI fixture：1024x576 根（=最小正式视口，四组合全容纳）+ 五类不重叠 Slot。
 func _make_clean_ui() -> Control:
 	var ui_root: Control = Control.new()
 	ui_root.size = Vector2(1024, 576)
-	var panel_a: HBoxContainer = HBoxContainer.new()
-	panel_a.position = Vector2(0, 0)
-	panel_a.size = Vector2(400, 80)
-	panel_a.custom_minimum_size = Vector2(400, 80)
-	panel_a.set_meta("ui_binding_slot_id", "inventory_host")
-	ui_root.add_child(panel_a)
-	var panel_b: HBoxContainer = HBoxContainer.new()
-	panel_b.position = Vector2(0, 500)
-	panel_b.size = Vector2(300, 60)
-	panel_b.custom_minimum_size = Vector2(300, 60)
-	panel_b.set_meta("ui_binding_slot_id", "fire_reset_host")
-	ui_root.add_child(panel_b)
+	# [slot_id, position, size]：五宿主互不重叠且全部位于最小正式视口内。
+	var host_defs: Array = [
+		[_contract.SLOT_INVENTORY, Vector2(0, 0), Vector2(400, 80)],
+		[_contract.SLOT_OBJECTIVE, Vector2(0, 100), Vector2(300, 32)],
+		[_contract.SLOT_MOVE_COUNTER, Vector2(0, 140), Vector2(300, 32)],
+		[_contract.SLOT_HINT, Vector2(0, 180), Vector2(300, 32)],
+		[_contract.SLOT_FIRE_RESET, Vector2(0, 500), Vector2(300, 60)],
+	]
+	for host_def: Array in host_defs:
+		var host: HBoxContainer = HBoxContainer.new()
+		host.position = host_def[1]
+		host.size = host_def[2]
+		host.custom_minimum_size = host_def[2]
+		host.set_meta("ui_binding_slot_id", host_def[0])
+		ui_root.add_child(host)
 	return ui_root
 
 
@@ -80,7 +95,7 @@ func _test_frozen_combos() -> void:
 	_check(NAME, ",".join(pairs) == "typical×standard_16_9,long_content×small_16_9,stress_test×minimum_supported,minimal×large_16_9", "组合应与 §86 示例一致，实际 %s。" % ",".join(pairs))
 	var ui_root: Control = _make_clean_ui()
 	root.add_child(ui_root)
-	var result: Dictionary = _matrix.run_matrix(ui_root, ["inventory_host", "fire_reset_host"])
+	var result: Dictionary = _matrix.run_matrix(ui_root, _contract.REQUIRED_DEFAULT)
 	_check(NAME, (result["combos"] as Array).size() == 4 and result.has("total_issues"), "run_matrix 应返回 4 组结果与总计。")
 	ui_root.free()
 
@@ -90,7 +105,7 @@ func _test_clean_fixture() -> void:
 	const NAME: String = "G2_干净零issue"
 	var ui_root: Control = _make_clean_ui()
 	root.add_child(ui_root)
-	var result: Dictionary = _matrix.run_matrix(ui_root, ["inventory_host", "fire_reset_host"])
+	var result: Dictionary = _matrix.run_matrix(ui_root, _contract.REQUIRED_DEFAULT)
 	_check(NAME, int(result["total_issues"]) == 0, "干净 UI 四组合应 0 issue，实际：%s。" % str(result["combos"]))
 	ui_root.free()
 
@@ -104,7 +119,7 @@ func _test_bounds() -> void:
 	runaway.size = Vector2(200, 50)
 	ui_root.add_child(runaway)
 	root.add_child(ui_root)
-	var result: Dictionary = _matrix.run_combo(ui_root, _previews.build_preset("typical"), Vector2i(1920, 1080), ["inventory_host", "fire_reset_host"])
+	var result: Dictionary = _matrix.run_combo(ui_root, _previews.build_preset("typical"), Vector2i(1920, 1080), _contract.REQUIRED_DEFAULT)
 	_check(NAME, _check_kinds(result["issues"]).has("control_out_of_bounds"), "越界 Control 应检出。")
 	ui_root.free()
 
@@ -119,7 +134,7 @@ func _test_text_clipping() -> void:
 	clipped.position = Vector2(0, 200)
 	ui_root.add_child(clipped)
 	root.add_child(ui_root)
-	var result: Dictionary = _matrix.run_combo(ui_root, _previews.build_preset("typical"), Vector2i(1920, 1080), ["inventory_host", "fire_reset_host"])
+	var result: Dictionary = _matrix.run_combo(ui_root, _previews.build_preset("typical"), Vector2i(1920, 1080), _contract.REQUIRED_DEFAULT)
 	_check(NAME, _check_kinds(result["issues"]).has("text_clipping"), "Label 裁切应检出。")
 	ui_root.free()
 
@@ -137,7 +152,7 @@ func _test_overlap() -> void:
 	ui_root.add_child(a)
 	ui_root.add_child(b)
 	root.add_child(ui_root)
-	var result: Dictionary = _matrix.run_combo(ui_root, _previews.build_preset("typical"), Vector2i(1920, 1080), ["inventory_host", "fire_reset_host"])
+	var result: Dictionary = _matrix.run_combo(ui_root, _previews.build_preset("typical"), Vector2i(1920, 1080), _contract.REQUIRED_DEFAULT)
 	_check(NAME, _check_kinds(result["issues"]).has("obvious_overlap"), "同父绘制叶明显重叠应检出。")
 	_check(NAME, not result["issues"].any(func(i): return String(i["node_path"]) in [String(a.name), String(b.name)] and String(i["check"]) != "obvious_overlap"), "绘制叶除重叠外不应有其他误报。")
 	ui_root.free()
@@ -147,21 +162,20 @@ func _test_overlap() -> void:
 ##       Slot 存在但隐藏（visible=false）仍由 Matrix 报 required_not_visible。
 func _test_required_not_visible() -> void:
 	const NAME: String = "G6_必需不可见"
-	var contract = _SlotContract.new()
-	# 缺失：根上无 fire_reset_host → Matrix 零 required_not_visible；Slot Validator 报缺失。
+	# 缺失：根上移除 fire_reset_host meta → Matrix 零 required_not_visible；Slot Validator 报缺失。
 	var missing_root: Control = _make_clean_ui()
-	missing_root.get_child(1).remove_meta("ui_binding_slot_id")
+	_slot_by_id(missing_root, "fire_reset_host").remove_meta("ui_binding_slot_id")
 	root.add_child(missing_root)
-	var missing_result: Dictionary = _matrix.run_combo(missing_root, _previews.build_preset("typical"), Vector2i(1920, 1080), ["inventory_host", "fire_reset_host"])
+	var missing_result: Dictionary = _matrix.run_combo(missing_root, _previews.build_preset("typical"), Vector2i(1920, 1080), _contract.REQUIRED_DEFAULT)
 	_check(NAME, not _check_kinds(missing_result["issues"]).has("required_not_visible"), "Slot 缺失不应由 Matrix 报 required_not_visible（Slot Guard 职责）。")
-	var guard_issues: Array = contract.validate_ui_structure(missing_root, ["inventory_host", "fire_reset_host"])
+	var guard_issues: Array = _contract.validate_ui_structure(missing_root, _contract.REQUIRED_DEFAULT)
 	_check(NAME, guard_issues.any(func(i): return String(i["check"]) == "missing_required_slot"), "Slot 缺失应由 Slot Validator 报 missing_required_slot。")
 	missing_root.free()
 	# 隐藏：Slot 存在但 visible=false。
 	var hidden_root: Control = _make_clean_ui()
-	hidden_root.get_child(1).visible = false
+	_slot_by_id(hidden_root, "fire_reset_host").visible = false
 	root.add_child(hidden_root)
-	var hidden_result: Dictionary = _matrix.run_combo(hidden_root, _previews.build_preset("typical"), Vector2i(1920, 1080), ["inventory_host", "fire_reset_host"])
+	var hidden_result: Dictionary = _matrix.run_combo(hidden_root, _previews.build_preset("typical"), Vector2i(1920, 1080), _contract.REQUIRED_DEFAULT)
 	_check(NAME, _check_kinds(hidden_result["issues"]).has("required_not_visible"), "隐藏必需 Slot 应检出。")
 	hidden_root.free()
 
@@ -179,7 +193,7 @@ func _test_container_overflow() -> void:
 	small_parent.add_child(big_child)
 	ui_root.add_child(small_parent)
 	root.add_child(ui_root)
-	var result: Dictionary = _matrix.run_combo(ui_root, _previews.build_preset("typical"), Vector2i(1920, 1080), ["inventory_host", "fire_reset_host"])
+	var result: Dictionary = _matrix.run_combo(ui_root, _previews.build_preset("typical"), Vector2i(1920, 1080), _contract.REQUIRED_DEFAULT)
 	_check(NAME, _check_kinds(result["issues"]).has("container_overflow"), "容器溢出应检出。")
 	ui_root.free()
 
@@ -214,7 +228,7 @@ func _test_node2d_carrier() -> void:
 	# Control 根保持兼容：干净 UI 仍 0 issue。
 	var ui_root: Control = _make_clean_ui()
 	root.add_child(ui_root)
-	var compat: Dictionary = _matrix.run_combo(ui_root, _previews.build_preset("typical"), Vector2i(1920, 1080), ["inventory_host", "fire_reset_host"])
+	var compat: Dictionary = _matrix.run_combo(ui_root, _previews.build_preset("typical"), Vector2i(1920, 1080), _contract.REQUIRED_DEFAULT)
 	_check(NAME, not _check_kinds(compat["issues"]).has("root_missing") and (compat["issues"] as Array).is_empty(), "Control 根应保持原语义（0 issue）。")
 	ui_root.free()
 	# 无任何 Control 子树 → root_missing。

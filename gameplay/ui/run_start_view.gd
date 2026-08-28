@@ -131,6 +131,13 @@ func is_start_run_button_disabled() -> bool:
 	return _start_run_button == null or _start_run_button.disabled
 
 
+## S3-07：取「开始运行」按钮节点本身（fire_reset_host 正式 Control 宿主）。
+## [br]供 core_loop 运行期接线对其 set_meta 正式 ui_binding_slot_id（界面编辑辅助插件 Binding Slot 合同标记）；
+## [br]只读返回既有节点，不创建第二宿主、不改按钮行为；setup 前返回 null 由调用方安全忽略。
+func get_fire_reset_host_control() -> Control:
+	return _start_run_button
+
+
 ## 查询当前状态提示文本；供 UI 集成测试断言 SETUP 不再误导为 Space 可发射。
 func get_hint_text() -> String:
 	if _hint_label == null:

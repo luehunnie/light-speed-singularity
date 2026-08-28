@@ -122,6 +122,11 @@ const _ParticleDecelerator: GDScript = preload("res://gameplay/mechanisms/speed/
 const _InventorySlotViewScript: GDScript = preload("res://gameplay/ui/inventory_slot_view.gd")
 # D7-3 正式「开始运行」UI 视图：拥有按钮/状态提示/invalid 最小反馈，只由真实 RunState 驱动；core_loop 只构造接线与公开转发。
 const _RunStartView: GDScript = preload("res://gameplay/ui/run_start_view.gd")
+# S3-07 UI Binding Slot 合同（界面编辑辅助插件冻结五类 Slot）：运行期接线对真实宿主打正式 meta 标记；
+# 只读引用其 META_KEY/SLOT_* 常量，不在核心复制 ID 字符串或第二套合同。
+const _UIBindingSlotContract: GDScript = preload(
+	"res://addons/light_speed_ui_authoring/ui_binding_slot_contract.gd"
+)
 # M4-E4 形态切换提示 UI（用户冻结视觉）：Q 成功切换时屏幕上方居中提示 1 秒；core_loop 只构造接线。
 const _FormSwitchToastView: GDScript = preload("res://gameplay/ui/form_switch_toast_view.gd")
 # D7-R1 Runtime 只读采样器（Runtime → Sampler → RuntimeSnapshotData）与 Debug-only 游戏内控制台；
@@ -356,6 +361,9 @@ func _ready() -> void:
 	_run_start_view = _RunStartView.new(Callable(self, "start_run"))
 	_run_start_view.setup(canvas_layer, hint_label)
 	_run_start_view.update_for_state(_get_current_run_state())
+	# S3-07 运行期 UI Binding Slot 正式标记：五类真实宿主（库存/目标/步数/提示/开火入口）挂合同 meta，
+	# 供界面编辑辅助插件守卫与测试只读发现；纯标记，不改布局/文案/数据流。
+	_apply_ui_binding_slot_metas()
 	# M4-E4 形态切换提示 UI：挂到同一 CanvasLayer；只显示成功切换结果（被拒 Q 由 _switch_light_form 不触发体现）。
 	_form_switch_toast_view = _FormSwitchToastView.new()
 	_form_switch_toast_view.setup(canvas_layer)
@@ -386,6 +394,21 @@ func _resolve_content_root() -> Node2D:
 	if level_root is Node2D:
 		return level_root
 	return self
+
+
+## S3-07 运行期 UI Binding Slot 正式标记：对核心已持有的五类真实宿主 Control 各写一次合同 meta ui_binding_slot_id
+## （inventory=InventoryBar / objective=CompleteLabel / move_counter=RuntimeMoveLabel / hint=HintLabel /
+## fire_reset=RunStartView 拥有的「开始运行」按钮，经其只读访问器取得，无 NodePath/Node.name/坐标猜测）。
+## 纯标记不改行为：数据与生命周期仍走既有 outward Callable 与刷新路径；_ready 一次写入，
+## R 重置不重建 CanvasLayer 子节点故标记保持，重新装载场景由 _ready 重建。
+func _apply_ui_binding_slot_metas() -> void:
+	inventory_bar.set_meta(_UIBindingSlotContract.META_KEY, _UIBindingSlotContract.SLOT_INVENTORY)
+	complete_label.set_meta(_UIBindingSlotContract.META_KEY, _UIBindingSlotContract.SLOT_OBJECTIVE)
+	runtime_move_label.set_meta(_UIBindingSlotContract.META_KEY, _UIBindingSlotContract.SLOT_MOVE_COUNTER)
+	hint_label.set_meta(_UIBindingSlotContract.META_KEY, _UIBindingSlotContract.SLOT_HINT)
+	var fire_reset_host: Control = _run_start_view.get_fire_reset_host_control()
+	if fire_reset_host != null:
+		fire_reset_host.set_meta(_UIBindingSlotContract.META_KEY, _UIBindingSlotContract.SLOT_FIRE_RESET)
 
 
 ## 采集内容根下的水晶（AF-07）：原型场景走原固定路径单水晶；Host 模式递归发现（owned=false 覆盖运行期实例化的场景，owner 为空）。
