@@ -1590,7 +1590,7 @@ LightInteractionResult assertions
 - LightInteractionResult；
 - Propagation Decision；
 - SpeedTier / SpeedDelta；
-- Gameplay Color（离散枚举 WHITE/RED/GREEN/BLUE 与 filter 纯函数）；
+- Gameplay Color（离散枚举 WHITE/RED/GREEN/BLUE）；
 - ObjectiveHitContext；
 - ObjectiveCondition Contract；
 - Stable Event / Action ID；
@@ -1672,11 +1672,11 @@ Split 会改变传播拓扑，不应简单塞成普通 Effect。
 
 作者工具中的 Formal Color Palette / Visual Color 与 Gameplay Color 是两回事。
 
-已冻结（Q46 更新）：Gameplay Color 为离散枚举，取值 WHITE=0 / RED=1 / GREEN=2 / BLUE=3，
-另有哨兵 NONE=-1（表示吸收 / 非法输入，非真实颜色）。过滤规则：白光→对应单色、同色保持、
-异色吸收、不做 RGB 混色（玩法设计 §6 已冻结）。
+已冻结（Q46 更新）：Gameplay Color 为离散枚举（RayColor），取值 WHITE=0 / RED=1 / GREEN=2 / BLUE=3，
+另有哨兵 NONE=-1（表示吸收 / 非法输入，非真实颜色）。颜色过滤玩法规则（白光→对应单色、同色保持、
+异色吸收、不做 RGB 混色）已在玩法设计 §6 冻结，属滤光片机关局部规则，非公共 API。
 
-- 冻结 Gameplay Color 离散枚举与 `filter_color` 纯函数（Stable）；
+- 冻结 Gameplay Color 离散枚举（RayColor）为 Stable；
 - 冻结 `COLOR_CHANGE` 光交互效果（`LightInteractionResult` 新 EffectType，字段 `target_color`）；
 - ColorCondition（Objective 侧颜色条件，颜色水晶用）保留为 Extension，待颜色水晶实装前冻结；
 - 不允许 Visual Color 成为玩法颜色真相。
@@ -1819,7 +1819,7 @@ Split 会改变传播拓扑，不应简单塞成普通 Effect。
 13. Speed Detector authoring UI；
 14. Objective Group：Independent / Simultaneous / Sequence；
 15. SpeedCondition（若下一阶段目标要求速度型 Objective）；
-16. Gameplay Color 枚举与过滤；
+16. Gameplay Color 离散枚举；
 17. 滤光片机关。
 
 ---
