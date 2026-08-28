@@ -62,7 +62,7 @@ color = Color(0.25, 0.25, 0.28, 1)
 [node name="RuntimeObjects" type="Node2D" parent="." unique_id=820444864]
 
 [node name="Emitter" parent="RuntimeObjects" unique_id=1264479859 instance=ExtResource("11_emitter_scene")]
-position = Vector2(96, 224)
+position = Vector2(88, 225)
 allow_form_switch = true
 
 [node name="Crystal" parent="RuntimeObjects" unique_id=1716045995 instance=ExtResource("10_crystal_scene")]

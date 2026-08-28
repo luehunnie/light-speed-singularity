@@ -1,38 +1,41 @@
-[gd_scene format=3]
+[gd_scene format=3 uid="uid://cy4r2h5dq02wk"]
 
-[ext_resource type="TileSet" path="res://assets/art/tilesets/terrain_tileset.tres" id="1_terrain"]
-[ext_resource type="TileSet" path="res://assets/art/tilesets/wall_tileset.tres" id="2_wall"]
-[ext_resource type="TileSet" path="res://assets/art/tilesets/legal_area_tileset.tres" id="3_legal"]
-[ext_resource type="TileSet" path="res://assets/art/tilesets/decoration_tileset.tres" id="4_decoration"]
-[ext_resource type="PackedScene" path="res://gameplay/mechanisms/emitters/emitter_config_node.tscn" id="5_emitter"]
+[ext_resource type="TileSet" uid="uid://bnek2denq6pnd" path="res://assets/art/tilesets/terrain_tileset.tres" id="1_terrain"]
+[ext_resource type="TileSet" uid="uid://def2ipanaqi3u" path="res://assets/art/tilesets/wall_tileset.tres" id="2_wall"]
+[ext_resource type="TileSet" uid="uid://cv15gkq3ahuni" path="res://assets/art/tilesets/legal_area_tileset.tres" id="3_legal"]
+[ext_resource type="TileSet" uid="uid://bmbflag7qp3n6" path="res://assets/art/tilesets/decoration_tileset.tres" id="4_decoration"]
+[ext_resource type="PackedScene" uid="uid://bnqexhtb2sfgu" path="res://gameplay/mechanisms/emitters/emitter_config_node.tscn" id="5_emitter"]
 [ext_resource type="PackedScene" path="res://gameplay/crystals/basic_crystal.tscn" id="6_crystal"]
 
-[node name="LevelTemplate" type="Node2D"]
+[node name="LevelTemplate" type="Node2D" unique_id=418281737]
 editor_description = "正式空白关卡模板。先画 Terrain，再画 LegalArea、Wall、Decoration；普通绘制使用底部“图块”页签。"
 
-[node name="TerrainLayer" type="TileMapLayer" parent="."]
+[node name="TerrainLayer" type="TileMapLayer" parent="." unique_id=627498215]
 editor_description = "关卡内格与不规则地图边界。有 Tile=关卡内，无 Tile=关卡外，允许内部空洞。"
 tile_set = ExtResource("1_terrain")
 
-[node name="WallLayer" type="TileMapLayer" parent="."]
+[node name="WallLayer" type="TileMapLayer" parent="." unique_id=145637895]
 editor_description = "Terrain 内普通静态墙体，不要绘制到 Terrain 外。"
 tile_set = ExtResource("2_wall")
+metadata/_edit_lock_ = true
 
-[node name="LegalAreaLayer" type="TileMapLayer" parent="."]
+[node name="LegalAreaLayer" type="TileMapLayer" parent="." unique_id=2088142417]
 editor_description = "Terrain 内允许玩家放置机关的格子子集，不要绘制到 Terrain 外。"
 tile_set = ExtResource("3_legal")
+metadata/_edit_lock_ = true
 
-[node name="DecorationLayer" type="TileMapLayer" parent="."]
+[node name="DecorationLayer" type="TileMapLayer" parent="." unique_id=777683079]
 editor_description = "纯视觉装饰，不参与边界、阻挡或放置判断。"
 tile_set = ExtResource("4_decoration")
+metadata/_edit_lock_ = true
 
-[node name="RuntimeObjects" type="Node2D" parent="."]
+[node name="RuntimeObjects" type="Node2D" parent="." unique_id=906455547]
 
-[node name="Emitter" parent="RuntimeObjects" instance=ExtResource("5_emitter")]
-position = Vector2(96, 224)
+[node name="Emitter" parent="RuntimeObjects" unique_id=1071940745 instance=ExtResource("5_emitter")]
+position = Vector2(304, 344)
 
-[node name="BasicCrystal" parent="RuntimeObjects" instance=ExtResource("6_crystal")]
-position = Vector2(224, 96)
+[node name="BasicCrystal" parent="RuntimeObjects" unique_id=1383845260 instance=ExtResource("6_crystal")]
+position = Vector2(1056, 344)
 crystal_id = &"crystal_001"
 
-[node name="LightPathLayer" type="Node2D" parent="."]
+[node name="LightPathLayer" type="Node2D" parent="." unique_id=1802838937]
