@@ -11,8 +11,11 @@ extends RefCounted
 ## 不负责：修改 state（绝不调 apply_move / terminate）、点亮 Crystal、修改 Objective、调 scheduler、判断具体加速器 / 减速器类、
 ##   计算下一步 due Tick、SpeedTier 饱和、Tick 推进、Node / Timer / 视觉 / 异步。
 ## 边界条件：单步顺序冻结为 ① state 须 active ② next_cell = cell + direction ③ 越界 → TERMINATE(OUT_OF_TERRAIN)
-##   ④ 墙体 → TERMINATE(WALL) ⑤ 进入 next_cell ⑥ 查 has_crystal_at ⑦ 查 get_light_mechanism_at ⑧ 交 Adapter ⑨ 返回 StepResult；
-##   任一 TERMINATE 分支不查水晶 / 机关，speed_delta=0、has_crystal=false、outgoing_direction=入射方向、next_step_blocked=false；
+##   ④ 墙体 → TERMINATE(WALL) ⑤ 进入 next_cell ⑥ 查 has_crystal_at ⑦ 查 get_light_mechanism_at ⑧ 交 Adapter
+##   ⑧b 机关 BLOCK（continue_motion=false）→ TERMINATE(MECHANISM_BLOCK)（被阻挡光粒停在机关格外，与 WALL 同形）
+##   ⑨ 返回 StepResult；
+##   ①③④⑧b 任一 TERMINATE 分支 speed_delta=0、has_crystal=false、outgoing_direction=入射方向、next_step_blocked=false；
+##   ①③④ 不查水晶 / 机关；⑧b 查机关后终止（水晶与阻挡型机关不可同格，has_crystal=false）；
 ##   MOVE 分支附 M4-E4 确定性前瞻 next_step_blocked（entered_cell + outgoing_direction 是否墙 / 越界，供 Visual 边界即时消失）；
 ##   本类无任何可变实例字段，evaluate_step 可被多 scheduler / 多线程上下文（GDScript 单线程）安全复用。
 ## 类型约束：调用方一律通过 preload() 引用以避免 Godot MCP 运行期未重建全局 class 缓存导致的类型解析问题。
@@ -36,12 +39,14 @@ enum Outcome {
 }
 
 
-## 终止原因。NONE=未终止（MOVE 时）；INACTIVE=state 已不活动；OUT_OF_TERRAIN=越出地形；WALL=撞墙。
+## 终止原因。NONE=未终止（MOVE 时）；INACTIVE=state 已不活动；OUT_OF_TERRAIN=越出地形；WALL=撞墙；
+## MECHANISM_BLOCK=机关 BLOCK 决策（光屏障等阻挡型机关；被阻挡光粒停在机关格外，与 WALL 同形）。
 enum TerminationReason {
 	NONE,
 	INACTIVE,
 	OUT_OF_TERRAIN,
 	WALL,
+	MECHANISM_BLOCK,
 }
 
 
@@ -132,6 +137,18 @@ func evaluate_step(
 		effect.outgoing_direction = state.get_direction()
 	else:
 		effect = _ParticleMechanismAdapter.adapt(mechanism, particle_context)
+
+	# ⑧b 机关 BLOCK（光屏障等阻挡型机关）：光粒撞击屏障边框/薄膜能量不足，于机关格外停止（与 WALL 同形，
+	#     不进入阻挡格；方向/速度门槛判定已由机关经 Context 事实完成）。
+	if not effect.continue_motion:
+		result.outcome = Outcome.TERMINATE
+		result.termination_reason = TerminationReason.MECHANISM_BLOCK
+		result.entered_cell = next_cell
+		result.outgoing_direction = state.get_direction()
+		result.speed_delta = 0
+		result.has_crystal = false
+		result.next_step_blocked = false
+		return result
 
 	# ⑨ 返回纯 StepResult（MOVE）。M4-E4：确定性前瞻——本步离开方向上的再下一格是否墙 / 越界，
 	#    供 Visual 在接触边界时即时消失；不改本步 MOVE 语义（本格照常进入，终止仍由下一次求值裁定）。
