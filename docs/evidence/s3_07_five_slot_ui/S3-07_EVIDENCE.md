@@ -1,0 +1,9 @@
+# S3-07 五 Slot 运行期 UI MVP — Worker 证据（≤15 行结论）
+
+1. **实现**：core_loop_prototype.gd `_ready` 新增 `_apply_ui_binding_slot_metas()`，对五真实宿主 set_meta 合同 `ui_binding_slot_id`：inventory=InventoryBar / objective=CompleteLabel / move_counter=RuntimeMoveLabel / hint=HintLabel / fire_reset=RunStartView 的 StartRunButton（经 run_start_view.gd 新增只读访问器 `get_fire_reset_host_control()`，无 NodePath/Node.name/坐标猜测）；纯标记，数据/生命周期全走既有 outward Callable，LRC 501 行零改动。
+2. **修改文件**：levels/prototypes/core_loop_prototype.gd(+22)、addons/light_speed_ui_authoring/ui_binding_slot_contract.gd(EXISTING_HOST_FACTS 五事实+REQUIRED_DEFAULT 五全量)、gameplay/ui/run_start_view.gd(+7 只读访问器；额外文件必要性：core_loop 仅有 RefCounted 视图引用，按钮由其创建，访问器是无猜定位唯一路径)、ui_binding_slot_test.gd / ui_test_matrix_test.gd（五宿主同步，required 统一取 REQUIRED_DEFAULT，G9 保留显式单 Slot 冻结语义）、新增 tests/integration/runtime/core_loop_ui_binding_slot_test.gd(+.uid)。
+3. **测试**：四套直接套件全 PASS（slot 35 / matrix 20 / plugin 23 / 新 runtime 五宿主绑定 2组53 断言：标记就位+无脚本绑定+find_slots 唯一一致+R 保持+重建）；全量回归 151 入口（≥S3-00 审计 91 基线）0 失败断言：validator_core_test 为预存缺 quit() 尾挂，75s 硬超时强杀、其 30 检查 0 失败计 FORCED_PASS；headless `--import` exit 0。
+4. **职责评估**：core_loop_prototype.gd 866→888（≥350，纯接线增量、无新职责域，维持冻结原型接线枢纽定位，本批不拆）；contract 147 / run_start_view 214 / 测试均 <250；目录无新增 >8 结构（tests/integration/runtime 24 项沿用一关注一入口惯例）。
+5. **保护残留**：十项 Human 残留（core_loop_prototype.tscn、level_mixed_001.tscn、particle_decelerator.tres、emitter_visuals.tres、6×.import）全程零触碰，未 stash/reset/checkout/clean/移动/删除；.tscn/.tres 的既有 M 状态为会话前 Human 编辑原样保留。
+6. **已知噪音（预存，非本批引入）**：validate_ui_structure 对未入树 fixture `get_path()` 打印 "Cannot get path" ERROR（S3-04 起 fixture 模式，exit 0 不影响）；validator_core_test 缺 quit() 尾挂建议后续批次补 quit。
+7. **Human GUI Gate 清单**：① 运行 core_loop_prototype，远程场景树确认五宿主各挂 ui_binding_slot_id 且 StartRunButton=fire_reset_host；② UI 行为零变化（Start Run 流/R 重置/完成标签/提示文案/库存卡）；③ 界面编辑辅助 Dock Slot 守卫对编辑器态原型场景报五 Slot 缺失（运行期 meta 编辑器不可见，预期）；④ Host 模式（level_mixed_001）同样五宿主标记就位。

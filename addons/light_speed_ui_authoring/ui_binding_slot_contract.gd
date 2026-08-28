@@ -10,8 +10,8 @@ extends RefCounted
 ##           （{check, node_path, detail}），空数组=通过；只读不修改节点。
 ## 副作用：无（纯只读遍历）。
 ## 边界：只校验节点/容器/锚点/最小约束；不耦合 LevelValidator/D6-A fixture（§82
-##       "Validator 检查绑定结构"由本独立器承担）；Objective/MoveCounter/Hint 宿主属
-##       S3-07，本合同先冻结 ID，宿主到位即受保护；既有宿主事实见 EXISTING_HOST_FACTS。
+##       "Validator 检查绑定结构"由本独立器承担）；S3-07 起五类宿主已由 core_loop 运行期接线
+##       真实落地并挂正式标记，全量受保护；既有宿主事实见 EXISTING_HOST_FACTS。
 
 ## Slot 节点上的合同标记键（Binding ID 载体；Stable 于 Node.name/坐标/显示名之外）。
 const META_KEY: String = "ui_binding_slot_id"
@@ -33,14 +33,21 @@ const SLOT_LABELS: Dictionary = {
 	SLOT_HINT: "提示宿主",
 	SLOT_FIRE_RESET: "开火/重置宿主",
 }
-## 当前 main 已存在的宿主事实（S3-04 复用不改行为；Objective/MoveCounter/Hint 待 S3-07）。
-## run_start_view 拥有「开始运行」按钮即 Fire 入口宿主雏形；inventory_card_bar 为 Inventory 宿主雏形。
+## S3-07 起五类宿主事实（本批真实落地）：meta 由 core_loop_prototype 运行期接线写入真实宿主 Control。
+## script_path 指向该宿主的形式拥有/接线脚本：Label 无脚本宿主（CompleteLabel/RuntimeMoveLabel）指向
+## 运行期接线所有者 core_loop_prototype.gd；HintLabel 文本与「开始运行」按钮均由 run_start_view.gd 拥有；
+## inventory_card_bar 为 Inventory 宿主雏形沿用 S3-04 事实。
 const EXISTING_HOST_FACTS: Array = [
 	{ slot_id = SLOT_INVENTORY, script_path = "res://gameplay/ui/inventory_card_bar.gd" },
+	{ slot_id = SLOT_OBJECTIVE, script_path = "res://levels/prototypes/core_loop_prototype.gd" },
+	{ slot_id = SLOT_MOVE_COUNTER, script_path = "res://levels/prototypes/core_loop_prototype.gd" },
+	{ slot_id = SLOT_HINT, script_path = "res://gameplay/ui/run_start_view.gd" },
 	{ slot_id = SLOT_FIRE_RESET, script_path = "res://gameplay/ui/run_start_view.gd" },
 ]
-## 结构校验的默认必要集合：仅当前真实存在的宿主；S3-07 五键 UI 到位后扩展。
-const REQUIRED_DEFAULT: Array = [SLOT_INVENTORY, SLOT_FIRE_RESET]
+## 结构校验的默认必要集合：S3-07 起五类宿主全部真实落地，全量必要。
+const REQUIRED_DEFAULT: Array = [
+	SLOT_INVENTORY, SLOT_OBJECTIVE, SLOT_MOVE_COUNTER, SLOT_HINT, SLOT_FIRE_RESET,
+]
 
 
 ## 节点是否为 Slot（读 meta 标记，不猜 Node.name/NodePath）。
