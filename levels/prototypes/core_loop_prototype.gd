@@ -160,6 +160,11 @@ const _LevelObjectRegistry: GDScript = preload("res://gameplay/level/level_objec
 const _ObjectiveController: GDScript = preload("res://gameplay/objectives/objective_controller.gd")
 # S3-05 Objective meta 只读解析器：objective_conditions/objective_groups meta → 统一目标模型（无/非法 meta 安全回退水晶原型路径）。
 const _ObjectiveMetaReader: GDScript = preload("res://gameplay/objectives/objective_meta_reader.gd")
+# S3-06 Control 运行期接线三件：control_connections meta → 连接集合（G5 String→StringName 边界在此收口）、
+# 运行期 stable_id → 正式对象只读索引（Dispatcher Target 解析/Reset 遍历面）、Dispatcher（复用 AF-05 冻结批次管线）。
+const _ControlConnectionsMetaReader: GDScript = preload("res://gameplay/control/dispatch/control_connections_meta_reader.gd")
+const _ControlRuntimeTargetIndex: GDScript = preload("res://gameplay/control/dispatch/control_runtime_target_index.gd")
+const _ControlDispatcher: GDScript = preload("res://gameplay/control/dispatch/control_dispatcher.gd")
 # 固定发射器与发射请求数据；运行期格子和方向唯一所有者为 FixedEmitter，由 EmitterConfigNode 启动快照构造。
 const _FixedEmitter: GDScript = preload("res://gameplay/mechanisms/emitters/fixed_emitter.gd")
 # 发射器关卡配置节点：承载唯一持久化位置事实 position 与光线方向事实 ray_default_direction。
@@ -218,6 +223,10 @@ var _level_object_registry: _LevelObjectRegistry = _LevelObjectRegistry.new()
 
 ## 目标完成事实所有者：按 cell 激活水晶、判断完成、运行期重置；_ready 中在 Registry 填充后构造，核心只读取事实，不持有完成字段副本。
 var _objective_controller: _ObjectiveController = null
+
+## S3-06 Control 派发器（连接集合 + 运行期目标索引注入的 AF-05 冻结批次管线）；null = 关卡无
+## control_connections meta（或非法被安全拒绝），无 Control 链，全部既有行为不变。
+var _control_dispatcher: Variant = null
 
 ## 普通光线只读薄适配层：内部依赖 _level_world_query，只组合既有边界与墙体规则，不新增规则、不执行传播循环或副作用。
 var _light_world_query: _LightWorldQuery = null
@@ -297,6 +306,16 @@ func _ready() -> void:
 	var objective_model: Variant = _ObjectiveMetaReader.build_model(_content_root, _level_object_registry)
 	if objective_model != null:
 		_objective_controller.set_objective_model(objective_model)
+	# S3-06 Control 运行期接线（薄绑定，同 S3-05 口径）：读内容根 control_connections meta 构造连接集合，
+	# 存在合法连接才建立 Control 链（Dispatcher + 运行期目标索引）；无/非法 meta 返回 null 保持无 Control 原型路径。
+	# 运行期事件入口当前唯一来源为光交互 Result 的 OUTPUT_EVENT 效果（机关声明面正式化属 G6 机关开发域），
+	# 本批接通 meta→连接→解析→批次管线共享路径与 R 重置集成；LevelRuntimeController 零改。
+	var control_connection_set: Variant = _ControlConnectionsMetaReader.build_connection_set(_content_root)
+	if control_connection_set != null:
+		_control_dispatcher = _ControlDispatcher.new(
+			control_connection_set,
+			_ControlRuntimeTargetIndex.build_from(_content_root)
+		)
 	# 在所有真实依赖初始化后构造只读查询门面；水晶查询走 Registry，机关节点经核心 _resolve_mechanism_node
 	# 只读 Callable 解析（玩家放置映射 PlacementController.get_placed_node 优先，AF-10 起回退预置机关收编映射），
 	# 不共享可写映射。
@@ -589,6 +608,10 @@ func reset_runtime() -> void:
 	# R 恢复初始形态后同步视觉：FixedEmitter 已复位到构造时快照，EmitterVisual 内容状态跟随同一形态事实。
 	if _fixed_emitter != null and _emitter_config != null:
 		_emitter_config.set_visual_light_form(_fixed_emitter.get_light_form())
+	# S3-06 Control §33 Reset 集成：编排者（core_loop 即 LevelRuntimeHost，AF-07）在关卡重置完成后
+	# 遍历登记实例调用可选 reset_control_runtime_state 钩子；无 Control 链（null）安全跳过。
+	if _control_dispatcher != null:
+		_control_dispatcher.reset_control_targets()
 
 
 ## 查询指定格子被哪个机关占用（薄包装，转发 _level_world_query.get_mechanism_id_at）；未被占用返回空 StringName（&""），不报错。
