@@ -20,5 +20,4 @@ world_texture = ExtResource("3_default_tex")
 
 [resource]
 script = ExtResource("1_profile")
-default_state_id = &"default"
 states = Array[ExtResource("2_state")]([SubResource("VisualStateTexture_default"), SubResource("VisualStateTexture_ray"), SubResource("VisualStateTexture_particle")])
