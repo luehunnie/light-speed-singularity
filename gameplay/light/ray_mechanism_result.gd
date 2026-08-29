@@ -2,11 +2,12 @@ class_name RayMechanismResult
 extends RefCounted
 
 ## 普通光线机关光学响应结果（Day 1 D1-B）：RayMechanismAdapter 与核心传播循环之间的最小结果协议，
-## 表达“保持原方向继续 / 改向 / 停止”三态，不携带伤害、颜色、光强、分光或任何未来机关字段。
+## 表达"保持原方向继续 / 改向 / 停止"三态，并透传颜色变更（color_change）；不携带伤害、光强、分光或其它未来机关字段。
 ## 由 Adapter 构造返回；核心在薄包装中读取 kind 与 outgoing_direction，映射为既有 Vector2i 传播语义。
 ## 关键边界：BLOCK 当前仅作协议保留——原型无实际阻挡型机关，未知机关与非法方向策略以 Adapter 既有行为为准，不得借本类型新增玩法。
 ## outgoing_direction 仅在 REDIRECT 时被核心采用；CONTINUE 时核心沿用 incoming_direction。
 
+const _RayColor: GDScript = preload("res://gameplay/light/ray_color.gd")
 
 ## 机关光学响应三态。
 ## [br]CONTINUE：保持入射方向继续传播（无光学效果或未知机关）。
@@ -24,6 +25,8 @@ var kind: Kind
 ## REDIRECT 时的出射方向（八方向 Vector2i 单位向量）；CONTINUE 与 BLOCK 时不被核心采用，非法方向下保持 Vector2i.ZERO。
 var outgoing_direction: Vector2i
 
+## COLOR_CHANGE 目标色（ColorValue 枚举值）；无颜色变更时恒为 NONE 哨兵，供核心在响应后更新光线颜色。
+var color_change: int = _RayColor.ColorValue.NONE
 
 ## 构造一个机关光学响应结果；只写字段，CONTINUE 时 outgoing_direction 可记入射方向以便调试，BLOCK 时不被采用。
 func _init(

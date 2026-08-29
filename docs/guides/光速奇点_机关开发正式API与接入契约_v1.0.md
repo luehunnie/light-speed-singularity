@@ -1590,6 +1590,7 @@ LightInteractionResult assertions
 - LightInteractionResult；
 - Propagation Decision；
 - SpeedTier / SpeedDelta；
+- Gameplay Color（离散枚举 WHITE/RED/GREEN/BLUE）；
 - ObjectiveHitContext；
 - ObjectiveCondition Contract；
 - Stable Event / Action ID；
@@ -1601,7 +1602,7 @@ LightInteractionResult assertions
 
 - Form Converter / Light Form Change；
 - Split / multi-output propagation；
-- Gameplay Color interaction；
+- Gameplay Color Condition（Objective 侧颜色条件，供颜色水晶）；
 - limited Neighborhood Query；
 - Runtime Spatial Control Action；
 - absolute SetSpeed；
@@ -1632,7 +1633,6 @@ Extension 必须由真实冻结玩法倒逼，不能为了“未来也许”提�
 
 尚未有冻结玩法且只可用于原型：
 
-- Gameplay color effect；
 - Splitter topology；
 - Form conversion exact lifecycle；
 - future neighborhood-aware mechanisms；
@@ -1672,12 +1672,13 @@ Split 会改变传播拓扑，不应简单塞成普通 Effect。
 
 作者工具中的 Formal Color Palette / Visual Color 与 Gameplay Color 是两回事。
 
-在颜色组合、过滤、RGB / 离散色语义未冻结前：
+已冻结（Q46 更新）：Gameplay Color 为离散枚举（RayColor），取值 WHITE=0 / RED=1 / GREEN=2 / BLUE=3，
+另有哨兵 NONE=-1（表示吸收 / 非法输入，非真实颜色）。颜色过滤玩法规则（白光→对应单色、同色保持、
+异色吸收、不做 RGB 混色）已在玩法设计 §6 冻结，属滤光片机关局部规则，非公共 API。
 
-- 不冻结 Gameplay Color 表示；
-- 不冻结 ColorChange Effect；
-- 不冻结 ColorCondition；
-- 只保留扩展位置；
+- 冻结 Gameplay Color 离散枚举（RayColor）为 Stable；
+- 冻结 `COLOR_CHANGE` 光交互效果（`LightInteractionResult` 新 EffectType，字段 `target_color`）；
+- ColorCondition（Objective 侧颜色条件，颜色水晶用）保留为 Extension，待颜色水晶实装前冻结；
 - 不允许 Visual Color 成为玩法颜色真相。
 
 ---
@@ -1698,7 +1699,7 @@ Split 会改变传播拓扑，不应简单塞成普通 Effect。
 | Main Emitter | EmitterDefinition | Preplaced Stable ID | Source | Source | 非 Inventory | 与 MechanismDefinition 分域 |
 | Form Converter | Extension | 未定 | Extension | Extension | - | 规则冻结后再正式化 |
 | Splitter | Extension | 未定 | Topology Extension | Topology Extension | - | 不塞进普通 Effect |
-| Filter / Color Target | Experimental | 未定 | Color Extension | Color Extension | Objective Condition Extension | 等 Gameplay Color 规则 |
+| 滤光片 | MechanismDefinition；orientation + color Field | Preplaced；1-cell；Fixed Profile | 平行 BLOCK / 穿过 COLOR_CHANGE / 吸收 BLOCK | BLOCK | ColorCondition（Extension） | 验证 Gameplay Color + COLOR_CHANGE |
 
 ---
 
@@ -1817,7 +1818,9 @@ Split 会改变传播拓扑，不应简单塞成普通 Effect。
 12. Visual semantic slots / profile validation；
 13. Speed Detector authoring UI；
 14. Objective Group：Independent / Simultaneous / Sequence；
-15. SpeedCondition（若下一阶段目标要求速度型 Objective）。
+15. SpeedCondition（若下一阶段目标要求速度型 Objective）；
+16. Gameplay Color 离散枚举；
+17. 滤光片机关。
 
 ---
 
@@ -1825,14 +1828,12 @@ Split 会改变传播拓扑，不应简单塞成普通 Effect。
 
 1. Form Converter；
 2. Splitter；
-3. Gameplay Color；
-4. Filter；
-5. ColorCondition；
-6. SetSpeed；
-7. Neighborhood Query；
-8. Runtime Spatial Control；
-9. Event runtime payload；
-10. 更复杂 Control Action combination semantics。
+3. ColorCondition；
+4. SetSpeed；
+5. Neighborhood Query；
+6. Runtime Spatial Control；
+7. Event runtime payload；
+8. 更复杂 Control Action combination semantics。
 
 ---
 
@@ -2152,7 +2153,8 @@ CoreLoop
 | Q43 | Stable / Extension / Internal / Experimental 四级 API 边界 | AUTO-FROZEN |
 | Q44 | Form Conversion 只保留受限 Extension 点，具体语义等待玩法冻结 | AUTO-FROZEN |
 | Q45 | Split 属于 Propagation Topology Extension，不提前做普通 Effect | AUTO-FROZEN |
-| Q46 | Gameplay Color 暂不冻结；Visual Color 不得成为玩法颜色事实 | AUTO-FROZEN |
+| Q46 | Gameplay Color 冻结为离散枚举 WHITE/RED/GREEN/BLUE（NONE=-1 哨兵）；Visual Color 不得成为玩法颜色事实 | FROZEN |
+| Q47 | 光交互 API 增加颜色能力：RayInteractionContext 加 current_color（RAY 专属事实，默认 WHITE，须真实四色）；LightInteractionResult 加 COLOR_CHANGE 效果（target_color 须真实四色、仅 RAY 合法、至多一个） | FROZEN |
 
 `AUTO-FROZEN` 表示：用户明确授权“后续全部按推荐方案”，由本轮收口直接冻结。
 
