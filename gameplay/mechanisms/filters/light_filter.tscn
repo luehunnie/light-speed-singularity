@@ -1,0 +1,19 @@
+[gd_scene load_steps=3 format=3 uid="uid://blightfilter01"]
+
+[ext_resource type="Script" path="res://gameplay/mechanisms/filters/light_filter.gd" id="1_script"]
+[ext_resource type="PackedScene" path="res://gameplay/visuals/object_visuals/object_visual_view.tscn" id="2_view"]
+
+[node name="LightFilter" type="Node2D"]
+script = ExtResource("1_script")
+interaction_profile = "fixed"
+
+[node name="VisualView" parent="." instance=ExtResource("2_view")]
+initial_state_id = &"vertical"
+
+[node name="DebugFilm" type="Line2D" parent="."]
+visible = false
+points = PackedVector2Array(0, -28, 0, 28)
+width = 6.0
+default_color = Color(0.45, 0.85, 1, 0.85)
+begin_cap_mode = 2
+end_cap_mode = 2
