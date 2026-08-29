@@ -24,7 +24,8 @@ const _LightInteractionResult: GDScript = preload(
 ## [br]返回：null → CONTINUE；已失效节点 → BLOCK；未声明 RAY 契约 → 透明 CONTINUE；
 ##   契约机关 → 其 interact_ray 经校验的 Decision 映射（CONTINUE/REDIRECT/BLOCK）。
 ## [br]副作用：无；Typed Effects 中 PARTICLE_SPEED_DELTA 对 RAY 形态不合法、由 Contract 校验拒绝；
-##   OUTPUT_EVENT 本批仅经 Result 承载与校验，消费留 Control 域（P1），本类不处理。
+##   OUTPUT_EVENT 本批仅经 Result 承载与校验，消费留 Control 域（P1），本类不处理；
+##   COLOR_CHANGE 经 mech_result.color_change 透传给传播核心消费。
 static func evaluate(
 		mechanism: Variant,
 		ray_context: Variant
@@ -45,12 +46,16 @@ static func evaluate(
 
 	# 正式契约分发（AF-02）：未声明 RAY 的机关（含未知类型）由 Contract 判透明，不再依赖具体类名。
 	var interaction: _LightInteractionResult = _LightInteractionContract.dispatch_ray(mechanism, ray_context)
+	var mech_result: _RayMechanismResult
 	match interaction.decision:
 		_LightInteractionResult.Decision.REDIRECT:
-			return _RayMechanismResult.redirect_to(interaction.redirect_direction)
+			mech_result = _RayMechanismResult.redirect_to(interaction.redirect_direction)
 		_LightInteractionResult.Decision.BLOCK:
 			if OS.is_debug_build():
 				print_debug("RayMechanismAdapter: 机关 BLOCK 停止传播。")
-			return _RayMechanismResult.block()
+			mech_result = _RayMechanismResult.block()
 		_:
-			return _RayMechanismResult.continue_with(incoming_direction)
+			mech_result = _RayMechanismResult.continue_with(incoming_direction)
+	# 透传颜色变更（改动 4）：COLOR_CHANGE 效果经 color_change 字段交给传播核心消费。
+	mech_result.color_change = interaction.get_color_change()
+	return mech_result
