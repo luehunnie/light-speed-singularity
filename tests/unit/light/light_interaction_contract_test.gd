@@ -2,7 +2,7 @@ extends SceneTree
 
 ## LightInteractionContract / Context / Result 定向合同测试（AF-02 / Guide §19-§24、§36.2）。
 ## 覆盖：Context 共享事实与 Particle-only 事实、非法构造拒绝、不可变意图（无写入口）；
-##   Result 构造器 / Decision 不变量 / SpeedDelta ±1 域 / OutputEvent / 不合法 Result 校验；
+##   Result 构造器 / Decision 不变量 / SpeedDelta ±1 域 / OutputEvent / COLOR_CHANGE / 不合法 Result 校验；
 ##   正式分发：透明语义（未声明形态 / 非契约节点 / null / 已释放）、校验失败安全降级、机关单次调用、
 ##   Context 类型不匹配拒绝、真实机关（SingleCellMirror / 加速器 / 减速器）经正式入口的对称行为。
 ## headless extends SceneTree，由 Godot --script 运行；通过 preload 引用模块避开全局 class_name 缓存问题。
@@ -23,6 +23,9 @@ const _ParticleContext: GDScript = preload(
 )
 const _LightEmissionTypes: GDScript = preload(
 	"res://gameplay/light/light_emission_types.gd"
+)
+const _RayColor: GDScript = preload(
+	"res://gameplay/light/ray_color.gd"
 )
 const _ParticleMotionRules: GDScript = preload(
 	"res://gameplay/particle/particle_motion_rules.gd"
@@ -53,6 +56,7 @@ func _initialize() -> void:
 	_test_06_dispatch_transparency()
 	_test_07_dispatch_degrade_and_single_call()
 	_test_08_real_mechanisms()
+	_test_09_color_change()
 	_report()
 	quit(0 if _failures.is_empty() else 1)
 
@@ -255,6 +259,35 @@ func _test_08_real_mechanisms() -> void:
 	decel.free()
 
 
+## 9. COLOR_CHANGE 效果与 Context current_color：变色效果读取/validate 域、Context 当前颜色默认与非法拒绝。
+func _test_09_color_change() -> void:
+	const G: String = "09_颜色变更"
+	var ray_form: int = _LightEmissionTypes.LightForm.RAY
+	var particle_form: int = _LightEmissionTypes.LightForm.PARTICLE
+	var colored = _Result.continue_result().add_color_change(_RayColor.ColorValue.RED)
+	_check(G, colored.get_color_change() == _RayColor.ColorValue.RED, "add_color_change(RED) 应读回 RED。")
+	_check(G, _Result.continue_result().get_color_change() == _RayColor.ColorValue.NONE, "无颜色效果应返回 NONE 哨兵。")
+	_check(G, colored.get_speed_delta() == 0, "仅变色时 speed_delta 应为 0。")
+	_check(G, _Result.continue_result().add_color_change(_RayColor.ColorValue.GREEN).validate(ray_form).is_empty(),
+		"COLOR_CHANGE(GREEN)(RAY) 应合法。")
+	_check(G, not _Result.continue_result().add_color_change(_RayColor.ColorValue.RED).validate(particle_form).is_empty(),
+		"COLOR_CHANGE(PARTICLE) 应不合法（光粒无颜色）。")
+	_check(G, not _Result.continue_result().add_color_change(_RayColor.ColorValue.NONE).validate(ray_form).is_empty(),
+		"COLOR_CHANGE(NONE) 应不合法（NONE 非真实色）。")
+	_check(G, not _Result.continue_result().add_color_change(_RayColor.ColorValue.RED).add_color_change(_RayColor.ColorValue.BLUE).validate(ray_form).is_empty(),
+		"重复 COLOR_CHANGE 应不合法。")
+	var default_ctx = _ray_ctx(Vector2i(0, 0), Vector2i(1, 0))
+	_check(G, default_ctx != null and default_ctx.get_current_color() == _RayColor.ColorValue.WHITE,
+		"Context 默认 current_color 应为 WHITE。")
+	var red_ctx = _RayContext.create(Vector2i(0, 0), Vector2i(1, 0), 9, 3, _RayColor.ColorValue.RED)
+	_check(G, red_ctx != null and red_ctx.get_current_color() == _RayColor.ColorValue.RED,
+		"显式传入 RED 应读回 RED。")
+	_check(G, _RayContext.create(Vector2i(0, 0), Vector2i(1, 0), 9, 3, _RayColor.ColorValue.NONE) == null,
+		"非法 current_color(NONE) 应拒绝构造。")
+	_check(G, _RayContext.create(Vector2i(0, 0), Vector2i(1, 0), 9, 3, 99) == null,
+		"越界 current_color 应拒绝构造。")
+
+
 ## 仅声明 RAY 的伪造机关（§21 未声明形态语义）。
 class _RayOnlyFake:
 	extends RefCounted
@@ -347,7 +380,7 @@ func _check(group: String, ok: bool, detail: String) -> void:
 
 ## 输出测试摘要。
 func _report() -> void:
-	var group_count: int = 8
+	var group_count: int = 9
 	var passed_checks: int = _checks - _failures.size()
 	print("==== LightInteractionContract AF-02 测试摘要 ====")
 	print("测试组数：%d" % group_count)

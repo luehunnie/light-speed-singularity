@@ -2154,6 +2154,7 @@ CoreLoop
 | Q44 | Form Conversion 只保留受限 Extension 点，具体语义等待玩法冻结 | AUTO-FROZEN |
 | Q45 | Split 属于 Propagation Topology Extension，不提前做普通 Effect | AUTO-FROZEN |
 | Q46 | Gameplay Color 冻结为离散枚举 WHITE/RED/GREEN/BLUE（NONE=-1 哨兵）；Visual Color 不得成为玩法颜色事实 | FROZEN |
+| Q47 | 光交互 API 增加颜色能力：RayInteractionContext 加 current_color（RAY 专属事实，默认 WHITE，须真实四色）；LightInteractionResult 加 COLOR_CHANGE 效果（target_color 须真实四色、仅 RAY 合法、至多一个） | FROZEN |
 
 `AUTO-FROZEN` 表示：用户明确授权“后续全部按推荐方案”，由本轮收口直接冻结。
 
