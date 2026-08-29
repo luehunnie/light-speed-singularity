@@ -1,0 +1,13 @@
+[gd_resource type="Resource" script_class="MechanismDefinition" format=3]
+
+[ext_resource type="PackedScene" path="res://gameplay/mechanisms/filters/light_filter.tscn" id="1_filter"]
+[ext_resource type="Script" path="res://gameplay/content/mechanism_definition.gd" id="2_mechdef"]
+
+[resource]
+script = ExtResource("2_mechdef")
+light_interaction_forms = Array[StringName]([&"RAY", &"PARTICLE"])
+content_type_id = &"light_filter"
+display_name = "滤光片"
+category = &"optics"
+inventory_eligible = true
+scene = ExtResource("1_filter")

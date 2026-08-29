@@ -8,7 +8,8 @@ extends RefCounted
 ##   以 target_id（= BasicCrystal.crystal_id，Authoring 侧 stable_instance_id 同源）经正式 LevelObjectRegistry
 ##   解析 cell，构造 ObjectiveTarget / ObjectiveGroup / ObjectiveModel 交 ObjectiveController 绑定。
 ## Schema（Authoring 冻结）：objective_conditions = {target_stable_id: String → [{condition_type_id: String,
-##   allowed_forms: Array[int]}]}；objective_groups = [{group_type: int(0=Simultaneous/1=Sequence),
+##   allowed_forms: Array[int]} 或 {condition_type_id: String, target_color: int}（color_condition，ColorValue 红/绿/蓝）]}；
+##   objective_groups = [{group_type: int(0=Simultaneous/1=Sequence),
 ##   member_ids: Array[String], required: bool, window_seconds: float}]。
 ## 身份边界：target_id 一律经 Registry（crystal_id ↔ cell 双向索引）解析，不从 Node 标识、节点路径、
 ##   坐标推测或场景结构猜测；meta 引用 Registry 未登记 ID = 非法形状安全失败。
@@ -26,6 +27,9 @@ const _ObjectiveGroup: GDScript = preload("res://gameplay/objectives/objective_g
 const _ObjectiveModel: GDScript = preload("res://gameplay/objectives/objective_model.gd")
 const _ObjectiveConditionConfiguration: GDScript = preload(
 	"res://gameplay/objectives/objective_condition_configuration.gd"
+)
+const _ObjectiveConditionDefinition: GDScript = preload(
+	"res://gameplay/objectives/objective_condition_definition.gd"
 )
 
 ## meta 键（与 addons ObjectiveDataService.META_CONDITIONS / META_GROUPS 一致，不 preload addons）。
@@ -139,10 +143,15 @@ static func _build_targets(registry: Variant, conditions: Dictionary, member_ids
 					push_error("ObjectiveMetaReader：目标 %s 的条件条目必须是 Dictionary，实际 %s。" % [crystal_id, typeof(entry_variant)])
 					return []
 				var entry: Dictionary = entry_variant
-				var configuration: _ObjectiveConditionConfiguration = _ObjectiveConditionConfiguration.create(
-					StringName(str(entry.get("condition_type_id", ""))),
-					entry.get("allowed_forms", [])
-				)
+				# color_condition 走 target_color 参数（ColorValue 红/绿/蓝）；其余类型沿用 allowed_forms 参数域。
+				var condition_type: StringName = StringName(str(entry.get("condition_type_id", "")))
+				var configuration: _ObjectiveConditionConfiguration
+				if condition_type == _ObjectiveConditionDefinition.TYPE_COLOR_CONDITION:
+					configuration = _ObjectiveConditionConfiguration.create_for_color(
+						int(entry.get("target_color", -1)))
+				else:
+					configuration = _ObjectiveConditionConfiguration.create(
+						condition_type, entry.get("allowed_forms", []))
 				if configuration == null:
 					return []
 				condition_configs.append(configuration)

@@ -19,6 +19,11 @@ extends Resource
 @export var scene: PackedScene = null
 ## 是否允许预放置。
 @export var preplaceable: bool = true
+## 是否可进入关卡库存配置（Inventory 面板类型下拉与运行期库存事实的唯一资格声明）。
+## [br]作者域声明：true 即可在 Inventory 下拉配置并随 inventory_entries 序列化；
+## 运行期玩家拿取/放置/回收的实际能力另由场景根契约（PlaceableToken 派生链）与
+## Interaction Profile 共同决定，本字段只声明库存资格，不隐含运行期交互能力。
+@export var inventory_eligible: bool = false
 ## 是否支持稳定实例身份。
 @export var supports_stable_instance: bool = true
 ## 是否支持作者备注。

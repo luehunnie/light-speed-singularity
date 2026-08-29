@@ -52,8 +52,8 @@ static func execute(
 			result.stop_reason = _RayExecutionResult.StopReason.WALL
 			break
 
-		# 3-5. 光进入 next_cell：先记录该格步骤（入射方向、是否有水晶）再处理机关方向，保持旧循环顺序。
-		result.add_step(next_cell, direction, world_query.has_crystal_at(next_cell))
+		# 3-5. 光进入 next_cell：先记录该格步骤（入射方向、是否有水晶、到达色）再处理机关方向，保持旧循环顺序。
+		result.add_step(next_cell, direction, world_query.has_crystal_at(next_cell), current_color)
 
 		# 6-8. 进入机关格后再更新方向：REDIRECT 改向从下一格起生效，BLOCK 停止，CONTINUE 保持原方向。
 		# get_light_mechanism_at 一次取得机关节点；无机关或未登记正式节点返回 null，跳过评估等价 CONTINUE。

@@ -19,7 +19,6 @@ display_name = "切换启用状态"
 
 [resource]
 script = ExtResource("3_ristn")
-inventory_eligible = true
 light_interaction_forms = Array[StringName]([&"PARTICLE"])
 configuration_fields = [SubResource("Resource_oafxd")]
 player_interaction_actions = Array[StringName]([&"cycle_direction"])
@@ -28,3 +27,4 @@ content_type_id = &"particle_accelerator"
 display_name = "光粒加速器"
 category = &"speed"
 scene = ExtResource("2_kl0nw")
+inventory_eligible = true

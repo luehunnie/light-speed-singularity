@@ -64,7 +64,7 @@ func _ray_only_target(target_id: StringName, cell: Vector2i, required: bool) -> 
 
 ## 构造 Ray 命中事实。
 func _ray_hit(cell: Vector2i) -> _ObjectiveHitContext:
-	var hit: _ObjectiveHitContext = _ObjectiveHitContext.create_for_ray(cell, Vector2i(1, 0), 7, 3)
+	var hit: _ObjectiveHitContext = _ObjectiveHitContext.create_for_ray(cell, Vector2i(1, 0), 7, 3, 0)
 	return hit
 
 

@@ -5,22 +5,30 @@ extends RefCounted
 ## 每种条件类型必须正式声明：显示名 / 参数 / 枚举 / 验证 / 可作用目标类型；
 ## Objective Editor / Validator 不硬编码具体 Condition 名单，一律经本注册表枚举。
 ## 本批正式声明的条件类型：form_condition（FormCondition：命中光形态 ∈ 允许形态集合，
-## 形态内多值即该条件自己的 OR 参数模型，不做通用逻辑表达式）。
+## 形态内多值即该条件自己的 OR 参数模型，不做通用逻辑表达式）；
+## color_condition（ColorCondition：RAY 命中到达色 == 目标色，目标色 ∈ ColorValue 红/绿/蓝，
+## WHITE 不构成颜色条件——机关规则 光颜色水晶 v0.1 §8）。
 ## 空条件列表表示 Base Success（Guide A §13.1），Base Success 不是条件类型，不进注册表。
 ## 纯声明域：不进场景树、不 preload Runtime / WorldQuery；新增条件类型按 additive 扩展 _DECLARED。
 
 
 const _LightEmissionTypes: GDScript = preload("res://gameplay/light/light_emission_types.gd")
+const _RayColor: GDScript = preload("res://gameplay/light/ray_color.gd")
 
 ## 条件类型稳定 ID：FormCondition（命中光形态条件）。
 const TYPE_FORM_CONDITION: StringName = &"form_condition"
 ## form_condition 参数模型：allowed_forms——允许的命中光形态集合（LightForm 值，非空，多值 OR）。
 const PARAM_ALLOWED_FORMS: StringName = &"allowed_forms"
+## 条件类型稳定 ID：ColorCondition（光颜色水晶颜色条件；命中到达色精确等于目标色）。
+const TYPE_COLOR_CONDITION: StringName = &"color_condition"
+## color_condition 参数模型：target_color——目标颜色（ColorValue 的 RED/GREEN/BLUE 之一；WHITE 不是颜色条件目标，规则 §8）。
+const PARAM_TARGET_COLOR: StringName = &"target_color"
 
 
 ## 已正式声明的条件类型（稳定 ID 有序表；Editor/Validator 枚举唯一入口，不硬编码名单）。
 const _DECLARED_TYPE_IDS: Array[StringName] = [
 	TYPE_FORM_CONDITION,
+	TYPE_COLOR_CONDITION,
 ]
 
 
@@ -61,6 +69,12 @@ static func get_by_type_id(condition_type_id: StringName) -> ObjectiveConditionD
 			var params: Array[StringName] = []
 			params.append(PARAM_ALLOWED_FORMS)
 			return ObjectiveConditionDefinition.new(TYPE_FORM_CONDITION, "光形态条件", domains, params)
+		TYPE_COLOR_CONDITION:
+			var color_domains: Array[StringName] = []
+			color_domains.append(&"objective_target")
+			var color_params: Array[StringName] = []
+			color_params.append(PARAM_TARGET_COLOR)
+			return ObjectiveConditionDefinition.new(TYPE_COLOR_CONDITION, "颜色条件", color_domains, color_params)
 		_:
 			return null
 
@@ -95,4 +109,14 @@ static func get_valid_light_forms() -> Array[int]:
 	return [
 		_LightEmissionTypes.LightForm.RAY,
 		_LightEmissionTypes.LightForm.PARTICLE,
+	]
+
+
+## color_condition 的 target_color 参数合法值集合（ColorValue 枚举域，不含 WHITE：
+## 白光不是红/绿/蓝任何单色，不构成颜色条件目标——机关规则 光颜色水晶 v0.1 §8 拍板）。
+static func get_valid_target_colors() -> Array[int]:
+	return [
+		_RayColor.ColorValue.RED,
+		_RayColor.ColorValue.GREEN,
+		_RayColor.ColorValue.BLUE,
 	]

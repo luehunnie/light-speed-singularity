@@ -19,7 +19,6 @@ display_name = "光束经镜面转向"
 
 [resource]
 script = ExtResource("3_ylgc8")
-inventory_eligible = true
 light_interaction_forms = Array[StringName]([&"RAY"])
 configuration_fields = [SubResource("Resource_p3tdi")]
 player_interaction_actions = Array[StringName]([&"cycle_internal_state"])
@@ -28,3 +27,4 @@ content_type_id = &"basic_single_cell_mirror"
 display_name = "基础单格镜"
 category = &"optics"
 scene = ExtResource("2_5botf")
+inventory_eligible = true

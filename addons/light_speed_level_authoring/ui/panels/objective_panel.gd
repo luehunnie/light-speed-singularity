@@ -11,6 +11,9 @@ extends VBoxContainer
 const _ObjectiveData: GDScript = preload(
 	"res://addons/light_speed_level_authoring/authoring/business_data/objective_data_service.gd"
 )
+const _ObjectiveConditionDefinition: GDScript = preload(
+	"res://gameplay/objectives/objective_condition_definition.gd"
+)
 const _BusinessData: GDScript = preload(
 	"res://addons/light_speed_level_authoring/authoring/business_data/business_data_service.gd"
 )
@@ -28,6 +31,7 @@ var _groups: Array = []
 var _target_options: OptionButton
 var _condition_list: ItemList
 var _condition_type_options: OptionButton
+var _color_options: OptionButton
 var _form_checks: Array[CheckBox] = []
 var _group_list: ItemList
 var _group_type_options: OptionButton
@@ -55,6 +59,9 @@ func setup(context: Object) -> void:
 		check.text = form
 		_form_checks.append(check)
 		target_row.add_child(check)
+	_color_options = OptionButton.new()
+	_color_options.custom_minimum_size = Vector2(72, 0)
+	target_row.add_child(_color_options)
 	target_row.add_child(_button("添加条件", _on_add_condition))
 	add_child(target_row)
 	_condition_list = ItemList.new()
@@ -105,6 +112,12 @@ func refresh() -> void:
 		_condition_type_options.set_item_metadata(-1, option.condition_type_id)
 	if _condition_type_options.item_count > 0 and _condition_type_options.selected < 0:
 		_condition_type_options.select(0)
+	_color_options.clear()
+	for option: Dictionary in _ObjectiveData.get_target_color_options():
+		_color_options.add_item(option.name)
+		_color_options.set_item_metadata(-1, option.value)
+	if _color_options.item_count > 0 and _color_options.selected < 0:
+		_color_options.select(0)
 	_member_list.clear()
 	for target: Dictionary in _targets:
 		_member_list.add_item("%s（%s）" % [target.display_name, target.stable_id])
@@ -125,10 +138,23 @@ func _reload_condition_widgets() -> void:
 	_condition_list.clear()
 	var target_id := _selected_target_id()
 	for entry: Variant in (_conditions.get(target_id, []) as Array):
+		var type_id := str(entry.get("condition_type_id", ""))
+		if type_id == String(_ObjectiveConditionDefinition.TYPE_COLOR_CONDITION):
+			_condition_list.add_item("%s（颜色 %s）" % [type_id, _color_display_name(int(entry.get("target_color", -1)))])
+			continue
 		var forms: Array = []
 		for form_variant: Variant in entry.get("allowed_forms", []):
 			forms.append(str(int(form_variant)))
-		_condition_list.add_item("%s（形态 %s）" % [entry.get("condition_type_id", ""), "|".join(forms)])
+		_condition_list.add_item("%s（形态 %s）" % [type_id, "|".join(forms)])
+
+
+## 目标颜色值 → 显示名（红/绿/蓝；越界值显示原始数字，与校验错误清单一致）。
+func _color_display_name(color_value: int) -> String:
+	var names: Array[String] = _ObjectiveData.TARGET_COLOR_NAMES
+	var colors: Array[int] = _ObjectiveConditionDefinition.get_valid_target_colors()
+	if colors.has(color_value):
+		return names[colors.find(color_value)]
+	return str(color_value)
 
 
 func _reload_group_list() -> void:
@@ -171,6 +197,17 @@ func _on_add_condition() -> void:
 		if str(entry.get("condition_type_id")) == type_id:
 			_ctx.log_message("目标 %s 已挂条件 %s（同类型单目标最多一次）。" % [target_id, type_id])
 			return
+	if type_id == String(_ObjectiveConditionDefinition.TYPE_COLOR_CONDITION):
+		if _color_options.selected < 0:
+			_ctx.log_message("color_condition 需选择目标颜色。")
+			return
+		bucket.append({
+			"condition_type_id": type_id,
+			"target_color": int(_color_options.get_item_metadata(_color_options.selected)),
+		})
+		_conditions[target_id] = bucket
+		_reload_condition_widgets()
+		return
 	var allowed: Array[int] = []
 	for index: int in _form_checks.size():
 		if _form_checks[index].button_pressed:

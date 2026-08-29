@@ -61,7 +61,8 @@ static func build_palette_entries(registry, only_type_ids: Array = []) -> Array[
 # [br]add_to_tree=false：只构建节点 / 定位 / 分配 ID，不入树（调用方把 add_child+owner 包进编辑事务，
 # [br]  commit 时由事务 do 段执行；result.container 为目标容器）。
 # [br]返回 {ok, node, cell, stable_instance_id, container, reason}；失败时已实例化节点被释放，零残留。
-# [br]稳定 ID 发号器按关卡既有序号播种（经 StableIdService 口径，不与已持久化 ID 冲突）。
+# [br]稳定 ID 发号器按关卡既有序号播种（经 StableIdService 口径，不与已持久化 ID 冲突）；
+# [br]写入走 StableIdService 同源口径（BasicCrystal 同 token 补写 crystal_id，不建第二套编号）。
 func place(registry, content_type_id: StringName, level_root: Node2D,
 		add_to_tree: bool = true) -> Dictionary:
 	var fail := func(reason: String) -> Dictionary:
@@ -93,7 +94,7 @@ func place(registry, content_type_id: StringName, level_root: Node2D,
 		instance.free()
 		return fail.call("类型 %s 场景根非 Node2D。" % content_type_id)
 	var stable_id: String = _StableIdService.next_stable_instance_id(level_root)
-	instance.set("stable_instance_id", stable_id)
+	_StableIdService.assign_stable_id(instance, stable_id)
 	(instance as Node2D).position = _GridCoordinateRules.cell_to_world(cell)
 	if add_to_tree:
 		container.add_child(instance)

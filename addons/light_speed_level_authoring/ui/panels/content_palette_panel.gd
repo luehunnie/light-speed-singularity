@@ -21,6 +21,7 @@ var _ctx: Object = null
 var _list: ItemList
 var _type_ids: Array[StringName] = []
 var _rotate_button: Button
+var _color_button: Button
 
 
 func setup(context: Object) -> void:
@@ -41,6 +42,9 @@ func setup(context: Object) -> void:
 	_rotate_button = _button("旋转方向（R 同款字段）", _on_rotate_selected)
 	_rotate_button.disabled = true
 	select_row.add_child(_rotate_button)
+	_color_button = _button("切换颜色（光颜色水晶）", _on_cycle_color_selected)
+	_color_button.disabled = true
+	select_row.add_child(_color_button)
 	select_row.add_child(_button("修复 Stable ID", _on_repair_stable_ids))
 	add_child(select_row)
 
@@ -49,9 +53,10 @@ func refresh() -> void:
 	_on_refresh_palette()
 
 
-# 选择变化：驱动旋转入口可用性（未拾取态时由 Dock 广播）。
+# 选择变化：驱动旋转 / 颜色入口可用性（未拾取态时由 Dock 广播）。
 func on_selection_changed(formal_nodes: Array[Node]) -> void:
 	_rotate_button.disabled = formal_nodes.is_empty()
+	_color_button.disabled = formal_nodes.is_empty() or not formal_nodes[0].has_method("cycle_color")
 
 
 func _button(title: String, handler: Callable) -> Button:
@@ -139,6 +144,24 @@ func _on_rotate_selected() -> void:
 		"undo": ["set", [field, old_value]],
 	}]
 	_EditorTransaction.commit(_ctx._get_undo_redo(), "旋转方向", operations)
+
+
+# 切换所选光颜色水晶颜色（红→绿→蓝循环；默认红，放置后作者入口，与 Inspector 枚举同字段同事实）。
+func _on_cycle_color_selected() -> void:
+	var selected: Array[Node] = _ctx._last_selected_formal()
+	if selected.is_empty():
+		return
+	var node: Node = selected[0]
+	if not node.has_method("cycle_color"):
+		_ctx.log_message("所选对象不支持颜色切换（仅光颜色水晶）。")
+		return
+	var old_color: Variant = node.get("crystal_color")
+	var operations: Array = [{
+		"target": node,
+		"do": ["cycle_color", []],
+		"undo": ["set", ["crystal_color", old_color]],
+	}]
+	_EditorTransaction.commit(_ctx._get_undo_redo(), "切换颜色", operations)
 
 
 func _on_repair_stable_ids() -> void:

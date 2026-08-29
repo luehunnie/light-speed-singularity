@@ -1,0 +1,21 @@
+[gd_resource type="Resource" script_class="ObjectVisualProfile" format=3 uid="uid://xel8kdkbwltu"]
+
+[ext_resource type="Script" uid="uid://djtcgpsdp3a5x" path="res://gameplay/visuals/object_visuals/object_visual_profile.gd" id="1_profile"]
+[ext_resource type="Script" uid="uid://b562k3phylvi3" path="res://gameplay/visuals/visual_state_texture.gd" id="2_state"]
+[ext_resource type="Texture2D" uid="uid://byb5au5us0njw" path="res://assets/art/crystal/green_crystal_unactivate.png" id="3_unlit_tex"]
+[ext_resource type="Texture2D" uid="uid://ce3u7y0i6mhcy" path="res://assets/art/crystal/green_crystal_activate.png" id="4_lit_tex"]
+
+[sub_resource type="Resource" id="VisualStateTexture_unlit"]
+script = ExtResource("2_state")
+state_id = &"unlit"
+world_texture = ExtResource("3_unlit_tex")
+
+[sub_resource type="Resource" id="VisualStateTexture_lit"]
+script = ExtResource("2_state")
+state_id = &"lit"
+world_texture = ExtResource("4_lit_tex")
+
+[resource]
+script = ExtResource("1_profile")
+default_state_id = &"unlit"
+states = Array[ExtResource("2_state")]([SubResource("VisualStateTexture_unlit"), SubResource("VisualStateTexture_lit")])

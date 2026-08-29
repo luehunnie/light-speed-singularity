@@ -6,7 +6,8 @@ extends RefCounted
 ## 位置：由 RayExecutionModule 构造并返回；核心闭环原型在 fire_light() 中读取后逐格按顺序应用视觉与水晶副作用，不把本对象传入其他地方。
 ## 依赖：Vector2i 格子与方向；不依赖场景树、OccupancyRegistry、库存、RunState、UI、Diagnostics 或光路视觉节点。
 ## 不负责：机关识别、反射计算、地图读取、世界修改、水晶激活、光路视觉创建、脉冲结束、pulse_generation。
-## 边界：只保存事实，不执行任何副作用；停止原因仅保留当前原型真实存在的最小集合，不携带颜色、光强、分光或未来玩法字段。
+## 边界：只保存事实，不执行任何副作用；停止原因仅保留当前原型真实存在的最小集合，不携带光强、分光或未来玩法字段；
+## 颜色仅记录进入该格时的到达色（ColorValue，供水晶命中事实构造；机关 COLOR_CHANGE 从下一格起生效）。
 
 
 ## 传播停止原因；与旧 fire_light() 逐格循环的 break 分支一一对应，顺序保真以旧循环为准。
@@ -31,8 +32,8 @@ var steps: Array[_Step] = []
 
 ## 追加一个传播步骤：cell 为光进入的格子，incoming_direction 为进入该格时的方向（用于光路视觉），has_crystal 表示该格是否存在需尝试激活的水晶。
 ## [br]无返回值；只向 steps 末尾追加一个 _Step，不修改其他字段。
-func add_step(cell: Vector2i, incoming_direction: Vector2i, has_crystal: bool) -> void:
-	steps.append(_Step.new(cell, incoming_direction, has_crystal))
+func add_step(cell: Vector2i, incoming_direction: Vector2i, has_crystal: bool, color: int = 0) -> void:
+	steps.append(_Step.new(cell, incoming_direction, has_crystal, color))
 
 
 ## 单步传播事实：光进入的格子、该格入射方向与该格是否存在水晶。
@@ -46,12 +47,16 @@ class _Step:
 	var incoming_direction: Vector2i
 	## 该格是否存在普通独立水晶；核心按步骤顺序据此决定是否尝试激活。
 	var has_crystal: bool
+	## 进入该格时的到达色（RayColor.ColorValue 值；机关 COLOR_CHANGE 从下一格起生效，供水晶命中事实构造）。
+	var color: int
 
 	func _init(
 		p_cell: Vector2i = Vector2i.ZERO,
 		p_incoming_direction: Vector2i = Vector2i.ZERO,
-		p_has_crystal: bool = false
+		p_has_crystal: bool = false,
+		p_color: int = 0
 	) -> void:
 		cell = p_cell
 		incoming_direction = p_incoming_direction
 		has_crystal = p_has_crystal
+		color = p_color

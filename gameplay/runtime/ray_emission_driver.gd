@@ -108,7 +108,7 @@ func dispatch(
 ## 逐格按 steps 顺序应用副作用：同一格先创建光路视觉（per-emission，携带 emission_id/generation）再应用水晶命中；不重新计算路径、不改占用/机关/RunState/库存。
 ## [br]emission_id 使本段视觉归属本次 Ray emission（新 Ray 不清旧 Ray；本 Ray finish 只清自身）；generation 为 visual version metadata（非 gameplay 真值）。
 ## [br]顺序冻结：show_step 必须早于 apply_hit 水晶命中（与旧 fire_light 循环一致；源码扫描测试锁定本顺序）。
-## [br]水晶命中（S3-05）：经 ObjectiveHitContext.create_for_ray(cell, 入射方向, emission_id, generation) 构造不可变命中事实交
+## [br]水晶命中（S3-05）：经 ObjectiveHitContext.create_for_ray(cell, 入射方向, emission_id, generation, 到达色) 构造不可变命中事实交
 ## [br]  ObjectiveController.apply_hit——未绑定模型等价旧 try_activate_crystal_at 原型激活；绑定模型按条件路由（通过才点亮）。
 ## [br]反射格（D7-R5 视觉修复）：某格的进入方向与下一步的进入方向不同 = 该格机关改向（镜面）——
 ##   本格改画两段半光束（入射半段 + 出射半段，经 show_reflection_step 在格中心拼出拐角），
@@ -129,10 +129,10 @@ func _apply_ray_execution_result(result: _RayExecutionResult, emission_id: int, 
 		else:
 			_light_visual_controller.show_step(emission_id, generation, step.cell, step.incoming_direction)
 		if step.has_crystal:
-			# S3-05 正式命中点：命中事实经 ObjectiveHitContext.create_for_ray 交 ObjectiveController.apply_hit
+			# S3-05 正式命中点：命中事实（含 step.color 到达色）经 ObjectiveHitContext.create_for_ray 交 ObjectiveController.apply_hit
 			#（未绑定模型时 apply_hit 等价水晶原型激活；绑定模型时按条件路由，通过才点亮）。
 			var hit: Variant = _ObjectiveHitContext.create_for_ray(
-				step.cell, step.incoming_direction, emission_id, generation)
+				step.cell, step.incoming_direction, emission_id, generation, step.color)
 			if hit != null:
 				_objective_controller.apply_hit(hit)
 

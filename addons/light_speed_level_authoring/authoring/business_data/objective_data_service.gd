@@ -3,8 +3,9 @@ extends RefCounted
 
 # AF-09 Objective 业务数据服务（Guide §13 / §15 / §16）：目标条件与跨目标组的读 / 校验。
 # 数据形状：objective_conditions = {target_stable_id: String → [{condition_type_id: String,
-# allowed_forms: Array[int]}]}；objective_groups = [{group_type: int, member_ids: Array[String],
-# required: bool, window_seconds: float}]。
+# allowed_forms: Array[int]} 或 {condition_type_id: String, target_color: int}（color_condition，
+# ColorValue 红/绿/蓝，机关规则 光颜色水晶 v0.1）]}；objective_groups = [{group_type: int,
+# member_ids: Array[String], required: bool, window_seconds: float}]。
 # 只提供已声明条件（ObjectiveConditionDefinition 注册表枚举，不硬编码名单）；校验与运行时
 # ObjectiveConditionConfiguration / ObjectiveGroup 工厂语义同构（含错误清单而非 push_error）。
 
@@ -26,6 +27,9 @@ const META_GROUPS: String = "objective_groups"
 # 组类型显示名（GroupType 枚举：SIMULTANEOUS=0 / SEQUENCE=1）。
 const GROUP_TYPE_NAMES: Array[String] = ["同时（Simultaneous）", "顺序（Sequence）"]
 
+# color_condition 目标颜色显示名（顺序对齐 ObjectiveConditionDefinition.get_valid_target_colors = RED/GREEN/BLUE）。
+const TARGET_COLOR_NAMES: Array[String] = ["红", "绿", "蓝"]
+
 
 # 读条件映射（detached；键 = 目标 stable_id）。
 static func read_conditions(root: Node) -> Dictionary:
@@ -45,6 +49,15 @@ static func get_condition_type_options() -> Array[Dictionary]:
 			"condition_type_id": String(definition.get_condition_type_id()),
 			"display_name": definition.get_display_name(),
 		})
+	return options
+
+
+# color_condition 的目标颜色选项（[{value, name}]；value = ColorValue 红/绿/蓝，Panel 下拉唯一入口）。
+static func get_target_color_options() -> Array[Dictionary]:
+	var options: Array[Dictionary] = []
+	var colors: Array[int] = _ObjectiveConditionDefinition.get_valid_target_colors()
+	for index: int in colors.size():
+		options.append({"value": colors[index], "name": TARGET_COLOR_NAMES[index]})
 	return options
 
 
@@ -71,13 +84,18 @@ static func validate_conditions(conditions: Dictionary, object_index: Array[Dict
 			if seen.has(type_id):
 				problems.append("目标 %s 的条件类型 %s 重复（同类型单目标最多一次）。" % [target_id, type_id])
 			seen.append(type_id)
-			problems.append_array(_validate_condition_params(target_id, type_id, entry.get("allowed_forms", [])))
+			problems.append_array(_validate_condition_params(target_id, type_id, entry.get("allowed_forms", []), entry.get("target_color", -1)))
 	return problems
 
 
-# 单条件参数域（v1：form_condition → allowed_forms 非空、值域合法、去重有序）。
-static func _validate_condition_params(target_id: String, type_id: String, allowed_forms: Array) -> PackedStringArray:
+# 单条件参数域（v1：form_condition → allowed_forms 非空、值域合法、去重有序；
+# color_condition → target_color ∈ ColorValue 红/绿/蓝，WHITE/NONE 越界拒绝）。
+static func _validate_condition_params(target_id: String, type_id: String, allowed_forms: Array, target_color: Variant) -> PackedStringArray:
 	var problems := PackedStringArray()
+	if type_id == String(_ObjectiveConditionDefinition.TYPE_COLOR_CONDITION):
+		if not int(target_color) in _ObjectiveConditionDefinition.get_valid_target_colors():
+			problems.append("目标 %s 的 color_condition：目标颜色 %s 越界（仅红/绿/蓝）。" % [target_id, str(target_color)])
+		return problems
 	if type_id != String(_ObjectiveConditionDefinition.TYPE_FORM_CONDITION):
 		return problems
 	if (allowed_forms as Array).is_empty():
