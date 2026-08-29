@@ -1,0 +1,12 @@
+[gd_scene load_steps=4 format=3]
+
+[ext_resource type="Script" path="res://gameplay/crystals/color_crystal.gd" id="1_crystal"]
+[ext_resource type="PackedScene" path="res://gameplay/visuals/object_visuals/object_visual_view.tscn" id="2_view"]
+[ext_resource type="Resource" path="res://assets/visual_profiles/red_crystal_visuals.tres" id="3_profile"]
+
+[node name="ColorCrystal" type="Node2D"]
+script = ExtResource("1_crystal")
+
+[node name="VisualView" parent="." instance=ExtResource("2_view")]
+visual_profile = ExtResource("3_profile")
+initial_state_id = &"unlit"

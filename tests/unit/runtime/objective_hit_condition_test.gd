@@ -43,7 +43,7 @@ func _initialize() -> void:
 
 ## 构造 Ray 命中事实（D 向 = (1,0)，emission 7，gen 3）。
 func _ray_hit(cell: Vector2i) -> _ObjectiveHitContext:
-	var hit: _ObjectiveHitContext = _ObjectiveHitContext.create_for_ray(cell, Vector2i(1, 0), 7, 3)
+	var hit: _ObjectiveHitContext = _ObjectiveHitContext.create_for_ray(cell, Vector2i(1, 0), 7, 3, 0)
 	return hit
 
 
@@ -86,8 +86,8 @@ func _test_02_hit_context_particle() -> void:
 ## 3. 非法命中拒绝：非法方向 / 非法速度档位。
 func _test_03_hit_context_rejects_invalid() -> void:
 	const NAME: String = "03_命中事实非法拒绝"
-	_check(NAME, _ObjectiveHitContext.create_for_ray(Vector2i(0, 0), Vector2i(2, 0), 1, 1) == null, "非法方向 (2,0) 应拒绝。")
-	_check(NAME, _ObjectiveHitContext.create_for_ray(Vector2i(0, 0), Vector2i.ZERO, 1, 1) == null, "零方向应拒绝。")
+	_check(NAME, _ObjectiveHitContext.create_for_ray(Vector2i(0, 0), Vector2i(2, 0), 1, 1, 0) == null, "非法方向 (2,0) 应拒绝。")
+	_check(NAME, _ObjectiveHitContext.create_for_ray(Vector2i(0, 0), Vector2i.ZERO, 1, 1, 0) == null, "零方向应拒绝。")
 	_check(NAME, _ObjectiveHitContext.create_for_particle(Vector2i(0, 0), Vector2i(1, 0), 1, 1, -1) == null, "PARTICLE 档位 -1 应拒绝。")
 	_check(NAME, _ObjectiveHitContext.create_for_particle(Vector2i(0, 0), Vector2i(1, 0), 1, 1, 3) == null, "PARTICLE 档位 3 应拒绝。")
 

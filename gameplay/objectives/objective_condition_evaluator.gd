@@ -29,5 +29,7 @@ static func evaluate(configuration: Variant, hit: Variant) -> int:
 	match condition_configuration.get_condition_type_id():
 		_ObjectiveConditionDefinition.TYPE_FORM_CONDITION:
 			return Verdict.SATISFIED if condition_configuration.allows_light_form(hit_context.get_light_form()) else Verdict.NOT_SATISFIED
+		_ObjectiveConditionDefinition.TYPE_COLOR_CONDITION:
+			return Verdict.SATISFIED if condition_configuration.accepts_color(hit_context.get_color()) else Verdict.NOT_SATISFIED
 		_:
 			return Verdict.NOT_SATISFIED

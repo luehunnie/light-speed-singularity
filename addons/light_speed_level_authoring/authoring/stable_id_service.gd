@@ -77,6 +77,12 @@ static func next_stable_instance_id(level_root: Node) -> String:
 	return _seeded_allocator(level_root).allocate()
 
 
+# 单节点写入一个稳定 ID（Palette 放置等正式入口复用 _assign 同源口径）：
+# BasicCrystal 同 token 写 crystal_id，不建第二套编号（见本文件头注释）。
+static func assign_stable_id(node: Node, stable_id: String) -> void:
+	_assign(node, stable_id)
+
+
 # 审计稳定 ID：缺失数与重复 ID 清单（供 Validator 展示与 Stable ID 修复入口）。
 static func audit(level_root: Node) -> Dictionary:
 	var total := 0

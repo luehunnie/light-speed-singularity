@@ -22,8 +22,7 @@ const _PlayerInteractionAction: GDScript = preload(
 )
 
 
-## 是否可进入库存并被玩家 Spawn。
-@export var inventory_eligible: bool = false
+## 库存资格声明已上移 FormalContentDefinition 基类（inventory_eligible；机关域沿用同一事实源）。
 
 ## 声明支持交互的光形态 token 集合（Guide §21“Definition 声明实际支持的 Light Forms”；子集 of {RAY, PARTICLE}）。
 ## [br]空 = 未声明任何形态 → 对两形态均透明（Runtime 不调用 interact_*）；

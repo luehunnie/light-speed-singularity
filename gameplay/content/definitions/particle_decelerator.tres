@@ -13,7 +13,6 @@ player_action = &"cycle_direction"
 
 [resource]
 script = ExtResource("3_ojkqi")
-inventory_eligible = true
 light_interaction_forms = Array[StringName]([&"PARTICLE"])
 configuration_fields = [SubResource("Resource_tu8hr")]
 player_interaction_actions = Array[StringName]([&"cycle_direction"])
@@ -21,3 +20,4 @@ content_type_id = &"particle_decelerator"
 display_name = "光粒减速器"
 category = &"speed"
 scene = ExtResource("2_446hd")
+inventory_eligible = true
