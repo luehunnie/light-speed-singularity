@@ -18,8 +18,14 @@ const _ParticleContext: GDScript = preload(
 	"res://gameplay/light/interaction/particle_interaction_context.gd"
 )
 const _Motion: GDScript = preload("res://gameplay/particle/particle_motion_rules.gd")
+const _RayExecutionModule: GDScript = preload("res://gameplay/light/ray_execution_module.gd")
+const _RayExecutionResult: GDScript = preload("res://gameplay/light/ray_execution_result.gd")
+const _LevelWorldQuery: GDScript = preload("res://gameplay/world/level_world_query.gd")
+const _LightWorldQuery: GDScript = preload("res://gameplay/world/light_world_query.gd")
+const _LevelObjectRegistry: GDScript = preload("res://gameplay/level/level_object_registry.gd")
+const _OccupancyRegistry: GDScript = preload("res://gameplay/placement/occupancy_registry.gd")
 
-const _GROUP_COUNT: int = 5
+const _GROUP_COUNT: int = 8
 
 var _failures: PackedStringArray = PackedStringArray()
 var _checks: int = 0
@@ -31,6 +37,9 @@ func _initialize() -> void:
 	_test_03_particle_always_block()
 	_test_04_forms_declaration()
 	_test_05_runtime_zero_write()
+	_test_06_filter_chain()
+	_test_07_same_color_chain()
+	_test_08_diagonal_pass_through()
 	_report()
 	quit(0 if _failures.is_empty() else 1)
 
@@ -44,6 +53,34 @@ func _check(group: String, ok: bool, detail: String) -> void:
 ## 构造带当前颜色的 RAY Context。
 func _ray_ctx(incoming: Vector2i, current_color: int) -> Variant:
 	return _RayContext.create(Vector2i(2, 0), incoming, 1, 0, current_color)
+
+
+## 构造 10×10 边界只读光线查询门面（含占用表 + 机关映射），供串联集成测试用。
+func _build_world(wall_cells: Array[Vector2i]) -> Dictionary:
+	var occupancy: _OccupancyRegistry = _OccupancyRegistry.new()
+	var registry: _LevelObjectRegistry = _LevelObjectRegistry.new()
+	var placed: Dictionary[StringName, Variant] = {}
+	var lookup: _PlacedLookup = _PlacedLookup.new()
+	lookup.placed = placed
+	var level_query: _LevelWorldQuery = _LevelWorldQuery.new(
+		Rect2i(0, 0, 10, 10),
+		wall_cells,
+		Vector2i(0, 5),
+		registry,
+		occupancy,
+		Callable(lookup, "get_node")
+	)
+	var light_query: _LightWorldQuery = _LightWorldQuery.new(level_query)
+	return { "query": light_query, "occupancy": occupancy, "placed": placed, "lookup": lookup }
+
+
+## 机关节点只读查表桩：供 LevelWorldQuery 的 get_placed_node_by_id Callable 解析 placed 字典。
+class _PlacedLookup:
+	var placed: Dictionary[StringName, Variant] = {}
+	func get_node(mechanism_id: StringName) -> Variant:
+		if not placed.has(mechanism_id):
+			return null
+		return placed[mechanism_id]
 
 
 func _report() -> void:
@@ -166,4 +203,73 @@ func _test_05_runtime_zero_write() -> void:
 		"交互后 orientation 应保持 authored BACKSLASH。")
 	_check(G, filter.color == _Filter.FilterColor.BLUE,
 		"交互后 color 应保持 authored BLUE。")
+	filter.free()
+
+
+## 06. 连续滤光片串联（规则 §9 用例 4 变体）：白光 → 红滤光片变红 → 绿滤光片异色吸收 BLOCK。
+## [br]核心验证：颜色跨格传递生效——只有红光穿绿滤光片才吸收，白光穿绿滤光片会变绿穿过。
+func _test_06_filter_chain() -> void:
+	const G: String = "06_串联吸收"
+	var world: Dictionary = _build_world([])
+	var red_filter: Variant = _Filter.new()
+	red_filter.set_orientation(_Filter.FilterOrientation.VERTICAL)
+	red_filter.set_color(_Filter.FilterColor.RED)
+	world["occupancy"].register_single_cell(&"red_filter", Vector2i(2, 5))
+	world["placed"][&"red_filter"] = red_filter
+	var green_filter: Variant = _Filter.new()
+	green_filter.set_orientation(_Filter.FilterOrientation.VERTICAL)
+	green_filter.set_color(_Filter.FilterColor.GREEN)
+	world["occupancy"].register_single_cell(&"green_filter", Vector2i(4, 5))
+	world["placed"][&"green_filter"] = green_filter
+
+	var result: _RayExecutionResult = _RayExecutionModule.execute(
+		Vector2i(0, 5), Vector2i.RIGHT, 128, world["query"], 7, 1
+	)
+	_check(G, result.stop_reason == _RayExecutionResult.StopReason.MECHANISM_BLOCK,
+		"白光→红→绿 期望 MECHANISM_BLOCK（异色吸收），实际 %s。" % [result.stop_reason])
+	_check(G, result.steps.size() == 4, "steps 数期望 4（(1,5)(2,5)(3,5)(4,5)），实际 %d。" % [result.steps.size()])
+	if result.steps.size() >= 1:
+		var last: Object = result.steps[result.steps.size() - 1]
+		_check(G, last.cell == Vector2i(4, 5), "末步应为绿滤光片格 (4,5)，实际 %s。" % [last.cell])
+	red_filter.free()
+	green_filter.free()
+
+
+## 07. 白光 → 红滤光片 → 红滤光片 → 同色保持穿过（验证同色保持路径，颜色传递后仍穿过到越界）。
+func _test_07_same_color_chain() -> void:
+	const G: String = "07_同色串联"
+	var world: Dictionary = _build_world([])
+	var red1: Variant = _Filter.new()
+	red1.set_orientation(_Filter.FilterOrientation.VERTICAL)
+	red1.set_color(_Filter.FilterColor.RED)
+	world["occupancy"].register_single_cell(&"red1", Vector2i(2, 5))
+	world["placed"][&"red1"] = red1
+	var red2: Variant = _Filter.new()
+	red2.set_orientation(_Filter.FilterOrientation.VERTICAL)
+	red2.set_color(_Filter.FilterColor.RED)
+	world["occupancy"].register_single_cell(&"red2", Vector2i(4, 5))
+	world["placed"][&"red2"] = red2
+
+	var result: _RayExecutionResult = _RayExecutionModule.execute(
+		Vector2i(0, 5), Vector2i.RIGHT, 128, world["query"], 7, 1
+	)
+	_check(G, result.stop_reason == _RayExecutionResult.StopReason.OUT_OF_BOUNDS,
+		"白光→红→红 期望 OUT_OF_BOUNDS（同色保持穿过），实际 %s。" % [result.stop_reason])
+	_check(G, result.steps.size() == 9, "steps 数期望 9（穿过两滤光片到边界），实际 %d。" % [result.steps.size()])
+	red1.free()
+	red2.free()
+
+
+## 08. 斜向穿过滤色：4 个斜向入射（与薄膜面不平行）走滤色而非撞棱角（规则 §8.1 其余 6 方向穿过）。
+func _test_08_diagonal_pass_through() -> void:
+	const G: String = "08_斜向穿过滤色"
+	var filter: Variant = _Filter.new()
+	filter.set_orientation(_Filter.FilterOrientation.VERTICAL)
+	filter.set_color(_Filter.FilterColor.RED)
+	for token: StringName in [&"UP_RIGHT", &"DOWN_RIGHT", &"DOWN_LEFT", &"UP_LEFT"]:
+		var incoming: Vector2i = _DirectionDomain.to_vector(token)
+		var result: Variant = _Contract.dispatch_ray(filter, _ray_ctx(incoming, _RayColor.ColorValue.WHITE))
+		_check(G, result.decision == _Result.Decision.CONTINUE
+			and result.get_color_change() == _RayColor.ColorValue.RED,
+			"白光 %s 穿竖红滤光片 期望 CONTINUE + COLOR_CHANGE(RED)。" % token)
 	filter.free()
