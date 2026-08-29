@@ -1814,13 +1814,12 @@ Split 会改变传播拓扑，不应简单塞成普通 Effect。
 8. ControlActionResult；
 9. 速度监测器完整触发链；
 10. Mechanism-specific Validator Extension；
-11. 光屏障两侧护墙规则；
-12. Visual semantic slots / profile validation；
-13. Speed Detector authoring UI；
-14. Objective Group：Independent / Simultaneous / Sequence；
-15. SpeedCondition（若下一阶段目标要求速度型 Objective）；
-16. Gameplay Color 离散枚举；
-17. 滤光片机关。
+11. Visual semantic slots / profile validation；
+12. Speed Detector authoring UI；
+13. Objective Group：Independent / Simultaneous / Sequence；
+14. SpeedCondition（若下一阶段目标要求速度型 Objective）；
+15. Gameplay Color 离散枚举；
+16. 滤光片机关。
 
 ---
 
