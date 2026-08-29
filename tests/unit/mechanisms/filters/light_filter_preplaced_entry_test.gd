@@ -30,7 +30,7 @@ const _ParticleContext: GDScript = preload(
 const _Motion: GDScript = preload("res://gameplay/particle/particle_motion_rules.gd")
 const _RayColor: GDScript = preload("res://gameplay/light/ray_color.gd")
 
-const _GROUP_COUNT: int = 4
+const _GROUP_COUNT: int = 5
 
 var _failures: PackedStringArray = PackedStringArray()
 var _checks: int = 0
@@ -42,6 +42,7 @@ func _initialize() -> void:
 	await _test_02_inspector_authored()
 	_test_03_apply_configuration_contract()
 	await _test_04_preplaced_adoption_chain()
+	_test_05_reset_preservation_contract()
 	_report()
 	quit(0 if _failures.is_empty() else 1)
 
@@ -211,6 +212,27 @@ func _test_04_preplaced_adoption_chain() -> void:
 		_ParticleContext.create(cell, Vector2i(1, 0), 1, 0, _Motion.SpeedTier.STANDARD, 7))
 	_check(G, p.decision == _Result.Decision.BLOCK, "光粒穿滤光片 期望 BLOCK。")
 	_free_tree(made)
+
+
+## 05. R 重置保留契约（规则 §6）：滤光片为无状态预置对象，无 reset hook、运行期零写入，
+##     因此 LevelRuntimeController.reset_runtime（只清玩家机关，不清静态内容/预置对象）后 authored 朝向/颜色天然保留。
+## [br]运行时层的"不清预置对象"由 LevelRuntimeController.reset_runtime 契约保证（reset_runtime_test 已覆盖玩家机关清理），
+##     本测试锁住滤光片自身不破坏该保留：无 reset 方法 + 交互不改状态。
+func _test_05_reset_preservation_contract() -> void:
+	const G: String = "05_R重置保留"
+	var filter: Variant = _Filter.new()
+	filter.set_orientation(_Filter.FilterOrientation.SLASH)
+	filter.set_color(_Filter.FilterColor.BLUE)
+	# 无 reset hook：无状态预置对象不实现任何 reset 方法（若未来加状态/reset 需同步修订规则 §6）。
+	_check(G, not filter.has_method("reset_runtime"), "滤光片不应实现 reset_runtime（无状态预置对象，无 reset hook）。")
+	# 运行期零写入：多次交互后 authored 朝向/颜色不变（R 保留的前提）。
+	for i in 3:
+		_Contract.dispatch_ray(filter, _ray_ctx(Vector2i(0, 0), Vector2i(1, 0), _RayColor.ColorValue.WHITE))
+		_Contract.dispatch_ray(filter, _ray_ctx(Vector2i(0, 0), Vector2i(1, -1), _RayColor.ColorValue.RED))
+		_Contract.dispatch_particle(filter, _ParticleContext.create(Vector2i(0, 0), Vector2i(1, 0), 1, 0, _Motion.SpeedTier.STANDARD, 7))
+	_check(G, filter.orientation == _Filter.FilterOrientation.SLASH, "多次交互后朝向应保持 authored SLASH。")
+	_check(G, filter.color == _Filter.FilterColor.BLUE, "多次交互后颜色应保持 authored BLUE。")
+	filter.free()
 
 
 ## 格合法性门桩：全部合法（测试环境无 Terrain/Wall 域，收编链自身即被测对象）。
