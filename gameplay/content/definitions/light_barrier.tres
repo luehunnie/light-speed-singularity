@@ -1,0 +1,21 @@
+[gd_resource type="Resource" script_class="MechanismDefinition" format=3]
+
+[ext_resource type="PackedScene" path="res://gameplay/mechanisms/barrier/light_barrier.tscn" id="1_barrier"]
+[ext_resource type="Script" path="res://gameplay/content/mechanism_definition.gd" id="2_mechdef"]
+[ext_resource type="Script" path="res://gameplay/content/configuration/mechanism_field_definition.gd" id="3_field"]
+
+[sub_resource type="Resource" id="Resource_orientation"]
+script = ExtResource("3_field")
+field_id = &"orientation"
+display_name = "薄膜朝向"
+enum_max = 3
+
+[resource]
+script = ExtResource("2_mechdef")
+light_interaction_forms = Array[StringName]([&"RAY", &"PARTICLE"])
+configuration_fields = [SubResource("Resource_orientation")]
+content_type_id = &"light_barrier"
+display_name = "光屏障"
+category = &"optics"
+scene = ExtResource("1_barrier")
+inventory_eligible = false

@@ -1,12 +1,13 @@
 extends SceneTree
 
-## 光屏障（LightBarrier）合同 + 集成定向测试（机关规则 光屏障 v0.4/v0.5 六向入射/出射）。
-## 覆盖：八向朝向 × 八向入射分区扫描（每朝向恰 2 轴向 / 6 非轴，非轴全 BLOCK——六向支持经
-##   DirectionDomain.same_axis 唯一共轴判定，无六份分支）；轴向速度门矩阵（SLOW 停 / STANDARD、FAST 过 -1 档）；
-##   RAY 恒 BLOCK（Contract 分发 + RayMechanismAdapter 映射）；executor 消费机关 BLOCK →
-##   TERMINATE(MECHANISM_BLOCK)（与 WALL 同形停在格外，既有 CONTINUE/速度路径回归）；真实 LightBarrier 节点 ×
-##   真实 ParticleScheduler 六向非轴终止 + 轴向穿过后 -1 档自下一传播步生效；减速器→屏障（§3.5 真实速度判定）；
-##   连续双屏障快速降档链（边界 #8）；运行期零写入（R 不变量：direction 恒为 authored 值）。
+## 光屏障（LightBarrier）合同 + 集成定向测试（机关规则 光屏障 v0.6 薄膜模型）。
+## 覆盖：四向朝向 × 八向入射分区扫描（每朝向恰 2 平行薄膜面「撞棱角」/ 6 穿过，撞棱角任意速度 BLOCK、
+##   穿过方向进速度门——分区经 DirectionDomain.same_axis 唯一共轴判定，无六份分支）；穿过方向速度门矩阵
+##   （SLOW 停 / STANDARD、FAST 过 -1 档）；RAY 恒 BLOCK（Contract 分发 + RayMechanismAdapter 映射）；
+##   executor 消费机关 BLOCK → TERMINATE(MECHANISM_BLOCK)（与 WALL 同形停在格外，既有 CONTINUE/速度路径回归）；
+##   真实 LightBarrier 节点 × 真实 ParticleScheduler 平行撞棱角终止 + 穿过方向 -1 档自下一传播步生效；
+##   减速器→屏障（§3.5 真实速度判定）；连续双屏障快速降档链（边界 #8）；运行期零写入
+##   （R 不变量：orientation 恒为 authored 值）。
 ## headless extends SceneTree，由 Godot --script 运行；preload 引用避开全局 class_name 缓存问题；
 ##   机关为 Node fixture（不进场景树，_ready 不触发），用后 free。全部失败项收集后统一退出（任一失败 quit(1)）。
 
@@ -38,12 +39,12 @@ var _shared_barrier: Variant = null
 
 func _initialize() -> void:
 	_shared_barrier = _Barrier.new()
-	_shared_barrier.set_direction(_Barrier.BarrierDirection.RIGHT)
-	_test_01_direction_partition_sweep()
-	_test_02_axis_speed_gate_matrix()
+	_shared_barrier.set_orientation(_Barrier.BarrierOrientation.VERTICAL)
+	_test_01_orientation_partition_sweep()
+	_test_02_pass_through_speed_gate_matrix()
 	_test_03_ray_always_block()
 	_test_04_executor_consumes_block()
-	_test_05_scheduler_six_offaxis_and_gate()
+	_test_05_scheduler_edge_and_gate()
 	_test_06_double_barrier_fast_chain()
 	_test_07_runtime_zero_write_invariant()
 	_shared_barrier.free()
@@ -79,7 +80,7 @@ func _collect_events(s: Variant, generation: int, until_tick: int) -> Array:
 
 func _report() -> void:
 	var passed_checks: int = _checks - _failures.size()
-	print("==== 光屏障六向合同+集成测试摘要 ====")
+	print("==== 光屏障薄膜合同+集成测试摘要 ====")
 	print("测试组数：%d" % _GROUP_COUNT)
 	print("断言总数：%d" % _checks)
 	print("通过断言：%d" % passed_checks)
@@ -94,80 +95,77 @@ func _report() -> void:
 
 # ===== 测试 =====
 
-## 01. 八向朝向 × 八向入射分区扫描：每朝向恰 2 轴向（orientation 向量与其反向）/ 6 非轴；
-##     非轴六向 PARTICLE 一律 BLOCK（六向支持本体），轴向 STANDARD 不 BLOCK（进入速度门）。
-func _test_01_direction_partition_sweep() -> void:
-	const G: String = "01_八向分区扫描"
+## 01. 四向朝向 × 八向入射分区扫描：每朝向恰 2 平行（薄膜面撞棱角）/ 6 穿过；
+##     平行方向 FAST 也 BLOCK（撞棱角任意速度），穿过方向 STANDARD 进速度门 CONTINUE。
+func _test_01_orientation_partition_sweep() -> void:
+	const G: String = "01_四向分区扫描"
 	var barrier: Variant = _Barrier.new()
 	var domain: Array = _DirectionDomain.CLOCKWISE_ORDER
-	for orientation_value: int in range(8):
-		barrier.set_direction(orientation_value)
-		var axis: Vector2i = _Barrier.direction_to_vector(orientation_value)
-		_check(G, axis == _DirectionDomain.to_vector(domain[orientation_value]),
-			"枚举值 %d 应对齐 CLOCKWISE_ORDER 下标换算。" % orientation_value)
-		var on_axis_count: int = 0
+	for orientation_value: int in range(4):
+		barrier.set_orientation(orientation_value)
+		var edge_count: int = 0
 		for token: StringName in domain:
 			var incoming: Vector2i = _DirectionDomain.to_vector(token)
-			var on_axis: bool = barrier.is_on_traversal_axis(incoming)
-			_check(G, on_axis == _DirectionDomain.same_axis(incoming, axis),
-				"朝向 %d 入射 %s 分区应等于 same_axis 事实。" % [orientation_value, token])
-			if on_axis:
-				on_axis_count += 1
+			var edge: bool = barrier.is_edge_collision(incoming)
+			if edge:
+				edge_count += 1
+				var fast: Variant = _dispatch_particle(barrier, incoming, _Motion.SpeedTier.FAST)
+				_check(G, fast.decision == _Result.Decision.BLOCK,
+					"朝向 %d 平行入射 %s FAST 应 BLOCK（撞棱角）。" % [orientation_value, token])
+				_check(G, fast.get_speed_delta() == 0, "撞棱角 BLOCK 不得携带速度增量。")
 			else:
-				var result: Variant = _dispatch_particle(barrier, incoming, _Motion.SpeedTier.STANDARD)
-				_check(G, result.decision == _Result.Decision.BLOCK,
-					"朝向 %d 非轴入射 %s 期望 BLOCK（六向非轴全阻挡）。" % [orientation_value, token])
-				_check(G, result.get_speed_delta() == 0, "非轴 BLOCK 不得携带速度增量。")
-		_check(G, on_axis_count == 2,
-			"朝向 %d 轴向方向数期望 2，实际 %d。" % [orientation_value, on_axis_count])
-		_check(G, barrier.is_on_traversal_axis(axis)
-			and barrier.is_on_traversal_axis(_DirectionDomain.opposite(axis)),
-			"朝向 %d 轴向两向应恰为 orientation 向量与其反向。" % orientation_value)
+				var standard: Variant = _dispatch_particle(barrier, incoming, _Motion.SpeedTier.STANDARD)
+				_check(G, standard.decision == _Result.Decision.CONTINUE,
+					"朝向 %d 穿过入射 %s STANDARD 应 CONTINUE（进速度门）。" % [orientation_value, token])
+		_check(G, edge_count == 2,
+			"朝向 %d 平行方向数期望 2，实际 %d。" % [orientation_value, edge_count])
 	barrier.free()
 
 
-## 02. 轴向速度门矩阵：SLOW→BLOCK；STANDARD/FAST→CONTINUE + delta -1（全部 8 朝向 × 轴向 × 三档数据驱动）。
-func _test_02_axis_speed_gate_matrix() -> void:
-	const G: String = "02_轴向速度门矩阵"
+## 02. 穿过方向速度门矩阵：SLOW→BLOCK；STANDARD/FAST→CONTINUE + delta -1（4 朝向 × 6 穿过方向 × 三档数据驱动；
+##     平行撞棱角方向已在测试 01 覆盖）。
+func _test_02_pass_through_speed_gate_matrix() -> void:
+	const G: String = "02_穿过方向速度门矩阵"
 	var barrier: Variant = _Barrier.new()
 	var domain: Array = _DirectionDomain.CLOCKWISE_ORDER
 	var tiers: Array = [
 		_Motion.SpeedTier.SLOW, _Motion.SpeedTier.STANDARD, _Motion.SpeedTier.FAST,
 	]
 	var tier_names: Array = ["SLOW", "STANDARD", "FAST"]
-	for orientation_value: int in range(8):
-		barrier.set_direction(orientation_value)
-		var axis: Vector2i = _Barrier.direction_to_vector(orientation_value)
-		# 轴向两向轮流覆盖（偶数序取正向，奇数序取反向），8 朝向 × 3 档全量驱动。
-		var incoming: Vector2i = axis if orientation_value % 2 == 0 else _DirectionDomain.opposite(axis)
-		for tier: int in tiers:
-			var result: Variant = _dispatch_particle(barrier, incoming, tier)
-			if tier == _Motion.SpeedTier.SLOW:
-				_check(G, result.decision == _Result.Decision.BLOCK,
-					"朝向 %d 轴向慢速期望 BLOCK（能量不足）。" % orientation_value)
-				_check(G, result.get_speed_delta() == 0, "慢速 BLOCK 不得携带速度增量。")
-			else:
-				_check(G, result.decision == _Result.Decision.CONTINUE,
-					"朝向 %d 轴向 %s 期望 CONTINUE 通过。" % [orientation_value, tier_names[tier]])
-				_check(G, result.get_speed_delta() == -1,
-					"朝向 %d 轴向 %s 期望 -1 档（实际 %d）。"
-					% [orientation_value, tier_names[tier], result.get_speed_delta()])
+	for orientation_value: int in range(4):
+		barrier.set_orientation(orientation_value)
+		for token: StringName in domain:
+			var incoming: Vector2i = _DirectionDomain.to_vector(token)
+			if barrier.is_edge_collision(incoming):
+				continue
+			for tier: int in tiers:
+				var result: Variant = _dispatch_particle(barrier, incoming, tier)
+				if tier == _Motion.SpeedTier.SLOW:
+					_check(G, result.decision == _Result.Decision.BLOCK,
+						"朝向 %d 穿过 %s 慢速期望 BLOCK（能量不足）。" % [orientation_value, token])
+					_check(G, result.get_speed_delta() == 0, "慢速 BLOCK 不得携带速度增量。")
+				else:
+					_check(G, result.decision == _Result.Decision.CONTINUE,
+						"朝向 %d 穿过 %s %s 期望 CONTINUE 通过。" % [orientation_value, token, tier_names[tier]])
+					_check(G, result.get_speed_delta() == -1,
+						"朝向 %d 穿过 %s %s 期望 -1 档（实际 %d）。"
+						% [orientation_value, token, tier_names[tier], result.get_speed_delta()])
 	_check(G, barrier.get_light_interaction_forms() == [&"RAY", &"PARTICLE"],
 		"形态声明应为 RAY+PARTICLE。")
 	barrier.free()
 
 
-## 03. RAY 恒 BLOCK：轴向 + 全部六向非轴样本经 Contract 分发与 RayMechanismAdapter 映射均为停止。
+## 03. RAY 恒 BLOCK：平行 + 穿过方向样本经 Contract 分发与 RayMechanismAdapter 映射均为停止。
 func _test_03_ray_always_block() -> void:
 	const G: String = "03_RAY恒BLOCK"
 	var barrier: Variant = _Barrier.new()
-	barrier.set_direction(_Barrier.BarrierDirection.RIGHT)
+	barrier.set_orientation(_Barrier.BarrierOrientation.VERTICAL)
 	for token: StringName in _DirectionDomain.CLOCKWISE_ORDER:
 		var incoming: Vector2i = _DirectionDomain.to_vector(token)
 		var ray_ctx: Variant = _RayContext.create(Vector2i(2, 0), incoming, 1, 0)
 		var result: Variant = _Contract.dispatch_ray(barrier, ray_ctx)
 		_check(G, result.decision == _Result.Decision.BLOCK,
-			"RAY 入射 %s 期望恒 BLOCK（含轴向与六向非轴）。" % token)
+			"RAY 入射 %s 期望恒 BLOCK（含平行与穿过方向）。" % token)
 		_check(G, result.redirect_direction == Vector2i.ZERO, "RAY BLOCK 不得携带方向。")
 		_check(G, result.effects.is_empty(), "RAY BLOCK 不得携带效果。")
 		var adapted: Variant = _RayAdapter.evaluate(barrier, ray_ctx)
@@ -182,27 +180,27 @@ func _test_04_executor_consumes_block() -> void:
 	const G: String = "04_执行器BLOCK消费"
 	var q: _Fake = _Fake.new()
 	var barrier: Variant = _Barrier.new()
-	barrier.set_direction(_Barrier.BarrierDirection.RIGHT)
+	barrier.set_orientation(_Barrier.BarrierOrientation.VERTICAL)
 	q.add_mechanism(Vector2i(2, 0), barrier)
 	var executor: _Executor = _Executor.new()
 
-	# 非轴入射（UP 撞 → 向屏障）：next_cell=(2,0) 屏障 → TERMINATE(MECHANISM_BLOCK)。
+	# 平行入射（UP 撞棱角 → 向屏障）：next_cell=(2,0) 屏障 → TERMINATE(MECHANISM_BLOCK)。
 	var state_off: Variant = _State.create_emitted(1, 0, Vector2i(2, 1), Vector2i(0, -1), 0)
 	var r_off: Variant = executor.evaluate_step(state_off, q)
-	_check(G, r_off.outcome == _Executor.Outcome.TERMINATE, "非轴入射期望 TERMINATE。")
+	_check(G, r_off.outcome == _Executor.Outcome.TERMINATE, "平行入射期望 TERMINATE。")
 	_check(G, r_off.termination_reason == _Executor.TerminationReason.MECHANISM_BLOCK,
-		"非轴入射终止原因期望 MECHANISM_BLOCK。")
-	_check(G, r_off.entered_cell == Vector2i(2, 0), "非轴入射 entered_cell 应为被阻挡尝试格 (2,0)。")
+		"平行入射终止原因期望 MECHANISM_BLOCK。")
+	_check(G, r_off.entered_cell == Vector2i(2, 0), "平行入射 entered_cell 应为被阻挡尝试格 (2,0)。")
 	_check(G, r_off.outgoing_direction == Vector2i(0, -1), "终止时 outgoing 应为入射方向。")
 	_check(G, r_off.speed_delta == 0 and not r_off.has_crystal and not r_off.next_step_blocked,
 		"BLOCK 终止四字段应全为安全值。")
 
-	# 轴向 STANDARD 对照 → MOVE 通过并 -1 档。
+	# 穿过 STANDARD 对照 → MOVE 通过并 -1 档。
 	var state_on: Variant = _State.create_emitted(2, 0, Vector2i(1, 0), Vector2i(1, 0), 0)
 	var r_on: Variant = executor.evaluate_step(state_on, q)
-	_check(G, r_on.outcome == _Executor.Outcome.MOVE, "轴向 STANDARD 期望 MOVE 通过屏障格。")
-	_check(G, r_on.speed_delta == -1, "轴向 STANDARD 通过期望 -1 档。")
-	_check(G, r_on.entered_cell == Vector2i(2, 0), "轴向通过 entered_cell 应为屏障格。")
+	_check(G, r_on.outcome == _Executor.Outcome.MOVE, "穿过 STANDARD 期望 MOVE 通过屏障格。")
+	_check(G, r_on.speed_delta == -1, "穿过 STANDARD 通过期望 -1 档。")
+	_check(G, r_on.entered_cell == Vector2i(2, 0), "穿过通过 entered_cell 应为屏障格。")
 
 	# 回归：无机关格 → MOVE delta 0；速度机关（FakeSpeedMechanism -1）→ MOVE delta -1（BLOCK 分支不影响既有路径）。
 	var state_free: Variant = _State.create_emitted(3, 0, Vector2i(4, 0), Vector2i(1, 0), 0)
@@ -219,16 +217,15 @@ func _test_04_executor_consumes_block() -> void:
 	barrier.free()
 
 
-## 05. 真实屏障 × 真实调度器：六向非轴逐向终止于格外（MECHANISM_BLOCK）；轴向 STANDARD 穿过后 -1 档自下一传播步生效；
+## 05. 真实屏障 × 真实调度器：平行 2 向撞棱角终止于格外（MECHANISM_BLOCK）；穿过 STANDARD 通过 -1 档自下一传播步生效；
 ##     真实减速器→屏障链证明「以进入屏障时的真实速度判定」（§3.5）。
-func _test_05_scheduler_six_offaxis_and_gate() -> void:
-	const G: String = "05_调度器六向与门槛"
-	var axis: Vector2i = Vector2i(1, 0)
+func _test_05_scheduler_edge_and_gate() -> void:
+	const G: String = "05_调度器撞棱角与门槛"
 
-	# a) 六向非轴：屏障 RIGHT 于 (2,0)，逐向从 (2,0)-incoming 发射，首个事件即 TERMINATE(MECHANISM_BLOCK)。
+	# a) 平行 2 向：屏障 VERTICAL 于 (2,0)，平行方向逐向发射，首个事件即 TERMINATE(MECHANISM_BLOCK)（撞棱角）。
 	for token: StringName in _DirectionDomain.CLOCKWISE_ORDER:
 		var incoming: Vector2i = _DirectionDomain.to_vector(token)
-		if _DirectionDomain.same_axis(incoming, axis):
+		if not _shared_barrier.is_edge_collision(incoming):
 			continue
 		var q: _Fake = _Fake.new()
 		q.add_mechanism(Vector2i(2, 0), _shared_barrier)
@@ -240,16 +237,16 @@ func _test_05_scheduler_six_offaxis_and_gate() -> void:
 			func(ev): return ev.outcome == _Executor.Outcome.TERMINATE)
 		var moves_into_barrier: Array = events.filter(
 			func(ev): return ev.outcome == _Executor.Outcome.MOVE and ev.entered_cell == Vector2i(2, 0))
-		_check(G, terminates.size() == 1, "非轴 %s 期望恰 1 个 TERMINATE（实际 %d）。" % [token, terminates.size()])
+		_check(G, terminates.size() == 1, "平行 %s 期望恰 1 个 TERMINATE（实际 %d）。" % [token, terminates.size()])
 		if terminates.size() == 1:
 			var ev: Variant = terminates[0]
 			_check(G, ev.termination_reason == _Executor.TerminationReason.MECHANISM_BLOCK,
-				"非轴 %s 终止原因期望 MECHANISM_BLOCK。" % token)
-			_check(G, ev.entered_cell == Vector2i(2, 0), "非轴 %s 终止尝试格应为屏障格。" % token)
-		_check(G, moves_into_barrier.is_empty(), "非轴 %s 不得 MOVE 进入屏障格。" % token)
-		_check(G, s.get_active_count() == 0, "非轴 %s 终止后活动光粒应清零。" % token)
+				"平行 %s 终止原因期望 MECHANISM_BLOCK。" % token)
+			_check(G, ev.entered_cell == Vector2i(2, 0), "平行 %s 终止尝试格应为屏障格。" % token)
+		_check(G, moves_into_barrier.is_empty(), "平行 %s 不得 MOVE 进入屏障格。" % token)
+		_check(G, s.get_active_count() == 0, "平行 %s 终止后活动光粒应清零。" % token)
 
-	# b) 轴向 STANDARD 穿过：MOVE (1,0)@4 STANDARD → MOVE (2,0)@8 SLOW（穿屏障 -1）→ MOVE (3,0)@16 SLOW。
+	# b) 穿过 STANDARD 通过：MOVE (1,0)@4 STANDARD → MOVE (2,0)@8 SLOW（穿屏障 -1）→ MOVE (3,0)@16 SLOW。
 	var q2: _Fake = _Fake.new()
 	q2.add_mechanism(Vector2i(2, 0), _shared_barrier)
 	var s2: Variant = _Scheduler.new(q2)
@@ -257,7 +254,7 @@ func _test_05_scheduler_six_offaxis_and_gate() -> void:
 	s2.emit_particle(Vector2i(0, 0), Vector2i(1, 0), 1)
 	var events2: Array = _collect_events(s2, 0, 20)
 	var moves: Array = events2.filter(func(ev): return ev.outcome == _Executor.Outcome.MOVE)
-	_check(G, moves.size() == 3, "轴向穿过期望 3 次 MOVE（实际 %d）。" % moves.size())
+	_check(G, moves.size() == 3, "穿过 STANDARD 期望 3 次 MOVE（实际 %d）。" % moves.size())
 	if moves.size() == 3:
 		_check(G, moves[1].entered_cell == Vector2i(2, 0) and moves[1].speed_tier == _Motion.SpeedTier.SLOW,
 			"进入屏障格事件应携带穿过后新档 SLOW。")
@@ -265,9 +262,9 @@ func _test_05_scheduler_six_offaxis_and_gate() -> void:
 			"穿屏障后权威 next_move_tick 应按新档 SLOW 取 16（实际 %d）。" % moves[1].next_move_tick)
 		_check(G, moves[2].entered_cell == Vector2i(3, 0), "屏障后下一 MOVE 应抵达 (3,0)。")
 		_check(G, moves[2].speed_tier == _Motion.SpeedTier.SLOW, "屏障后档位应保持 SLOW。")
-	_check(G, s2.get_active_count() == 1, "轴向穿过后光粒应仍活动。")
+	_check(G, s2.get_active_count() == 1, "穿过 STANDARD 后光粒应仍活动。")
 
-	# c) 减速器→屏障（轴向 SLOW 真实速度判定）：SLOW 到达屏障 → TERMINATE(MECHANISM_BLOCK)。
+	# c) 减速器→屏障（穿过 SLOW 真实速度判定）：SLOW 到达屏障 → TERMINATE(MECHANISM_BLOCK)。
 	var q3: _Fake = _Fake.new()
 	var decel: Variant = _Decelerator.new()
 	decel.set_direction(0)
@@ -278,11 +275,11 @@ func _test_05_scheduler_six_offaxis_and_gate() -> void:
 	s3.emit_particle(Vector2i(0, 0), Vector2i(1, 0), 1)
 	var events3: Array = _collect_events(s3, 0, 24)
 	var term3: Array = events3.filter(func(ev): return ev.outcome == _Executor.Outcome.TERMINATE)
-	_check(G, term3.size() == 1, "减速后轴向 SLOW 期望恰 1 个 TERMINATE。")
+	_check(G, term3.size() == 1, "减速后穿过 SLOW 期望恰 1 个 TERMINATE。")
 	if term3.size() == 1:
 		_check(G, term3[0].termination_reason == _Executor.TerminationReason.MECHANISM_BLOCK
 			and term3[0].entered_cell == Vector2i(3, 0),
-			"SLOW 轴向应以 MECHANISM_BLOCK 止于屏障格外 (3,0)。")
+			"SLOW 穿过应以 MECHANISM_BLOCK 止于屏障格外 (3,0)。")
 	decel.free()
 
 
@@ -318,14 +315,14 @@ func _test_06_double_barrier_fast_chain() -> void:
 	accel.free()
 
 
-## 07. 运行期零写入（R 不变量）：全部交互后 direction 恒为 authored RIGHT，形态声明与分区判定稳定。
+## 07. 运行期零写入（R 不变量）：全部交互后 orientation 恒为 authored VERTICAL，形态声明与平行判定稳定。
 func _test_07_runtime_zero_write_invariant() -> void:
 	const G: String = "07_运行期零写入"
-	_check(G, _shared_barrier.direction == _Barrier.BarrierDirection.RIGHT,
-		"运行期交互后 direction 应保持 authored 值 RIGHT。")
-	_check(G, _shared_barrier.is_on_traversal_axis(Vector2i(1, 0)),
-		"交互后轴向判定应保持稳定（RIGHT 朝向 RIGHT 入射共轴）。")
-	_check(G, not _shared_barrier.is_on_traversal_axis(Vector2i(0, -1)),
-		"交互后非轴判定应保持稳定（UP 入射非轴）。")
+	_check(G, _shared_barrier.orientation == _Barrier.BarrierOrientation.VERTICAL,
+		"运行期交互后 orientation 应保持 authored 值 VERTICAL。")
+	_check(G, _shared_barrier.is_edge_collision(Vector2i(0, -1)),
+		"交互后平行判定应保持稳定（VERTICAL 朝向 ↑ 入射平行撞棱角）。")
+	_check(G, not _shared_barrier.is_edge_collision(Vector2i(1, 0)),
+		"交互后穿过判定应保持稳定（→ 入射穿过方向）。")
 	_check(G, _shared_barrier.get_light_interaction_forms() == [&"RAY", &"PARTICLE"],
 		"交互后形态声明应保持稳定。")

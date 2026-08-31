@@ -1,14 +1,16 @@
-[gd_scene load_steps=3 format=3 uid="uid://blightbarrier01"]
+[gd_scene load_steps=4 format=3 uid="uid://blightbarrier01"]
 
 [ext_resource type="Script" uid="uid://dd33af06le1ax" path="res://gameplay/mechanisms/barrier/light_barrier.gd" id="1_script"]
 [ext_resource type="PackedScene" uid="uid://dbjvvisualview0" path="res://gameplay/visuals/object_visuals/object_visual_view.tscn" id="2_view"]
+[ext_resource type="Resource" path="res://assets/visual_profiles/light_barrier_visuals.tres" id="3_profile"]
 
 [node name="LightBarrier" type="Node2D"]
 script = ExtResource("1_script")
 interaction_profile = "fixed"
 
 [node name="VisualView" parent="." instance=ExtResource("2_view")]
-initial_state_id = &"right"
+visual_profile = ExtResource("3_profile")
+initial_state_id = &"vertical"
 
 [node name="DebugFilm" type="Line2D" parent="."]
 visible = false
