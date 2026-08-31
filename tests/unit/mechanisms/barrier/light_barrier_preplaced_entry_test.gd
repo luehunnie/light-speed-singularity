@@ -1,11 +1,11 @@
 extends SceneTree
 
-## 光屏障 关卡预置正式入口测试（阶段A补齐验收缺口：.tscn / 占用注册 / authored 八向朝向）。
+## 光屏障 关卡预置正式入口测试（阶段A补齐验收缺口：.tscn / 占用注册 / authored 四向朝向）。
 ## 覆盖：场景合同（light_barrier.tscn 根为 PlaceableToken + VisualView/DebugFilm 结构 + interaction_profile=fixed
-##   + 未配置 mechanism_id）；Inspector authored 朝向（property 写入经 setter + 树上 _ready 后占位薄膜线方向
-##   与穿越轴垂直）；Typed apply_configuration 合同（Stable Field ID "direction" 0..7 写入 / 缺字段 / 越界拒绝且方向不变）；
+##   + 未配置 mechanism_id）；Inspector authored 朝向（property 写入经 setter 驱动平行/穿过判定与运行期行为）；
+##   Typed apply_configuration 合同（Stable Field ID "orientation" 0..3 写入 / 缺字段 / 越界拒绝且朝向不变）；
 ##   真实预置收编链（PreplacedMechanismAdopter.adopt_all → OccupancyRegistry 单格注册 → get_preplaced_node 按格解析 →
-##   经正式 Contract 分发六向非轴 BLOCK / 轴向速度门 / RAY BLOCK——运行期正确接收与射出）；双屏障双朝向同批收编。
+##   经正式 Contract 分发平行撞棱角 BLOCK / 穿过速度门 / RAY BLOCK——运行期正确接收与射出）；双屏障双朝向同批收编。
 ## headless extends SceneTree，由 Godot --script 运行；preload 引用避开全局 class_name 缓存问题；
 ##   全部失败项收集后统一退出（任一失败 quit(1)）。不涉及 GUI/截图。
 
@@ -73,11 +73,11 @@ func _ray_ctx(mechanism_cell: Vector2i, incoming: Vector2i) -> Variant:
 	return _RayContext.create(mechanism_cell, incoming, 1, 0)
 
 
-## 构造屏障朝向字段 Schema（INT 0..7，与 FIELD_DIRECTION Stable Field ID 对齐）。
-func _make_direction_field(enum_max: int = 7) -> Variant:
+## 构造屏障朝向字段 Schema（INT 0..3，与 FIELD_ORIENTATION Stable Field ID 对齐）。
+func _make_direction_field(enum_max: int = 3) -> Variant:
 	var field: Variant = _MechanismFieldDefinition.new()
-	field.field_id = _Barrier.FIELD_DIRECTION
-	field.display_name = "屏障朝向"
+	field.field_id = _Barrier.FIELD_ORIENTATION
+	field.display_name = "薄膜朝向"
 	field.value_type = _MechanismFieldDefinition.ValueType.INT
 	field.enum_min = 0
 	field.enum_max = enum_max
@@ -120,7 +120,7 @@ func _report() -> void:
 # ===== 测试 =====
 
 ## 01. 场景合同：light_barrier.tscn 根为 PlaceableToken/LightBarrier，结构含 VisualView + DebugFilm，
-##     interaction_profile="fixed"（仅关卡预置），mechanism_id 未配置（待 Adopter 收编分配），默认朝向 RIGHT。
+##     interaction_profile="fixed"（仅关卡预置），mechanism_id 未配置（待 Adopter 收编分配），默认朝向 VERTICAL。
 func _test_01_scene_contract() -> void:
 	const G: String = "01_场景合同"
 	var barrier: Variant = _BarrierScene.instantiate()
@@ -131,102 +131,93 @@ func _test_01_scene_contract() -> void:
 	_check(G, barrier.interaction_profile == "fixed", "interaction_profile 应为 fixed（仅关卡预置，实际 %s）。"
 		% [barrier.interaction_profile])
 	_check(G, barrier.mechanism_id == &"", "未收编前 mechanism_id 应为空。")
-	_check(G, barrier.direction == _Barrier.BarrierDirection.RIGHT, "默认朝向应为 RIGHT。")
+	_check(G, barrier.orientation == _Barrier.BarrierOrientation.VERTICAL, "默认朝向应为 VERTICAL。")
 	_check(G, barrier.get_light_interaction_forms() == [&"RAY", &"PARTICLE"], "场景实例形态声明应为 RAY+PARTICLE。")
 	(barrier as Node).free()
 
 
 ## 02. Inspector authored 朝向：树上实例经 property 写入（= Inspector 导出属性路径）改朝向，
-##     分区判定随 authored 值切换；_ready 后占位薄膜线与穿越轴垂直（RIGHT→竖线；DOWN→横线）。
+##     平行/穿过判定随 authored 值切换；authored 朝向真实驱动运行期接收与射出。
 func _test_02_inspector_authored_direction() -> void:
 	const G: String = "02_InspectorAuthored朝向"
 	var made: Array = _make_scene_barrier(Vector2i(0, 0))
 	var barrier: Variant = made[1]
 	await process_frame
 
-	barrier.direction = _Barrier.BarrierDirection.RIGHT
-	_check(G, barrier.direction == _Barrier.BarrierDirection.RIGHT, "property 写入应经 setter 落盘 RIGHT。")
-	_check(G, barrier.is_on_traversal_axis(Vector2i(1, 0))
-		and barrier.is_on_traversal_axis(Vector2i(-1, 0)), "RIGHT 朝向轴向应为 →/←。")
-	_check(G, not barrier.is_on_traversal_axis(Vector2i(0, 1)), "RIGHT 朝向 ↓ 应为非轴。")
-	var film_right: Line2D = (barrier as Node).get_node("DebugFilm") as Line2D
-	_check(G, film_right.visible, "无 visual_profile 时占位薄膜线应显示。")
-	var fr_p0: Vector2 = film_right.points[0]
-	var fr_p1: Vector2 = film_right.points[1]
-	_check(G, fr_p0 == -fr_p1 and fr_p0.x == 0 and absi(fr_p0.y) == 28,
-		"RIGHT 朝向占位薄膜线应为竖直（⊥ 穿越轴）。")
+	barrier.orientation = _Barrier.BarrierOrientation.VERTICAL
+	_check(G, barrier.orientation == _Barrier.BarrierOrientation.VERTICAL, "property 写入应经 setter 落盘 VERTICAL。")
+	_check(G, barrier.is_edge_collision(Vector2i(0, -1))
+		and barrier.is_edge_collision(Vector2i(0, 1)), "VERTICAL 朝向平行方向应为 ↑/↓。")
+	_check(G, not barrier.is_edge_collision(Vector2i(1, 0)), "VERTICAL 朝向 → 应为穿过方向。")
 
-	barrier.direction = _Barrier.BarrierDirection.DOWN
-	_check(G, barrier.is_on_traversal_axis(Vector2i(0, 1))
-		and barrier.is_on_traversal_axis(Vector2i(0, -1)), "DOWN 朝向轴向应为 ↓/↑。")
-	_check(G, not barrier.is_on_traversal_axis(Vector2i(1, 0)), "DOWN 朝向 → 应为非轴。")
-	var film_down: Line2D = (barrier as Node).get_node("DebugFilm") as Line2D
-	var fd_p0: Vector2 = film_down.points[0]
-	var fd_p1: Vector2 = film_down.points[1]
-	_check(G, fd_p0 == -fd_p1 and fd_p0.y == 0 and absi(fd_p0.x) == 28,
-		"DOWN 朝向占位薄膜线应为水平（⊥ 穿越轴）。")
+	barrier.orientation = _Barrier.BarrierOrientation.HORIZONTAL
+	_check(G, barrier.is_edge_collision(Vector2i(1, 0))
+		and barrier.is_edge_collision(Vector2i(-1, 0)), "HORIZONTAL 朝向平行方向应为 →/←。")
+	_check(G, not barrier.is_edge_collision(Vector2i(0, 1)), "HORIZONTAL 朝向 ↓ 应为穿过方向。")
 
-	# authored 朝向切换后运行期行为随新事实：DOWN 朝向时 ↑ 与穿越轴共轴（进入速度门，STANDARD → CONTINUE -1），
-	# → 为非轴 BLOCK——证明 Inspector/authored 配置真实驱动运行期接收与射出。
-	var on_axis: Variant = _Contract.dispatch_particle(
-		barrier, _particle_ctx(Vector2i(0, 0), Vector2i(0, -1), _Motion.SpeedTier.STANDARD))
-	_check(G, on_axis.decision == _Result.Decision.CONTINUE
-		and on_axis.get_speed_delta() == -1, "DOWN 朝向 ↑ 轴向 STANDARD 应 CONTINUE -1。")
-	var off_axis: Variant = _Contract.dispatch_particle(
+	# authored 朝向切换后运行期行为随新事实：HORIZONTAL 朝向时 ↓ 穿过（进速度门，STANDARD → CONTINUE -1），
+	# → 平行撞棱角 BLOCK——证明 Inspector/authored 配置真实驱动运行期接收与射出。
+	var pass_through: Variant = _Contract.dispatch_particle(
+		barrier, _particle_ctx(Vector2i(0, 0), Vector2i(0, 1), _Motion.SpeedTier.STANDARD))
+	_check(G, pass_through.decision == _Result.Decision.CONTINUE
+		and pass_through.get_speed_delta() == -1, "HORIZONTAL 朝向 ↓ 穿过 STANDARD 应 CONTINUE -1。")
+	var edge: Variant = _Contract.dispatch_particle(
 		barrier, _particle_ctx(Vector2i(0, 0), Vector2i(1, 0), _Motion.SpeedTier.FAST))
-	_check(G, off_axis.decision == _Result.Decision.BLOCK, "DOWN 朝向 → 非轴 FAST 应 BLOCK。")
+	_check(G, edge.decision == _Result.Decision.BLOCK, "HORIZONTAL 朝向 → 平行 FAST 应 BLOCK（撞棱角）。")
 	_free_tree(made)
 
 
-## 03. Typed apply_configuration 合同（Stable Field ID "direction"）：合法 0..7 写入；null 通过不写入；
-##     缺 direction 字段拒绝；Schema 放行但值越界（8）由本机关拒绝且方向不变。
+## 03. Typed apply_configuration 合同（Stable Field ID "orientation"）：合法 0..3 写入；null 通过不写入；
+##     缺 orientation 字段拒绝；Schema 放行但值越界（4）由本机关拒绝且朝向不变。
 func _test_03_apply_configuration_contract() -> void:
 	const G: String = "03_applyConfiguration合同"
 	var barrier: Variant = _Barrier.new()
 
 	var good: Variant = _MechanismConfiguration.from_type_defaults([_make_direction_field()])
-	_check(G, good != null and good.apply_override(_Barrier.FIELD_DIRECTION, 5), "合法朝向值 5 应能写入配置。")
+	_check(G, good != null and good.apply_override(_Barrier.FIELD_ORIENTATION, 2), "合法朝向值 2 应能写入配置。")
 	_check(G, barrier.apply_configuration(good), "合法配置应用应返回 true。")
-	_check(G, barrier.direction == 5, "应用后朝向应为 5（UP_LEFT）。")
+	_check(G, barrier.orientation == 2, "应用后朝向应为 2（SLASH）。")
 
-	barrier.set_direction(2)
+	barrier.set_orientation(1)
 	_check(G, barrier.apply_configuration(null), "null 配置应直接通过。")
-	_check(G, barrier.direction == 2, "null 配置不得改写朝向。")
+	_check(G, barrier.orientation == 1, "null 配置不得改写朝向。")
 
 	var missing: Variant = _MechanismConfiguration.from_type_defaults([])
 	_check(G, missing != null, "空 Schema 配置应可构造。")
-	_check(G, not barrier.apply_configuration(missing), "缺 direction 字段的配置应被拒绝。")
-	_check(G, barrier.direction == 2, "被拒配置不得改写朝向。")
+	_check(G, not barrier.apply_configuration(missing), "缺 orientation 字段的配置应被拒绝。")
+	_check(G, barrier.orientation == 1, "被拒配置不得改写朝向。")
 
-	var wide: Variant = _MechanismConfiguration.from_type_defaults([_make_direction_field(9)])
-	_check(G, wide != null and wide.apply_override(_Barrier.FIELD_DIRECTION, 8),
-		"Schema 界放宽时值 8 可进配置（防线在本机关）。")
-	_check(G, not barrier.apply_configuration(wide), "越界值 8 应由本机关拒绝。")
-	_check(G, barrier.direction == 2, "越界拒绝后朝向应保持不变。")
+	var wide: Variant = _MechanismConfiguration.from_type_defaults([_make_direction_field(5)])
+	_check(G, wide != null and wide.apply_override(_Barrier.FIELD_ORIENTATION, 4),
+		"Schema 界放宽时值 4 可进配置（防线在本机关）。")
+	_check(G, not barrier.apply_configuration(wide), "越界值 4 应由本机关拒绝。")
+	_check(G, barrier.orientation == 1, "越界拒绝后朝向应保持不变。")
 
-	# 全 8 值数据驱动：Typed 写入朝向后分区判定随值正确切换。
-	for value: int in range(8):
+	# 全 4 值数据驱动：Typed 写入朝向后，每朝向恰 2 个平行（撞棱角）方向。
+	for value: int in range(4):
 		var config: Variant = _MechanismConfiguration.from_type_defaults([_make_direction_field()])
-		config.apply_override(_Barrier.FIELD_DIRECTION, value)
+		config.apply_override(_Barrier.FIELD_ORIENTATION, value)
 		if barrier.apply_configuration(config):
-			var axis: Vector2i = _Barrier.direction_to_vector(value)
-			_check(G, barrier.is_on_traversal_axis(axis)
-				and barrier.is_on_traversal_axis(_DirectionDomain.opposite(axis)),
-				"Typed 朝向 %d 轴向两向应共轴。" % value)
+			_check(G, barrier.orientation == value, "Typed 朝向 %d 应用后 orientation 应 == %d。" % [value, value])
+			var edge_count: int = 0
+			for token: StringName in _DirectionDomain.CLOCKWISE_ORDER:
+				if barrier.is_edge_collision(_DirectionDomain.to_vector(token)):
+					edge_count += 1
+			_check(G, edge_count == 2, "Typed 朝向 %d 平行方向数期望 2，实际 %d。" % [value, edge_count])
 		else:
 			_check(G, false, "Typed 朝向 %d 合法值应用被拒。" % value)
 	barrier.free()
 
 
-## 04. 真实预置收编链：RuntimeObjects 容器 + 场景实例（authored LEFT）→ adopt_all 收编 1 →
+## 04. 真实预置收编链：RuntimeObjects 容器 + 场景实例（authored HORIZONTAL）→ adopt_all 收编 1 →
 ##     OccupancyRegistry 按格注册（preplaced_ 前缀）→ get_preplaced_node 解析原实例 → authored 朝向保持 →
-##     经正式 Contract 分发：六向非轴 BLOCK / 轴向 SLOW BLOCK、STANDARD CONTINUE -1 / RAY 恒 BLOCK。
+##     经正式 Contract 分发：平行撞棱角 FAST BLOCK / 穿过 SLOW BLOCK、STANDARD CONTINUE -1 / RAY 恒 BLOCK。
 func _test_04_preplaced_adoption_runtime_chain() -> void:
 	const G: String = "04_预置收编运行链"
 	var cell: Vector2i = Vector2i(2, 3)
 	var made: Array = _make_scene_barrier(cell)
 	var barrier: Variant = made[1]
-	barrier.direction = _Barrier.BarrierDirection.LEFT
+	barrier.orientation = _Barrier.BarrierOrientation.HORIZONTAL
 	await process_frame
 
 	var occupancy: _OccupancyRegistry = _OccupancyRegistry.new()
@@ -239,26 +230,26 @@ func _test_04_preplaced_adoption_runtime_chain() -> void:
 	var resolved: Variant = adopter.get_preplaced_node(mechanism_id)
 	_check(G, resolved == barrier, "get_preplaced_node 应解析回原场景实例（core_loop._get_mechanism_node 同路径）。")
 	_check(G, barrier.mechanism_id == mechanism_id, "实例 mechanism_id 应被写入收编 ID。")
-	_check(G, barrier.direction == _Barrier.BarrierDirection.LEFT, "收编后 authored 朝向应保持 LEFT。")
+	_check(G, barrier.orientation == _Barrier.BarrierOrientation.HORIZONTAL, "收编后 authored 朝向应保持 HORIZONTAL。")
 	_check(G, occupancy.is_consistent(), "占用表应保持一致。")
 
 	# 运行期接收与射出（按格解析出的实例经正式 Contract 分发）。
-	var traversal_axis: Vector2i = Vector2i(-1, 0)
+	# 平行方向（→←）撞棱角：FAST 也 BLOCK；穿过方向（如 ↓）：SLOW BLOCK、STANDARD CONTINUE -1。
 	for token: StringName in _DirectionDomain.CLOCKWISE_ORDER:
 		var incoming: Vector2i = _DirectionDomain.to_vector(token)
-		if _DirectionDomain.same_axis(incoming, traversal_axis):
+		if not resolved.is_edge_collision(incoming):
 			continue
-		var blocked: Variant = _Contract.dispatch_particle(
+		var edge_hit: Variant = _Contract.dispatch_particle(
 			resolved, _particle_ctx(cell, incoming, _Motion.SpeedTier.FAST))
-		_check(G, blocked.decision == _Result.Decision.BLOCK,
-			"非轴 %s FAST 应 BLOCK（六向）。" % token)
+		_check(G, edge_hit.decision == _Result.Decision.BLOCK,
+			"平行 %s FAST 应 BLOCK（撞棱角）。" % token)
 	var slow: Variant = _Contract.dispatch_particle(
-		resolved, _particle_ctx(cell, Vector2i(-1, 0), _Motion.SpeedTier.SLOW))
-	_check(G, slow.decision == _Result.Decision.BLOCK, "轴向 ← SLOW 应 BLOCK（能量不足）。")
+		resolved, _particle_ctx(cell, Vector2i(0, 1), _Motion.SpeedTier.SLOW))
+	_check(G, slow.decision == _Result.Decision.BLOCK, "穿过 ↓ SLOW 应 BLOCK（能量不足）。")
 	var standard: Variant = _Contract.dispatch_particle(
-		resolved, _particle_ctx(cell, Vector2i(-1, 0), _Motion.SpeedTier.STANDARD))
+		resolved, _particle_ctx(cell, Vector2i(0, 1), _Motion.SpeedTier.STANDARD))
 	_check(G, standard.decision == _Result.Decision.CONTINUE
-		and standard.get_speed_delta() == -1, "轴向 ← STANDARD 应 CONTINUE -1。")
+		and standard.get_speed_delta() == -1, "穿过 ↓ STANDARD 应 CONTINUE -1。")
 	for token: StringName in [&"LEFT", &"RIGHT", &"UP"]:
 		var ray_result: Variant = _Contract.dispatch_ray(
 			resolved, _ray_ctx(cell, _DirectionDomain.to_vector(token)))
@@ -267,8 +258,8 @@ func _test_04_preplaced_adoption_runtime_chain() -> void:
 	_free_tree(made)
 
 
-## 05. 双屏障双朝向同批收编：A=RIGHT、B=DOWN；↓ 入射对 A 非轴 BLOCK、对 B 轴向 CONTINUE -1；
-##     两实例各自方向事实独立、占用一致，证明多实例 authored 六向入口同链路承载。
+## 05. 双屏障双朝向同批收编：A=VERTICAL、B=HORIZONTAL；↓ 入射对 A 平行撞棱角 BLOCK、对 B 穿过 CONTINUE -1；
+##     两实例各自朝向事实独立、占用一致，证明多实例 authored 入口同链路承载。
 func _test_05_two_barriers_two_orientations() -> void:
 	const G: String = "05_双屏障双朝向"
 	var container: Node2D = Node2D.new()
@@ -276,11 +267,11 @@ func _test_05_two_barriers_two_orientations() -> void:
 	var barrier_a: Variant = _BarrierScene.instantiate()
 	(barrier_a as Node2D).position = _GridCoordinateRules.cell_to_world(Vector2i(1, 1))
 	container.add_child(barrier_a as Node)
-	barrier_a.direction = _Barrier.BarrierDirection.RIGHT
+	barrier_a.orientation = _Barrier.BarrierOrientation.VERTICAL
 	var barrier_b: Variant = _BarrierScene.instantiate()
 	(barrier_b as Node2D).position = _GridCoordinateRules.cell_to_world(Vector2i(3, 1))
 	container.add_child(barrier_b as Node)
-	barrier_b.direction = _Barrier.BarrierDirection.DOWN
+	barrier_b.orientation = _Barrier.BarrierOrientation.HORIZONTAL
 	await process_frame
 
 	var occupancy: _OccupancyRegistry = _OccupancyRegistry.new()
@@ -290,16 +281,16 @@ func _test_05_two_barriers_two_orientations() -> void:
 	var id_b: StringName = occupancy.get_mechanism_at(Vector2i(3, 1))
 	_check(G, id_a != id_b and id_a != &"" and id_b != &"", "两屏障应登记不同非空 ID。")
 
-	# ↓ 入射：A（RIGHT）非轴 BLOCK；B（DOWN）轴向 STANDARD CONTINUE -1。
+	# ↓ 入射：A（VERTICAL）↓ 平行撞棱角 BLOCK；B（HORIZONTAL）↓ 穿过 STANDARD CONTINUE -1。
 	var hit_a: Variant = _Contract.dispatch_particle(
 		adopter.get_preplaced_node(id_a), _particle_ctx(Vector2i(1, 1), Vector2i(0, 1), _Motion.SpeedTier.STANDARD))
-	_check(G, hit_a.decision == _Result.Decision.BLOCK, "屏障 A（RIGHT）↓ 应非轴 BLOCK。")
+	_check(G, hit_a.decision == _Result.Decision.BLOCK, "屏障 A（VERTICAL）↓ 平行应撞棱角 BLOCK。")
 	var hit_b: Variant = _Contract.dispatch_particle(
 		adopter.get_preplaced_node(id_b), _particle_ctx(Vector2i(3, 1), Vector2i(0, 1), _Motion.SpeedTier.STANDARD))
 	_check(G, hit_b.decision == _Result.Decision.CONTINUE
-		and hit_b.get_speed_delta() == -1, "屏障 B（DOWN）↓ 应轴向 CONTINUE -1。")
-	_check(G, barrier_a.direction == _Barrier.BarrierDirection.RIGHT
-		and barrier_b.direction == _Barrier.BarrierDirection.DOWN,
+		and hit_b.get_speed_delta() == -1, "屏障 B（HORIZONTAL）↓ 穿过应 CONTINUE -1。")
+	_check(G, barrier_a.orientation == _Barrier.BarrierOrientation.VERTICAL
+		and barrier_b.orientation == _Barrier.BarrierOrientation.HORIZONTAL,
 		"两实例 authored 朝向应各自独立保持。")
 	_check(G, occupancy.is_consistent(), "双屏障占用表应保持一致。")
 	_free_tree([container])
