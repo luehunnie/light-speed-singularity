@@ -5,7 +5,8 @@ extends SceneTree
 ##   + 未配置 mechanism_id）；Inspector authored 朝向（property 写入经 setter 驱动平行/穿过判定与运行期行为）；
 ##   Typed apply_configuration 合同（Stable Field ID "orientation" 0..3 写入 / 缺字段 / 越界拒绝且朝向不变）；
 ##   真实预置收编链（PreplacedMechanismAdopter.adopt_all → OccupancyRegistry 单格注册 → get_preplaced_node 按格解析 →
-##   经正式 Contract 分发平行撞棱角 BLOCK / 穿过速度门 / RAY BLOCK——运行期正确接收与射出）；双屏障双朝向同批收编。
+##   经正式 Contract 分发平行撞棱角 BLOCK / 穿过速度门 / RAY BLOCK——运行期正确接收与射出）；双屏障双朝向同批收编；
+##   四向朝向正式纹理旋转同步（内容状态 + Artwork 旋转互异，朝向可见性回归）。
 ## headless extends SceneTree，由 Godot --script 运行；preload 引用避开全局 class_name 缓存问题；
 ##   全部失败项收集后统一退出（任一失败 quit(1)）。不涉及 GUI/截图。
 
@@ -38,7 +39,7 @@ const _ParticleContext: GDScript = preload(
 const _Motion: GDScript = preload("res://gameplay/particle/particle_motion_rules.gd")
 const _DirectionDomain: GDScript = preload("res://gameplay/light/direction_domain.gd")
 
-const _GROUP_COUNT: int = 5
+const _GROUP_COUNT: int = 6
 
 var _failures: PackedStringArray = PackedStringArray()
 var _checks: int = 0
@@ -51,6 +52,7 @@ func _initialize() -> void:
 	_test_03_apply_configuration_contract()
 	await _test_04_preplaced_adoption_runtime_chain()
 	await _test_05_two_barriers_two_orientations()
+	await _test_06_orientation_visual_sync()
 	_report()
 	quit(0 if _failures.is_empty() else 1)
 
@@ -100,6 +102,41 @@ func _free_tree(nodes: Array) -> void:
 		if is_instance_valid(node):
 			(node as Node).free()
 	await process_frame
+
+
+## G6：四向朝向 × 正式纹理旋转同步（朝向可见性唯一来源；C-03 作者工具修复回归）。
+## 真实场景入树 ready 后逐向 set_orientation：内容状态切到对应 STATE_*、Artwork 旋转取唯一角度
+## （VERTICAL 0 / HORIZONTAL PI/2 / SLASH PI/4 / BACKSLASH -PI/4，四角互异）、正式纹理可解析。
+func _test_06_orientation_visual_sync() -> void:
+	const G: String = "06_朝向纹理旋转同步"
+	var made: Array = _make_scene_barrier(Vector2i(0, 0))
+	var barrier: Variant = made[1]
+	await process_frame
+	var expected_rotations: Dictionary = {
+		_Barrier.BarrierOrientation.VERTICAL: 0.0,
+		_Barrier.BarrierOrientation.HORIZONTAL: PI / 2.0,
+		_Barrier.BarrierOrientation.SLASH: PI / 4.0,
+		_Barrier.BarrierOrientation.BACKSLASH: -PI / 4.0,
+	}
+	var expected_states: Dictionary = {
+		_Barrier.BarrierOrientation.VERTICAL: _Barrier.STATE_VERTICAL,
+		_Barrier.BarrierOrientation.HORIZONTAL: _Barrier.STATE_HORIZONTAL,
+		_Barrier.BarrierOrientation.SLASH: _Barrier.STATE_SLASH,
+		_Barrier.BarrierOrientation.BACKSLASH: _Barrier.STATE_BACKSLASH,
+	}
+	for orientation: int in expected_rotations:
+		barrier.set_orientation(orientation)
+		var view: Variant = barrier._visual_view
+		_check(G, view.get_content_state() == expected_states[orientation],
+				"朝向 %d 应切内容状态 %s。" % [orientation, expected_states[orientation]])
+		var artwork: Variant = view._artwork
+		_check(G, artwork != null and is_equal_approx(artwork.rotation, expected_rotations[orientation]),
+				"朝向 %d 的 Artwork 旋转应为 %f，实得 %s。" % [
+					orientation, expected_rotations[orientation],
+					str(artwork.rotation if artwork != null else -999.0),
+				])
+	_check(G, barrier._visual_view.has_resolved_texture(), "正式纹理应可解析（artwork 路径生效）。")
+	await _free_tree(made)
 
 
 func _report() -> void:

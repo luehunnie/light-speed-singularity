@@ -15,8 +15,9 @@ extends PlaceableToken
 ##   按格解析机关节点；四向朝向经 Inspector @export orientation 或 Typed apply_configuration(FIELD_ORIENTATION)
 ##   在关卡制作阶段写入。玩家不可拿取/放置/移动/回收/改向；运行期 interact_* 为纯函数零写入
 ##   （R/Reload 不变量：屏障与朝向为预置事实，运行期任何路径不得修改 orientation）。
-## 视觉：orientation 同步为 ObjectVisualView 内容状态；场景内 DebugFilm（薄膜线）仅作纹理缺失时的占位后备，
-##   不参与玩法状态。
+## 视觉：orientation 同步为 ObjectVisualView 内容状态与正式纹理旋转（四向共用一张竖膜纹理，
+##   非竖直朝向经 set_artwork_rotation 旋转呈现，编辑器/运行期一致）；场景内 DebugFilm（薄膜线）
+##   仅作纹理缺失时的占位后备，不参与玩法状态。
 ## 不负责：占用登记（Adopter 负责）、库存、视觉纹理、光粒 Tick 计算、SpeedTier 饱和（Runtime 负责）。
 ## 类型约束：调用方一律通过 preload() 引用以避开全局 class_name 缓存问题。
 
@@ -69,15 +70,17 @@ func _ready() -> void:
 	_refresh_visual()
 
 
-## 按当前朝向刷新视觉：写入 ObjectVisualView 内容状态，并更新调试薄膜线（沿薄膜切线方向）。
+## 按当前朝向刷新视觉：写入 ObjectVisualView 内容状态与正式纹理旋转，并更新调试薄膜线（沿薄膜切线方向）。
 ## [br]本函数无参数、无返回值。
-## [br]副作用：调用 _visual_view.set_content_state() 切换朝向状态；正式纹理缺失时显示 DebugFilm、存在时隐藏。
+## [br]副作用：调用 _visual_view.set_content_state() 切换朝向状态并按朝向旋转正式纹理
+##   （四向共用一张竖膜纹理，旋转是朝向可见性的唯一来源）；正式纹理缺失时显示 DebugFilm、存在时隐藏。
 ## [br]边界条件：若节点尚未 ready 则安全返回，避免在 @onready 变量初始化前解引用。
 func _refresh_visual() -> void:
 	if not is_node_ready():
 		return
 
 	_visual_view.set_content_state(_content_state_id())
+	_visual_view.set_artwork_rotation(_artwork_rotation(orientation))
 
 	var has_artwork: bool = _visual_view.has_resolved_texture()
 	_debug_film.visible = not has_artwork
@@ -151,6 +154,22 @@ static func _tangent_vector(orientation: BarrierOrientation) -> Vector2i:
 			return Vector2i(1, 1)
 		_:
 			return Vector2i.ZERO
+
+
+## 朝向 → 正式纹理旋转角（弧度；正式纹理按 VERTICAL 竖膜绘制，其余朝向旋转同一张贴图呈现）。
+## [br]VERTICAL → 0；HORIZONTAL → PI/2；SLASH（/，沿 ↗↙）→ PI/4；BACKSLASH（\，沿 ↘↖）→ -PI/4；
+##   越界朝向返回 0.0（回退竖膜，与 _content_state_id 的回退口径一致）。
+## [br]本静态函数无副作用，不依赖实例状态；仅服务视觉同步，不参与玩法判定。
+static func _artwork_rotation(orientation: BarrierOrientation) -> float:
+	match orientation:
+		BarrierOrientation.HORIZONTAL:
+			return PI / 2.0
+		BarrierOrientation.SLASH:
+			return PI / 4.0
+		BarrierOrientation.BACKSLASH:
+			return -PI / 4.0
+		_:
+			return 0.0
 
 
 ## 判定入射方向是否与薄膜面平行（= 撞棱角，共 2 个方向）。
