@@ -63,16 +63,22 @@ func _adopt_one(node: Node) -> bool:
 		)
 		return false
 	var cell: Vector2i = token.cell
-	if _is_cell_adoptable.is_valid() and not bool(_is_cell_adoptable.call(cell)):
-		push_error(
-			"PreplacedMechanismAdopter: 预置机关格非法（cell=%s node=%s），拒绝收编。"
-			% [cell, token.name]
-		)
-		return false
+	# C-08 多格最小接线：按实例 footprint（get_occupied_offsets，冻结裁决 2）自锚格展开全部占格；
+	# 单格机关仍展开为 1 格、行为不变；每个占格都必须通过单格收编合法性判定。
+	var cells: Array[Vector2i] = []
+	for offset: Vector2i in token.get_occupied_offsets():
+		cells.append(cell + offset)
+	for occupied_cell: Vector2i in cells:
+		if _is_cell_adoptable.is_valid() and not bool(_is_cell_adoptable.call(occupied_cell)):
+			push_error(
+				"PreplacedMechanismAdopter: 预置机关格非法（cell=%s node=%s），拒绝收编。"
+				% [occupied_cell, token.name]
+			)
+			return false
 	var mechanism_id: StringName = _make_next_mechanism_id()
 	var original_position: Vector2 = token.position
 	token.configure(mechanism_id, cell)
-	if not _occupancy.register_single_cell(mechanism_id, cell):
+	if not _occupancy.register_cells(mechanism_id, cells):
 		var occupant_id: StringName = _occupancy.get_mechanism_at(cell)
 		push_error(
 			"PreplacedMechanismAdopter: 预置机关占用登记失败（cell=%s 已被机关 %s 占用），回滚收编。"

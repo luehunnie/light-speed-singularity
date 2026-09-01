@@ -158,12 +158,14 @@ func _init(
 	_allow_form_switch = allow_form_switch
 	# M4-E2.1：RAY emission 执行/timer/visual delay 迁入 RayEmissionDriver（immutable snapshot；不再重读 _fixed_emitter）。
 	# finish_emission 经 LRC._finish_emission 聚合结算（守卫全在 _finish_emission 内）；on_steps_applied 刷新完成标签（driver 不读 Objective 真值）；
-	# on_form_change（阶段C-01）：RAY 传播停止于转换器格时透传 FORM_CHANGE 载荷给 spawner 生成新 emission。
+	# on_form_change（阶段C-01）：RAY 传播停止于转换器格时透传 FORM_CHANGE 载荷给 spawner 生成新 emission；
+	# on_ray_branches（C-08）：RAY 传播携带分光分支载荷时透传给 spawner 派生分支 emission（守卫/树级预算全在 spawner）。
 	_ray_emission_driver = _RayEmissionDriver.new(
 		_light_visual_controller, _objective_controller, _light_world_query,
 		_max_propagation_steps, _pulse_visual_duration_seconds,
 		Callable(self, "_finish_emission"), Callable(self, "_on_ray_steps_applied"),
-		Callable(_form_change_spawner, "handle_ray_form_change"))
+		Callable(_form_change_spawner, "handle_ray_form_change"),
+		Callable(_form_change_spawner, "handle_ray_branches"))
 	# M4-E1 generation 新语义：监听 SETUP→READY 进入新 Runtime epoch——rsc.begin_runtime 与 request_begin_runtime 两条路径都经 state_changed 覆盖。
 	_run_state_controller.state_changed.connect(_on_state_changed)
 
@@ -201,7 +203,7 @@ func request_fire() -> bool:
 			return false
 	# 3. per-emission transaction（M4-E2.1）：dispatch 失败已在 _dispatch_emission 内 rollback 本 emission；abort 仅在无任何活动 emission 时退出 PULSE_ACTIVE（joined failure 保持 PULSE_ACTIVE，不影响旧 emission）。
 	var current_generation: int = _runtime_generation
-	# 阶段C-01：per-fire 重置转换链深度预算（spawner 的 generation 归零只跨 epoch 兜底，同 epoch 多次发射须各自重置）。
+	# 阶段C-01：per-fire 重置转换链深度预算；C-08 起同时重置分光分支树级预算（同 epoch 多次发射须各自重置）。
 	_form_change_spawner.reset_chain()
 	var emission_id: int = _dispatch_emission(current_generation, snapshot["light_form"], snapshot["emitter_cell"], snapshot["direction"])
 	if emission_id < 0:
@@ -228,13 +230,15 @@ func request_switch_light_form() -> int:
 ## per-emission 编排 seam（M4-E2 内部/private；M4-E2.1 显式成功/失败 transaction）：allocate emission_id + 按 form dispatch；成功返回 emission_id，失败 _rollback_emission（mark_finished 本 emission + 清视觉，不留 zombie）返回 -1。
 ## request_fire（M4-E3 已开放 repeated fire）经此入口；白盒测试仍经反射直接调用本 seam 制造确定性第二 emission / joined failure。不消费 cooldown（玩家路径 dispatch 成功后才消费）。
 ## 失败只回滚本次 emission——不清其它 Ray/Particle、不 mark_finished 其它 emission、不 finish 整个 pulse；joined failure 由 _abort_pulse_if_no_active_emission 决定是否退 PULSE_ACTIVE。
-func _dispatch_emission(generation: int, light_form: int, emitter_cell: Vector2i, direction: Vector2i) -> int:
+## [br]color（C-08）：RAY 初始颜色（ColorValue 冻结值，默认 0 = WHITE 不变）；派生分支 emission 经 spawner 传入继承色；
+##   FORM_CHANGE 派生路径不传色（保持 PARTICLE→RAY 默认白色平台语义）。
+func _dispatch_emission(generation: int, light_form: int, emitter_cell: Vector2i, direction: Vector2i, color: int = 0) -> int:
 	var emission_id: int = _active_emission_registry.allocate(generation, light_form)
 	var dispatched: bool = false
 	match light_form:
 		_LightEmissionTypes.LightForm.RAY:
 			# immutable snapshot：driver 不再重读 _fixed_emitter；dispatch 后修改 FixedEmitter 不影响本 Ray。
-			dispatched = _ray_emission_driver.dispatch(get_tree(), generation, emission_id, emitter_cell, direction)
+			dispatched = _ray_emission_driver.dispatch(get_tree(), generation, emission_id, emitter_cell, direction, color)
 		_LightEmissionTypes.LightForm.PARTICLE:
 			dispatched = _begin_particle_emission(generation, emission_id, emitter_cell, direction)
 		_:

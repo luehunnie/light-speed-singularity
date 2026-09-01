@@ -45,6 +45,9 @@ class MechanismEffect:
 	var form_change_target: int = -1
 	## FORM_CHANGE 的出射八方向；非 FORM_CHANGE 决策恒为 Vector2i.ZERO。
 	var form_change_direction: Vector2i = Vector2i.ZERO
+	## REDIRECT_CROSS 的跨格 pending 改向（C-08；仅 REDIRECT_CROSS 决策非 ZERO）：本步出射 = cross_direction（跨入邻格），
+	##   下一到达步（机关第二格）不再判机关、直接沿本改向出射（与 Ray 跨格语义一致）。其余决策恒 ZERO。
+	var pending_redirect_direction: Vector2i = Vector2i.ZERO
 
 
 ## 把机关的一次正式交互结果转换成光粒通用效果（纯同步、无副作用、不修改任何 state）。
@@ -76,6 +79,12 @@ static func adapt(mechanism: Variant, particle_context: Variant) -> MechanismEff
 	match interaction.decision:
 		_LightInteractionResult.Decision.REDIRECT:
 			effect.outgoing_direction = interaction.redirect_direction
+		_LightInteractionResult.Decision.REDIRECT_CROSS:
+			# C-08 穿邻格（双格平面镜；RAY / PARTICLE 两形态对称，显式消费、禁止落入默认透明 CONTINUE）：
+			#   本步出射 = cross_direction（下一 Tick 跨入机关第二格），pending 携带改向——
+			#   跨格到达步由 executor 跳过机关判定（不重复交互），随后沿改向继续传播。
+			effect.outgoing_direction = interaction.cross_direction
+			effect.pending_redirect_direction = interaction.redirect_direction
 		_LightInteractionResult.Decision.FORM_CHANGE:
 			# 阶段C-01 光形式转换器：光粒在机关格内被转换为另一形态——本步传播终止（continue_motion=false），
 			#   转换载荷（目标形态+输出方向）经 effect 透传，新 emission 由执行适配层消费，本类不生成。

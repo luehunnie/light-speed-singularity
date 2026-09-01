@@ -192,12 +192,27 @@ func _check_object_position(
 			"固定对象 position 偏离目标格中心 %s（容差 %s px）。" % [str(cell), _OFF_GRID_TOLERANCE],
 			path, cell, object_id))
 		# off-grid 不中断：派生 cell 仍有效，继续判断 terrain / wall。
-	if terrain_cells != null and not (cell in terrain_cells):
-		issues.append(_issue_cell(_err(), &"fixed_object_outside_terrain",
-			"固定对象位于 Terrain 之外 %s。" % str(cell), path, cell, object_id))
-	if wall_cells != null and (cell in wall_cells):
-		issues.append(_issue_cell(_err(), &"fixed_object_on_wall",
-			"固定对象位于 Wall %s。" % str(cell), path, cell, object_id))
+	# C-08 多格最小接线：footprint（get_occupied_offsets，冻结裁决 2）展开的每个占格都须在 Terrain 内且不在 Wall 上；
+	# Emitter/Crystal 等单格对象仍展开为 1 格，既有报告行为与 D6-B fixture 不变。
+	for occupied_cell: Vector2i in _get_occupied_cells(obj, cell):
+		if terrain_cells != null and not (occupied_cell in terrain_cells):
+			issues.append(_issue_cell(_err(), &"fixed_object_outside_terrain",
+				"固定对象位于 Terrain 之外 %s。" % str(occupied_cell), path, occupied_cell, object_id))
+		if wall_cells != null and (occupied_cell in wall_cells):
+			issues.append(_issue_cell(_err(), &"fixed_object_on_wall",
+				"固定对象位于 Wall %s。" % str(occupied_cell), path, occupied_cell, object_id))
+
+
+## C-08 多格最小接线：对象提供 get_occupied_offsets（D7-R4 footprint 契约，PlaceableToken/GridPlacedObject 同名）
+## 时经锚格展开为绝对占格列表；否则退回单格 [anchor_cell]。只读对象，不写任何事实；
+## 编辑器中非 @tool 占位实例 has_method 为 false，自然退回单格（安全默认）。
+func _get_occupied_cells(obj: Node2D, anchor_cell: Vector2i) -> Array[Vector2i]:
+	if obj.has_method("get_occupied_offsets"):
+		var cells: Array[Vector2i] = []
+		for offset: Variant in obj.call("get_occupied_offsets"):
+			cells.append(anchor_cell + (offset as Vector2i))
+		return cells
+	return [anchor_cell]
 
 
 # ===== 占用重叠 =====
@@ -210,11 +225,14 @@ func _validate_overlap(emitters: Array, crystals: Array, root: Node2D, issues: A
 	for emitter in emitters:
 		var e: _EmitterConfigNode = emitter
 		if _is_finite_position(e.position):
-			placed.append([_GridCoordinateRules.world_to_cell(e.position), &"", root.get_path_to(e)])
+			# C-08：footprint 逐占格展开参与重叠归因（单格对象每对象仍 1 条，行为不变）。
+			for occupied_cell: Vector2i in _get_occupied_cells(e, _GridCoordinateRules.world_to_cell(e.position)):
+				placed.append([occupied_cell, &"", root.get_path_to(e)])
 	for crystal in crystals:
 		var c: _BasicCrystal = crystal
 		if _is_finite_position(c.position):
-			placed.append([_GridCoordinateRules.world_to_cell(c.position), c.crystal_id, root.get_path_to(c)])
+			for occupied_cell: Vector2i in _get_occupied_cells(c, _GridCoordinateRules.world_to_cell(c.position)):
+				placed.append([occupied_cell, c.crystal_id, root.get_path_to(c)])
 	for i in range(placed.size()):
 		for j in range(i + 1, placed.size()):
 			if placed[i][0] == placed[j][0]:

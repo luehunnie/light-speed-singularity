@@ -74,7 +74,16 @@ func build(level_root: Node2D, skip_node: Node = null) -> bool:
 		if str(occupant_id).is_empty():
 			occupant_id = StringName(_FALLBACK_PREFIX + str(node.get_instance_id()))
 		var cell: Vector2i = _GridCoordinateRules.world_to_cell((node as Node2D).position)
-		occupancy.register_single_cell(occupant_id, cell)
+		# C-08 多格最小接线：实例提供 get_occupied_offsets（D7-R4 footprint 契约）时自锚格展开全部占格登记；
+		# 其余正式对象（发射器/水晶等单格）回退单格、行为不变。register_cells 原子提交（任一冲突整体拒绝），
+		# 与原 register_single_cell 相同不读返回值：冲突事实由后续 evaluate 的 OBJECT_OCCUPIED 归因呈现。
+		var occupied: Array[Vector2i] = []
+		if (node as Node2D).has_method("get_occupied_offsets"):
+			for offset: Variant in (node as Node2D).call("get_occupied_offsets"):
+				occupied.append(cell + (offset as Vector2i))
+		else:
+			occupied.append(cell)
+		occupancy.register_cells(occupant_id, occupied)
 		_occupancy_ids_by_node[node] = occupant_id
 	_level_world_query = _LevelWorldQuery.new(
 		snapshot.get_terrain_bounds(), no_walls, _find_emitter_cell(level_root),

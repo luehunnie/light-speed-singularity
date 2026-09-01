@@ -117,8 +117,13 @@ func place_from_inventory(
 	if not is_instance_valid(token):
 		push_error("PlacementController: 创建正式机关节点失败，回滚（无占用/映射/库存变更）：%s" % [mechanism_id])
 		return PlacementTransactionResult.new(Status.FAILED, mechanism_id, Vector2i.ZERO, target_cell, false, "节点创建失败")
-	# 6. 登记占用；失败则销毁已创建节点，不留有节点无占用。
-	if not _occupancy.register_single_cell(mechanism_id, target_cell):
+	# 6. 登记占用（C-08 多格最小接线：按实例 footprint 展开绝对占格，单格机关仍登记 1 格）；失败则销毁已创建节点，不留有节点无占用。
+	var occupied_cells: Array[Vector2i] = _get_occupied_cells(token, target_cell)
+	if not _level_world_query.is_valid_placement_cell_set(occupied_cells, &""):
+		push_error("PlacementController: 多格 footprint 含非法格，销毁已创建节点：%s at %s" % [mechanism_id, occupied_cells])
+		_destroy_token(token)
+		return PlacementTransactionResult.new(Status.INVALID, mechanism_id, Vector2i.ZERO, target_cell, false, "footprint 含非法格")
+	if not _occupancy.register_cells(mechanism_id, occupied_cells):
 		push_error("PlacementController: 占用登记失败，销毁已创建节点：%s at %s" % [mechanism_id, target_cell])
 		_destroy_token(token)
 		return PlacementTransactionResult.new(Status.FAILED, mechanism_id, Vector2i.ZERO, target_cell, false, "占用登记失败")
@@ -153,11 +158,14 @@ func move_placed(
 	# 原格：NO_CHANGE，不扣次。
 	if target_cell == source_cell:
 		return PlacementTransactionResult.new(Status.NO_CHANGE, mechanism_id, source_cell, target_cell, false)
-	# 非法格：INVALID。
-	if not _is_valid_placement_cell(target_cell, mechanism_id):
+	# C-08 多格最小接线：源/目标 footprint 均按实例展开（orientation 不变故两套 offsets 同构）。
+	var source_cells: Array[Vector2i] = _get_occupied_cells(token, source_cell)
+	var target_cells: Array[Vector2i] = _get_occupied_cells(token, target_cell)
+	# 非法格：INVALID（多格机关要求全部占格合法，ignored_id 忽略自身既有占用）。
+	if not is_valid_placement_cells(target_cells, mechanism_id):
 		return PlacementTransactionResult.new(Status.INVALID, mechanism_id, source_cell, target_cell, false, "目标格非法")
 	# 原子占用迁移：校验全部通过后一次性更新正反向索引，失败则节点保持原格、占用/映射/库存不变。
-	if not _occupancy.move_single_cell(mechanism_id, source_cell, target_cell):
+	if not _occupancy.move_cells(mechanism_id, source_cells, target_cells):
 		push_error("PlacementController: 原子占用迁移失败，节点保持原格：%s %s -> %s" % [mechanism_id, source_cell, target_cell])
 		return PlacementTransactionResult.new(Status.FAILED, mechanism_id, source_cell, target_cell, false, "原子占用迁移失败")
 	# 占用原子迁移成功；move_placed 经 token.set_cell() 把 position 对齐目标格中心、更新节点世界位置；可见性仍由核心恢复，orientation 不变。
@@ -195,7 +203,7 @@ func recycle_placed(mechanism_id: StringName) -> PlacementTransactionResult:
 	# 无论恢复成功与否，预留都只在此清理一次；Token/映射保留、不 queue_free、不进入成功路径、不改内部 Dictionary。
 	if not _commit_reserved_return_for_type(token_type_id):
 		push_error("PlacementController: 回收提交归还失败，恢复占用并取消预留，保留节点/映射/库存：%s" % [mechanism_id])
-		if not _occupancy.register_single_cell(mechanism_id, source_cell):
+		if not _occupancy.register_cells(mechanism_id, _get_occupied_cells(token, source_cell)):
 			push_error("PlacementController: 回收回滚恢复占用失败（不变量破坏）：%s at %s" % [mechanism_id, source_cell])
 		_cancel_reserved_return_for_type(token_type_id)
 		return PlacementTransactionResult.new(Status.FAILED, mechanism_id, source_cell, Vector2i.ZERO, false, "库存归还提交失败")
@@ -311,6 +319,19 @@ func _is_valid_placement_cell(cell: Vector2i, ignored_id: StringName) -> bool:
 		push_error("PlacementController: LevelWorldQuery 未注入，无法校验格合法性。")
 		return false
 	return _level_world_query.is_valid_placement_cell(cell, ignored_id)
+
+
+## 读取机关实例 footprint 展开的绝对占格（C-08 多格最小接线，冻结裁决 2）。
+## 实例提供 get_occupied_offsets（D7-R4 契约，PlaceableToken/GridPlacedObject 同名）时经锚格展开；
+## 否则退回单格 [anchor_cell]。offsets 与朝向无关（双格镜/分光器均为线形），朝向事实由实例自持，
+## 事务层不透传 orientation。不写占用表，只读实例。
+func _get_occupied_cells(token: Variant, anchor_cell: Vector2i) -> Array[Vector2i]:
+	if is_instance_valid(token) and token.has_method("get_occupied_offsets"):
+		var cells: Array[Vector2i] = []
+		for offset: Variant in token.get_occupied_offsets():
+			cells.append(anchor_cell + (offset as Vector2i))
+		return cells
+	return [anchor_cell]
 
 
 ## 多格放置合法性格点（D7-R4 多格最小路径）：非空、格间无重复、每格均满足单格合法性判定；

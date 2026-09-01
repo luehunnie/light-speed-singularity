@@ -51,6 +51,9 @@ var _on_steps_applied: Callable
 ## FORM_CHANGE 转换载荷 outward Callable（阶段C-01；签名 (generation, source_emission_id, target_form, converter_cell, direction) -> void；
 ##   → FormChangeEmissionSpawner.handle_ray_form_change）。driver 只透传，不生成 emission；未接线（默认 Callable()）时转换载荷被忽略。
 var _on_form_change: Callable
+## 分光分支载荷 outward Callable（C-08；签名 (generation, source_emission_id, branches: Array) -> void；
+##   → FormChangeEmissionSpawner.handle_ray_branches）。driver 只透传，不生成 emission；未接线（默认 Callable()）时分支载荷被忽略。
+var _on_ray_branches: Callable
 
 
 ## 构造驱动器；light_visual_controller / objective_controller / light_world_query 为共享引用，
@@ -63,7 +66,8 @@ func _init(
 		pulse_visual_duration_seconds: float,
 		finish_emission: Callable,
 		on_steps_applied: Callable,
-		on_form_change: Callable = Callable()
+		on_form_change: Callable = Callable(),
+		on_ray_branches: Callable = Callable()
 ) -> void:
 	_light_visual_controller = light_visual_controller
 	_objective_controller = objective_controller
@@ -73,12 +77,14 @@ func _init(
 	_finish_emission = finish_emission
 	_on_steps_applied = on_steps_applied
 	_on_form_change = on_form_change
+	_on_ray_branches = on_ray_branches
 
 
 ## 执行一次 RAY emission（M4-E2.1）：接收 immutable preflight Ray fire data，执行传播 + 应用副作用 + 安排完成。
 ## [br]输入：tree 为当前 SceneTree（create_timer 用，dispatch 作用域内使用，不持久持有）；
 ## [br]  generation / emission_id 为本次 emission 的 immutable 身份快照（真值仍为 LRC._runtime_generation；emission_id 由 LRC allocate）；
-## [br]  start_cell / direction 为 immutable Ray 起点与方向（LRC._dispatch_emission 从 request_fire 快照传入，dispatch 后修改 FixedEmitter 不影响本 Ray）。
+## [br]  start_cell / direction 为 immutable Ray 起点与方向（LRC._dispatch_emission 从 request_fire 快照传入，dispatch 后修改 FixedEmitter 不影响本 Ray）；
+## [br]  initial_color 为本 Ray 初始颜色（C-08 派生分支继承入射色用；默认 0 = ColorValue.WHITE 冻结值，主发射路径不变）。
 ## [br]返回：true = Ray 已执行 + 完成已安排；false = immutable direction 非法（build 失败），交调用方 rollback（无视觉/无 timer 残留）。
 ## [br]副作用（成功时）：逐格 show_step + try_activate_crystal_at；on_steps_applied 回调；SceneTreeTimer 安排 finish_emission。
 ## [br]边界：不 allocate/mark_finished emission（LRC 已 allocate）；不判 RunState；不清其它 emission 视觉；不重读 FixedEmitter。
@@ -87,7 +93,8 @@ func dispatch(
 		generation: int,
 		emission_id: int,
 		start_cell: Vector2i,
-		direction: Vector2i
+		direction: Vector2i,
+		initial_color: int = 0
 ) -> bool:
 	# 防御性 immutable direction 校验（clean failure boundary）：正常路径 LRC 已 preflight，此处失败仅白盒注入/异常路径，交 LRC rollback。
 	if not _LightEmissionTypes.is_valid_direction(direction):
@@ -100,7 +107,8 @@ func dispatch(
 		_max_propagation_steps,
 		_light_world_query,
 		emission_id,
-		generation
+		generation,
+		initial_color
 	)
 	if execution_result.reached_step_limit:
 		push_warning("Light propagation stopped by MAX_PROPAGATION_STEPS")
@@ -115,6 +123,10 @@ func dispatch(
 			execution_result.form_change_target,
 			execution_result.steps[execution_result.steps.size() - 1].cell,
 			execution_result.form_change_direction)
+	# C-08：分光分支载荷透传（元素为 LightInteractionResult.BranchSpec，color 已由执行层盖章）；
+	#   分支 emission 的生成守卫（generation/pulse/树级预算）全部在 spawner 内，driver 不复制、不生成。
+	if not execution_result.spawned_branches.is_empty() and _on_ray_branches.is_valid():
+		_on_ray_branches.call(generation, emission_id, execution_result.spawned_branches)
 	# 应用完 steps：回调 LRC 刷新完成标签（driver 不读 Objective 完成真值）。
 	_on_steps_applied.call()
 	# 启动异步结束（捕获 immutable generation + emission_id；过期/非活动守卫在 LRC._finish_emission）。

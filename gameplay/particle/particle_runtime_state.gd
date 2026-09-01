@@ -47,6 +47,10 @@ var _active: bool
 ## 发射身份（ActiveEmissionRegistry 单调 emission_id；AF-02 光交互 Context Shared Facts 用）。
 ## [br]0 = 未关联 emission（遗留两参构造 / 测试桩），正式运行由 scheduler.emit_particle 传入真实值。
 var _emission_id: int
+## 跨格 pending 改向（C-08；REDIRECT_CROSS 专用）：非 ZERO 时下一步进入（cell+direction）后不再判机关、
+##   直接沿本改向出射（同机关跨格不重复交互）；经 set_pending_redirect_direction 写入、跨格消费步写回 ZERO。
+## [br]随光粒生命周期存续（光粒终止/回收即消亡），不持久化、不跨光粒传递。
+var _pending_redirect_direction: Vector2i
 
 
 ## 默认构造：创建一个 inactive 空壳（active=false，字段为零值）。
@@ -61,6 +65,7 @@ func _init() -> void:
 	_next_move_tick = 0
 	_active = false
 	_emission_id = 0
+	_pending_redirect_direction = Vector2i.ZERO
 
 
 ## 已发射光粒的最小构造入口（冻结 emitted-state 合同）。
@@ -107,6 +112,16 @@ static func create_emitted(
 ## 终止本光粒（活动状态置假入口）。置 active=false，幂等；本类不提供任何置真入口，故终止后不得复活，apply_move 也会拒绝。
 func terminate() -> void:
 	_active = false
+
+
+## 写入跨格 pending 改向（C-08；REDIRECT_CROSS 专用，scheduler 于 MOVE 提交后调用，写穿语义）。
+## [br]输入：direction 须为 Vector2i.ZERO（清除 / 无 pending）或合法八方向；非法值 push_error 并忽略（保持原值）。
+## [br]副作用：仅写入 _pending_redirect_direction；不触碰五可变字段（apply_move 合同不变）、不影响 active。
+func set_pending_redirect_direction(direction: Vector2i) -> void:
+	if direction != Vector2i.ZERO and not _LightEmissionTypes.is_valid_direction(direction):
+		push_error("ParticleRuntimeState：非法跨格 pending 改向 (%d, %d)，忽略本次写入。" % [direction.x, direction.y])
+		return
+	_pending_redirect_direction = direction
 
 
 ## 正式状态推进入口（冻结 apply_move 合同；B1.1）。
@@ -195,3 +210,8 @@ func get_next_move_tick() -> int:
 ## 是否仍在活动（active=true 代表仍在传播；false 代表已终止）。
 func is_active() -> bool:
 	return _active
+
+
+## 跨格 pending 改向（C-08；Vector2i.ZERO = 无 pending）。
+func get_pending_redirect_direction() -> Vector2i:
+	return _pending_redirect_direction
