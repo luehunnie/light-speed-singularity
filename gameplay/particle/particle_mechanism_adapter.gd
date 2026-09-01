@@ -41,6 +41,10 @@ class MechanismEffect:
 	var outgoing_direction: Vector2i = Vector2i.ZERO
 	## 速度档位增量（+1/-1/0）。机关仅经 PARTICLE_SPEED_DELTA 效果请求。
 	var speed_delta: int = 0
+	## FORM_CHANGE 的目标形态（LightForm 值）；非 FORM_CHANGE 决策恒为 -1 哨兵（阶段C-01 光形式转换器）。
+	var form_change_target: int = -1
+	## FORM_CHANGE 的出射八方向；非 FORM_CHANGE 决策恒为 Vector2i.ZERO。
+	var form_change_direction: Vector2i = Vector2i.ZERO
 
 
 ## 把机关的一次正式交互结果转换成光粒通用效果（纯同步、无副作用、不修改任何 state）。
@@ -72,6 +76,12 @@ static func adapt(mechanism: Variant, particle_context: Variant) -> MechanismEff
 	match interaction.decision:
 		_LightInteractionResult.Decision.REDIRECT:
 			effect.outgoing_direction = interaction.redirect_direction
+		_LightInteractionResult.Decision.FORM_CHANGE:
+			# 阶段C-01 光形式转换器：光粒在机关格内被转换为另一形态——本步传播终止（continue_motion=false），
+			#   转换载荷（目标形态+输出方向）经 effect 透传，新 emission 由执行适配层消费，本类不生成。
+			effect.continue_motion = false
+			effect.form_change_target = interaction.target_form
+			effect.form_change_direction = interaction.redirect_direction
 		_LightInteractionResult.Decision.BLOCK:
 			effect.continue_motion = false
 		_:

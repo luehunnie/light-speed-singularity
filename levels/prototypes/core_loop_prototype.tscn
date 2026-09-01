@@ -3,7 +3,6 @@
 [ext_resource type="Script" uid="uid://do7wigwkihxy0" path="res://levels/prototypes/core_loop_prototype.gd" id="2_proto"]
 [ext_resource type="Script" uid="uid://dctpsq4bkc0cr" path="res://gameplay/ui/inventory_slot_view.gd" id="5_slot_view"]
 [ext_resource type="Resource" uid="uid://cwh8v45y2j3fw" path="res://assets/visual_profiles/single_cell_mirror_visuals.tres" id="6_mirror_profile"]
-[ext_resource type="PackedScene" uid="uid://cqu8y3p75m24x" path="res://gameplay/mechanisms/mirrors/single_cell_mirror.tscn" id="8_c18wj"]
 [ext_resource type="PackedScene" path="res://gameplay/crystals/basic_crystal.tscn" id="10_crystal_scene"]
 [ext_resource type="PackedScene" uid="uid://bnqexhtb2sfgu" path="res://gameplay/mechanisms/emitters/emitter_config_node.tscn" id="11_emitter_scene"]
 [ext_resource type="TileSet" uid="uid://bnek2denq6pnd" path="res://assets/art/tilesets/terrain_tileset.tres" id="12_terrain"]
@@ -29,6 +28,10 @@ metadata/inventory_entries = [{
 "content_type_id": "particle_accelerator",
 "initial_quantity": 3,
 "order": 1
+}, {
+"content_type_id": "light_form_converter_player",
+"initial_quantity": 2,
+"order": 2
 }]
 
 [node name="TerrainLayer" type="TileMapLayer" parent="." unique_id=400361494]
@@ -62,16 +65,12 @@ color = Color(0.25, 0.25, 0.28, 1)
 [node name="RuntimeObjects" type="Node2D" parent="." unique_id=820444864]
 
 [node name="Emitter" parent="RuntimeObjects" unique_id=1264479859 instance=ExtResource("11_emitter_scene")]
-position = Vector2(88, 225)
+position = Vector2(96, 224)
 allow_form_switch = true
 
 [node name="Crystal" parent="RuntimeObjects" unique_id=1716045995 instance=ExtResource("10_crystal_scene")]
 position = Vector2(224, 96)
 crystal_id = &"crystal_001"
-
-[node name="SingleCellMirror" parent="RuntimeObjects" unique_id=736486939 instance=ExtResource("8_c18wj")]
-position = Vector2(224, 224)
-stable_instance_id = "fci_0000001"
 
 [node name="LightPathLayer" type="Node2D" parent="." unique_id=1467401346]
 

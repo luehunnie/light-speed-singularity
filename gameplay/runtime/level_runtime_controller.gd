@@ -47,6 +47,8 @@ const _ParticleTickDriver: GDScript = preload("res://gameplay/runtime/particle_t
 const _FireRequestPreflight: GDScript = preload("res://gameplay/runtime/fire_request_preflight.gd")
 # D7-R1 Runtime 只读诊断出口：detached 运行期事实快照构造器（不含 Diagnostics 依赖；LRC 仅一条只读转发）。
 const _RuntimeDiagnosticsSnapshotBuilder: GDScript = preload("res://gameplay/runtime/runtime_diagnostics_snapshot_builder.gd")
+# 阶段C-01 光形式转换器执行适配层：机关 FORM_CHANGE 载荷 → 新 emission 的唯一生成点（链深度 guard 内聚；driver/Tick driver 经 Callable 回调直达）。
+const _FormChangeEmissionSpawner: GDScript = preload("res://gameplay/runtime/form_change_emission_spawner.gd")
 
 
 var _run_state_controller: _RunStateController
@@ -85,6 +87,8 @@ var _fire_request_preflight: _FireRequestPreflight
 var _ray_emission_driver: _RayEmissionDriver
 ## 关卡配置的 Q 形态切换开关（M4-E4；构造注入只读，运行期不变）：false 时任何状态 Q 均无效；权限判定委派 RuntimeStateRules.can_switch_light_form。
 var _allow_form_switch: bool = false
+## FORM_CHANGE 执行适配层（阶段C-01）：机关转换载荷 → 新 emission 的唯一生成点；持 per-fire 转换链深度 guard。
+var _form_change_spawner: _FormChangeEmissionSpawner
 
 
 ## 构造运行期编排控制器；依赖全部由核心注入，不在本类构造场景节点或第二套事实。drag_flow_controller 直接注入以安全取消拖拽。
@@ -131,24 +135,35 @@ func _init(
 	_publish_particle_visual_event = publish_particle_visual_event
 	# Tick 驱动泵技术 seam：正式（particle_tick_pump == null）构造冻结 0.1s cadence 的 ParticleTickPump；测试注入 tests/** 可控替身。cadence 唯一来源 ParticleTickPump.PARTICLE_TICK_SECONDS，本参数不得改变它。
 	var tick_pump: Variant = _ParticleTickPump.new() if particle_tick_pump == null else particle_tick_pump
-	# M4-E2 settle contract 拆分：driver 经 on_particle_terminated 逐 runtime 上报 LRC（per-emission 结算），on_drained 仅技术停泵事实（不完成 emission / 不切 RunState）。
+	# 阶段C-01：FORM_CHANGE 执行适配层——机关转换载荷（目标形态+输出方向）统一经本 spawner 生成新 emission；
+	# Ray driver 载荷经 handle_ray_form_change 直达；光粒 TERMINATE 载荷经 handle_particle_terminated 直达（解绑+先 spawn 后结算内聚）。
+	# registry 须先于本 spawner 构造（spawner 与本控制器共享同一实例）；先于 driver/Tick driver 构造（二者构造期引用其方法 Callable）。
+	_active_emission_registry = _ActiveEmissionRegistry.new()
+	_form_change_spawner = _FormChangeEmissionSpawner.new(
+		_active_emission_registry,
+		Callable(self, "_dispatch_emission"),
+		Callable(self, "get_runtime_generation"),
+		Callable(_run_state_controller, "is_current_pulse_active"),
+		Callable(self, "_finish_emission"))
+	# M4-E2 settle contract 拆分：driver 经 on_particle_terminated 逐 runtime 上报（per-emission 结算，阶段C-01 起为 spawner 事务体），on_drained 仅技术停泵事实（不完成 emission / 不切 RunState）。
 	_particle_tick_driver = _ParticleTickDriver.new(
 		_particle_scheduler, tick_pump, _objective_controller, _publish_particle_visual_event,
 		Callable(self, "get_runtime_generation"),
 		Callable(_run_state_controller, "is_current_pulse_active"),
-		Callable(self, "_on_particle_terminated"),
+		Callable(_form_change_spawner, "handle_particle_terminated"),
 		Callable(self, "_on_particle_subsystem_drained"))
-	# M4-E1 多发射 Runtime 基础 + M4-E3：registry / 统一 0.5s cooldown（时钟 seam：正式留空读单调时钟；测试注入 () -> float 控 0.499/0.500 边界）/ 零副作用发射预检（依赖与 LRC 共享同一实例，不建第二套事实）。
-	_active_emission_registry = _ActiveEmissionRegistry.new()
+	# M4-E1 多发射 Runtime 基础 + M4-E3：统一 0.5s cooldown（时钟 seam：正式留空读单调时钟；测试注入 () -> float 控 0.499/0.500 边界）/ 零副作用发射预检（依赖与 LRC 共享同一实例，不建第二套事实）。registry 已在 spawner 构造点创建（阶段C-01 上移）。
 	_emitter_fire_cooldown = _EmitterFireCooldown.new(emitter_fire_cooldown_clock)
 	_fire_request_preflight = _FireRequestPreflight.new(drag_flow_controller, run_state_controller, fixed_emitter, _emitter_fire_cooldown)
 	_allow_form_switch = allow_form_switch
 	# M4-E2.1：RAY emission 执行/timer/visual delay 迁入 RayEmissionDriver（immutable snapshot；不再重读 _fixed_emitter）。
-	# finish_emission 经 LRC._finish_emission 聚合结算（守卫全在 _finish_emission 内）；on_steps_applied 刷新完成标签（driver 不读 Objective 真值）。
+	# finish_emission 经 LRC._finish_emission 聚合结算（守卫全在 _finish_emission 内）；on_steps_applied 刷新完成标签（driver 不读 Objective 真值）；
+	# on_form_change（阶段C-01）：RAY 传播停止于转换器格时透传 FORM_CHANGE 载荷给 spawner 生成新 emission。
 	_ray_emission_driver = _RayEmissionDriver.new(
 		_light_visual_controller, _objective_controller, _light_world_query,
 		_max_propagation_steps, _pulse_visual_duration_seconds,
-		Callable(self, "_finish_emission"), Callable(self, "_on_ray_steps_applied"))
+		Callable(self, "_finish_emission"), Callable(self, "_on_ray_steps_applied"),
+		Callable(_form_change_spawner, "handle_ray_form_change"))
 	# M4-E1 generation 新语义：监听 SETUP→READY 进入新 Runtime epoch——rsc.begin_runtime 与 request_begin_runtime 两条路径都经 state_changed 覆盖。
 	_run_state_controller.state_changed.connect(_on_state_changed)
 
@@ -186,6 +201,8 @@ func request_fire() -> bool:
 			return false
 	# 3. per-emission transaction（M4-E2.1）：dispatch 失败已在 _dispatch_emission 内 rollback 本 emission；abort 仅在无任何活动 emission 时退出 PULSE_ACTIVE（joined failure 保持 PULSE_ACTIVE，不影响旧 emission）。
 	var current_generation: int = _runtime_generation
+	# 阶段C-01：per-fire 重置转换链深度预算（spawner 的 generation 归零只跨 epoch 兜底，同 epoch 多次发射须各自重置）。
+	_form_change_spawner.reset_chain()
 	var emission_id: int = _dispatch_emission(current_generation, snapshot["light_form"], snapshot["emitter_cell"], snapshot["direction"])
 	if emission_id < 0:
 		_abort_pulse_if_no_active_emission()
@@ -343,21 +360,7 @@ func _finish_emission(expected_generation: int, emission_id: int) -> void:
 	_refresh_runtime_ui.call()
 
 
-## Particle TERMINATE 逐 runtime 上报入口（M4-E2；由 ParticleTickDriver.on_tick 对每条 TERMINATE BatchEvent 调用）：generation mismatch / 非活动脉冲 → no-op；unbind_particle_runtime 反查并解绑其 emission，该 emission 已无 runtime → _finish_emission 推进 per-emission 结算。
-## [br]Scheduler 不知 emission_id——runtime_id → emission_id 反查经 Registry；多粒 emission 最后一个 runtime 解绑才 finish 该 emission。
-func _on_particle_terminated(expected_generation: int, runtime_id: int) -> void:
-	if expected_generation != _runtime_generation:
-		return
-	if not _run_state_controller.is_current_pulse_active():
-		return
-	var emission_id: int = _active_emission_registry.unbind_particle_runtime(runtime_id)
-	if emission_id <= 0:
-		return
-	if _active_emission_registry.get_emission_runtime_count(emission_id) == 0:
-		_finish_emission(expected_generation, emission_id)
-
-
-## Particle 子系统 drained 技术 callback（M4-E2；由 driver 在 is_drained 时调用）。仅技术事实——scheduler 无活动 Particle；driver 已据此停泵（回调前清 _pump_active 保重入安全）。不完成 emission / 不切 RunState / 不清视觉——emission 结算已由 _on_particle_terminated 逐 runtime 完成。
+## Particle 子系统 drained 技术 callback（M4-E2；由 driver 在 is_drained 时调用）。仅技术事实——scheduler 无活动 Particle；driver 已据此停泵（回调前清 _pump_active 保重入安全）。不完成 emission / 不切 RunState / 不清视觉——emission 结算已由 per-runtime TERMINATE 上报完成（阶段C-01 起事务体为 FormChangeEmissionSpawner.handle_particle_terminated：解绑 + FORM_CHANGE 载荷生成新 emission + per-emission 结算）。
 func _on_particle_subsystem_drained(_expected_generation: int) -> void:
 	# 故意为空（drain 语义已由 driver 据 is_drained 停泵体现）；保留为技术诊断 seam 与 driver callback 合同。
 	pass

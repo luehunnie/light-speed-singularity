@@ -60,6 +60,8 @@ enum TerminationReason {
 ## [br]next_step_blocked：仅 MOVE 时有意义——本步离开方向上的再下一格（entered_cell + outgoing_direction）
 ##   是否为墙 / 越界（M4-E4 墙体边界消失：确定性前瞻，供 Visual 在接触边界时即时消失，不改本类任何终止 / 提交语义）；
 ##   TERMINATE 时恒 false（光粒本步已终止，前瞻无意义）。
+## [br]form_change_target / form_change_direction（阶段C-01）：TERMINATE(MECHANISM_BLOCK) 且携带 FORM_CHANGE 载荷时
+##   为目标形态（LightForm 值）与出射八方向（转换发生在机关格内，entered_cell 即转换器格）；其余分支恒 -1 / ZERO。
 class StepResult:
 	extends RefCounted
 
@@ -70,6 +72,8 @@ class StepResult:
 	var has_crystal: bool = false
 	var termination_reason: int = TerminationReason.NONE
 	var next_step_blocked: bool = false
+	var form_change_target: int = -1
+	var form_change_direction: Vector2i = Vector2i.ZERO
 
 
 ## 对单颗活动光粒求值一次传播步（纯同步、无副作用、绝不修改 state）。
@@ -140,6 +144,8 @@ func evaluate_step(
 
 	# ⑧b 机关 BLOCK（光屏障等阻挡型机关）：光粒撞击屏障边框/薄膜能量不足，于机关格外停止（与 WALL 同形，
 	#     不进入阻挡格；方向/速度门槛判定已由机关经 Context 事实完成）。
+	#     FORM_CHANGE（阶段C-01 光形式转换器）同形终止：机关在格内完成形态转换，载荷（目标形态+出射方向）
+	#     经 StepResult 透传，新 emission 由执行适配层生成；普通阻挡机关载荷恒 -1 / ZERO。
 	if not effect.continue_motion:
 		result.outcome = Outcome.TERMINATE
 		result.termination_reason = TerminationReason.MECHANISM_BLOCK
@@ -148,6 +154,8 @@ func evaluate_step(
 		result.speed_delta = 0
 		result.has_crystal = false
 		result.next_step_blocked = false
+		result.form_change_target = effect.form_change_target
+		result.form_change_direction = effect.form_change_direction
 		return result
 
 	# ⑨ 返回纯 StepResult（MOVE）。M4-E4：确定性前瞻——本步离开方向上的再下一格是否墙 / 越界，

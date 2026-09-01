@@ -7,6 +7,9 @@ extends RefCounted
 ##   - 调 RayExecutionModule.execute（无副作用纯计算，传入构造期注入的 light_world_query 与冻结 max_steps）；
 ##   - 逐 step 应用副作用（同一格先 show_step 再 apply_hit 水晶命中——视觉→水晶顺序冻结，S3-05 起命中经 ObjectiveHitContext）；
 ##   - 应用完 steps 后回调 on_steps_applied（LRC 据此刷新完成标签，driver 不读 Objective 完成真值）；
+##   - RAY 传播停止于机关格且携带 FORM_CHANGE 转换载荷时（阶段C-01 光形式转换器），回调 on_form_change
+##     （签名 (generation, source_emission_id, target_form, converter_cell, direction) -> void；→ FormChangeEmissionSpawner），
+##     driver 只透传载荷，不生成 emission、不复制转换规则；
 ##   - 管理本 Ray 的 visual delay（SceneTreeTimer），到期后回调 finish_emission(generation, emission_id) 交 LRC 聚合结算。
 ## 严禁拥有（硬边界——本驱动绝不做以下任何一项）：
 ##   - Registry / allocate / mark_finished（emission 身份与活动表归 LRC/ActiveEmissionRegistry）；
@@ -45,6 +48,9 @@ var _pulse_visual_duration_seconds: float
 var _finish_emission: Callable
 ## 逐 step 应用完成后的 outward Callable（签名 () -> void；→ LRC 刷新完成标签）。driver 不读 Objective 完成真值。
 var _on_steps_applied: Callable
+## FORM_CHANGE 转换载荷 outward Callable（阶段C-01；签名 (generation, source_emission_id, target_form, converter_cell, direction) -> void；
+##   → FormChangeEmissionSpawner.handle_ray_form_change）。driver 只透传，不生成 emission；未接线（默认 Callable()）时转换载荷被忽略。
+var _on_form_change: Callable
 
 
 ## 构造驱动器；light_visual_controller / objective_controller / light_world_query 为共享引用，
@@ -56,7 +62,8 @@ func _init(
 		max_propagation_steps: int,
 		pulse_visual_duration_seconds: float,
 		finish_emission: Callable,
-		on_steps_applied: Callable
+		on_steps_applied: Callable,
+		on_form_change: Callable = Callable()
 ) -> void:
 	_light_visual_controller = light_visual_controller
 	_objective_controller = objective_controller
@@ -65,6 +72,7 @@ func _init(
 	_pulse_visual_duration_seconds = pulse_visual_duration_seconds
 	_finish_emission = finish_emission
 	_on_steps_applied = on_steps_applied
+	_on_form_change = on_form_change
 
 
 ## 执行一次 RAY emission（M4-E2.1）：接收 immutable preflight Ray fire data，执行传播 + 应用副作用 + 安排完成。
@@ -98,6 +106,15 @@ func dispatch(
 		push_warning("Light propagation stopped by MAX_PROPAGATION_STEPS")
 	# 逐格按结果顺序应用副作用（同一格先 show_step 再 try_activate_crystal_at）；emission_id 使本段视觉归属本次 Ray emission。
 	_apply_ray_execution_result(execution_result, emission_id, generation)
+	# FORM_CHANGE 转换载荷透传（阶段C-01）：转换器格 = steps 末格（模块仅在记录该格后才可能携带载荷）。
+	#   新 emission 的生成守卫（generation/pulse/链深度）全部在 spawner 内，driver 不复制。
+	if execution_result.form_change_target != -1 and _on_form_change.is_valid() and not execution_result.steps.is_empty():
+		_on_form_change.call(
+			generation,
+			emission_id,
+			execution_result.form_change_target,
+			execution_result.steps[execution_result.steps.size() - 1].cell,
+			execution_result.form_change_direction)
 	# 应用完 steps：回调 LRC 刷新完成标签（driver 不读 Objective 完成真值）。
 	_on_steps_applied.call()
 	# 启动异步结束（捕获 immutable generation + emission_id；过期/非活动守卫在 LRC._finish_emission）。

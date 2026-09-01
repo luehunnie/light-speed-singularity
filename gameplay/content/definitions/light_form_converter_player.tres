@@ -1,0 +1,23 @@
+[gd_resource type="Resource" script_class="MechanismDefinition" format=3 uid="uid://biwujrq5racn5"]
+
+[ext_resource type="PackedScene" path="res://gameplay/mechanisms/converter/light_form_converter.tscn" id="1_converter"]
+[ext_resource type="Script" uid="uid://by5qgyrffr0ca" path="res://gameplay/content/mechanism_definition.gd" id="2_mechdef"]
+[ext_resource type="Script" uid="uid://c7mmtdpg2uxpj" path="res://gameplay/content/configuration/mechanism_field_definition.gd" id="3_field"]
+
+[sub_resource type="Resource" id="Resource_direction"]
+script = ExtResource("3_field")
+field_id = &"direction"
+display_name = "转换朝向"
+enum_max = 7
+player_action = &"cycle_direction"
+
+[resource]
+script = ExtResource("2_mechdef")
+light_interaction_forms = Array[StringName]([&"RAY", &"PARTICLE"])
+configuration_fields = [SubResource("Resource_direction")]
+player_interaction_actions = Array[StringName]([&"cycle_direction"])
+content_type_id = &"light_form_converter_player"
+display_name = "光形式转换器（道具）"
+category = &"optics"
+scene = ExtResource("1_converter")
+inventory_eligible = true
