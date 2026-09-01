@@ -59,6 +59,14 @@ const _PREVIEW_Z_INDEX: int = 80
 const _DRAG_PREVIEW_SCALE: Vector2 = Vector2(1.08, 1.08)
 
 
+## C-08 多格 footprint 展开点（冻结裁决：footprint 用机关实例自身 get_occupied_offsets()，不扩 Stable Contract）。
+## 默认单格 [Vector2i.ZERO]；多格机关子类覆写本方法返回相对锚格的偏移列表（与 GridPlacedObject 同名契约对齐，
+## 占用事务层经其展开绝对占格再交 OccupancyRegistry.register_cells/move_cells 原子提交）。
+## [br]无副作用；不写占用表、不改 position。offsets 列表内不得含重复项（register_cells 原子拒绝重复）。
+func get_occupied_offsets(_p_orientation: int = 0) -> Array[Vector2i]:
+	return [Vector2i.ZERO]
+
+
 ## 配置原型机关实例的基础数据。
 ## [br]id 是关卡控制器分配的唯一机关 ID，initial_cell 是当前逻辑格子。
 ## [br]无返回值；副作用是写入 mechanism_id，并经 cell setter 把 position 对齐到 initial_cell 格中心，再把视觉切换为正式放置态（WORLD + NONE）。

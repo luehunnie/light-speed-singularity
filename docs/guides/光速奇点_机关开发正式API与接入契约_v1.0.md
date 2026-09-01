@@ -2154,6 +2154,11 @@ CoreLoop
 | Q45 | Split 属于 Propagation Topology Extension，不提前做普通 Effect | AUTO-FROZEN |
 | Q46 | Gameplay Color 冻结为离散枚举 WHITE/RED/GREEN/BLUE（NONE=-1 哨兵）；Visual Color 不得成为玩法颜色事实 | FROZEN |
 | Q47 | 光交互 API 增加颜色能力：RayInteractionContext 加 current_color（RAY 专属事实，默认 WHITE，须真实四色）；LightInteractionResult 加 COLOR_CHANGE 效果（target_color 须真实四色、仅 RAY 合法、至多一个） | FROZEN |
+| Q48 | Propagation Decision 新增 REDIRECT_CROSS：redirect_direction + cross_direction 均八方向、两方向互斥字段；RAY 于下一格透明跨格后改向（跨格记路径、不重复机关裁决），PARTICLE 逐 tick 跨同机关第二格（pending 携带，第二格不查机关），同机关跨格仅交互一次 | FROZEN |
+| Q49 | 分光分支 = 派生 emission（BranchSpec{source_cell, direction, color}，仅 RAY 合法；机关给 NONE 色由执行层盖章继承当前色）；不在单路径 executor 内建队列；树级总预算 MAX_BRANCH_BUDGET=128/每次 fire，耗尽后分支按阻挡处理，reset/generation 推进归零 | FROZEN |
+| Q50 | 多格 footprint = 机关实例 `get_occupied_offsets(orientation) -> Array[Vector2i]`（锚格相对、与朝向无关线形、默认 `[Vector2i.ZERO]`）；放置/移动/收编/编辑快照/Validator 事务层展开绝对占格，经 OccupancyRegistry register_cells/move_cells 原子提交；保存仍由 position+orientation 派生，不新增持久化自由字段，不扩 Stable Contract | FROZEN |
+| Q51 | 命中聚合：同一 emission 对同一水晶格只计一次（generation\|emission_id\|cell 去重键，重复命中幂等），不同水晶格/不同 emission 分别计；emission_id=0 遗留测试桩豁免去重 | FROZEN |
+| Q52 | 分光器默认朝向 RIGHT（DEFAULT_SPLITTER_ORIENTATION，仅接口默认值；分光器机关本体留后续内容批次实现） | FROZEN |
 
 `AUTO-FROZEN` 表示：用户明确授权“后续全部按推荐方案”，由本轮收口直接冻结。
 

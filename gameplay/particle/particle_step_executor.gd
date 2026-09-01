@@ -62,6 +62,9 @@ enum TerminationReason {
 ##   TERMINATE 时恒 false（光粒本步已终止，前瞻无意义）。
 ## [br]form_change_target / form_change_direction（阶段C-01）：TERMINATE(MECHANISM_BLOCK) 且携带 FORM_CHANGE 载荷时
 ##   为目标形态（LightForm 值）与出射八方向（转换发生在机关格内，entered_cell 即转换器格）；其余分支恒 -1 / ZERO。
+## [br]next_pending_redirect（C-08）：本步求值后 state 的跨格 pending 改向写穿值——机关 REDIRECT_CROSS 时为改向
+##   （下一到达步跨入 cross_direction 邻格、不再判机关），跨格 pending 消费步恒 ZERO（写穿清除）；其余分支恒 ZERO。
+##   仅 MOVE 会被 scheduler 写入 state；TERMINATE 分支不消费。
 class StepResult:
 	extends RefCounted
 
@@ -74,6 +77,7 @@ class StepResult:
 	var next_step_blocked: bool = false
 	var form_change_target: int = -1
 	var form_change_direction: Vector2i = Vector2i.ZERO
+	var next_pending_redirect: Vector2i = Vector2i.ZERO
 
 
 ## 对单颗活动光粒求值一次传播步（纯同步、无副作用、绝不修改 state）。
@@ -124,23 +128,33 @@ func evaluate_step(
 		return result
 
 	# ⑤ 成功进入 next_cell；⑥ 查水晶；⑦ 查机关；⑧ 构造不可变 Context 后交 Adapter 正式分发（AF-02 §23 时序）。
+	#    C-08 例外：state 携带跨格 pending 改向（上一机关步 REDIRECT_CROSS）时，本步进入的是同机关第二格——
+	#    透明通过：不查机关、不构造 Context、不判交互（与 Ray 跨格语义一致，同机关跨格不重复交互）；
+	#    出射 = pending 改向，speed_delta 恒 0，水晶照常记录（水晶非机关）；边界/墙体检查照常先行。
 	var has_crystal: bool = world_query.has_crystal_at(next_cell)
-	var mechanism: Variant = world_query.get_light_mechanism_at(next_cell)
-	var particle_context: Variant = _ParticleInteractionContext.create(
-		next_cell,
-		state.get_direction(),
-		state.get_emission_id(),
-		state.get_generation(),
-		state.get_speed_tier(),
-		state.get_runtime_id()
-	)
+	var pending_redirect: Vector2i = state.get_pending_redirect_direction()
 	var effect
-	if particle_context == null:
-		# 防御：state 不变量被破坏（正常不可达）时按透明通过，不中断求值。
+	if pending_redirect != Vector2i.ZERO:
 		effect = _ParticleMechanismAdapter.MechanismEffect.new()
-		effect.outgoing_direction = state.get_direction()
+		effect.outgoing_direction = pending_redirect
 	else:
-		effect = _ParticleMechanismAdapter.adapt(mechanism, particle_context)
+		var mechanism: Variant = world_query.get_light_mechanism_at(next_cell)
+		var particle_context: Variant = _ParticleInteractionContext.create(
+			next_cell,
+			state.get_direction(),
+			state.get_emission_id(),
+			state.get_generation(),
+			state.get_speed_tier(),
+			state.get_runtime_id()
+		)
+		if particle_context == null:
+			# 防御：state 不变量被破坏（正常不可达）时按透明通过，不中断求值。
+			effect = _ParticleMechanismAdapter.MechanismEffect.new()
+			effect.outgoing_direction = state.get_direction()
+		else:
+			effect = _ParticleMechanismAdapter.adapt(mechanism, particle_context)
+	# C-08：本步求值后的 pending 写穿值——机关 REDIRECT_CROSS 写入改向（下一到达步跨格消费），跨格消费步写回 ZERO。
+	result.next_pending_redirect = effect.pending_redirect_direction
 
 	# ⑧b 机关 BLOCK（光屏障等阻挡型机关）：光粒撞击屏障边框/薄膜能量不足，于机关格外停止（与 WALL 同形，
 	#     不进入阻挡格；方向/速度门槛判定已由机关经 Context 事实完成）。

@@ -32,16 +32,20 @@ const _MAP_BOUNDS: Rect2i = Rect2i(0, 0, 16, 16)
 
 # ===== 测试用桩 =====
 
-## 占用表桩：仅对指定格令 register_single_cell 失败，其余继承真实行为。
+## 占用表桩：仅对指定格令登记失败（单格与 C-08 多格入口同步注入），其余继承真实行为。
 class _FailRegisterForCellRegistry extends "res://gameplay/placement/occupancy_registry.gd":
 	var fail_cell: Vector2i = Vector2i(-888888, -888888)
 	func register_single_cell(mechanism_id: StringName, cell: Vector2i) -> bool:
 		if cell == fail_cell:
 			return false
 		return super.register_single_cell(mechanism_id, cell)
+	func register_cells(mechanism_id: StringName, cells: Array[Vector2i]) -> bool:
+		if cells.has(fail_cell):
+			return false
+		return super.register_cells(mechanism_id, cells)
 
 
-## 占用表桩：register_single_cell 首次继承真实行为、第二次起返回 false，用于伪造回收回滚恢复占用失败（不变量破坏）。
+## 占用表桩：登记入口首次继承真实行为、第二次起返回 false，用于伪造回收回滚恢复占用失败（不变量破坏）。
 ## 放置时第 1 次注册成功，回收回滚时第 2 次注册失败；仅模拟接口结果，不含业务判断。
 class _FailRegisterOnSecondCallRegistry extends "res://gameplay/placement/occupancy_registry.gd":
 	var _register_count: int = 0
@@ -50,6 +54,11 @@ class _FailRegisterOnSecondCallRegistry extends "res://gameplay/placement/occupa
 		if _register_count >= 2:
 			return false
 		return super.register_single_cell(mechanism_id, cell)
+	func register_cells(mechanism_id: StringName, cells: Array[Vector2i]) -> bool:
+		_register_count += 1
+		if _register_count >= 2:
+			return false
+		return super.register_cells(mechanism_id, cells)
 
 
 ## 占用表桩：仅对指定 ID 令 unregister 失败，其余继承真实行为。
@@ -61,13 +70,17 @@ class _FailUnregisterForIdRegistry extends "res://gameplay/placement/occupancy_r
 		return super.unregister(mechanism_id)
 
 
-## 占用表桩：令 move_single_cell 直接返回 false，伪造原子占用迁移失败（不修改任何事实）。
+## 占用表桩：fail_move 置真时令占用迁移入口（单格与 C-08 多格）直接返回 false，伪造原子占用迁移失败（不修改任何事实）。
 class _FailMoveRegistry extends "res://gameplay/placement/occupancy_registry.gd":
 	var fail_move: bool = false
 	func move_single_cell(mechanism_id: StringName, source_cell: Vector2i, target_cell: Vector2i) -> bool:
 		if fail_move:
 			return false
 		return super.move_single_cell(mechanism_id, source_cell, target_cell)
+	func move_cells(mechanism_id: StringName, source_cells: Array[Vector2i], target_cells: Array[Vector2i]) -> bool:
+		if fail_move:
+			return false
+		return super.move_cells(mechanism_id, source_cells, target_cells)
 
 
 ## 库存桩：try_reserve_return_one 强制失败，用于伪造回收预留失败（库存已满或预留超容量）。

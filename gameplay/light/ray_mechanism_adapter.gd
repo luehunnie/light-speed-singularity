@@ -54,6 +54,9 @@ static func evaluate(
 			# 阶段C-01 光形式转换器：转换载荷（目标形态+输出方向）经本结果透传给传播核心，
 			#   新 emission 的生成由执行适配层（RayEmissionDriver 回调 → FormChangeEmissionSpawner）消费，本类不生成。
 			mech_result = _RayMechanismResult.form_change(interaction.target_form, interaction.redirect_direction)
+		_LightInteractionResult.Decision.REDIRECT_CROSS:
+			# C-08 穿邻格（双格平面镜）：改向 + 跨界方向透传执行层（跨界格透明通过、不重复判机关）。
+			mech_result = _RayMechanismResult.redirect_cross(interaction.redirect_direction, interaction.cross_direction)
 		_LightInteractionResult.Decision.BLOCK:
 			if OS.is_debug_build():
 				print_debug("RayMechanismAdapter: 机关 BLOCK 停止传播。")
@@ -62,4 +65,7 @@ static func evaluate(
 			mech_result = _RayMechanismResult.continue_with(incoming_direction)
 	# 透传颜色变更（改动 4）：COLOR_CHANGE 效果经 color_change 字段交给传播核心消费。
 	mech_result.color_change = interaction.get_color_change()
+	# 透传分光分支载荷（C-08）：仅 CONTINUE / REDIRECT 且 RAY 合法（Contract validate 强制，非法已降级透明）；
+	#   元素为 LightInteractionResult.BranchSpec；分支 emission 的生成守卫/预算全在执行适配层（spawner），本类不生成。
+	mech_result.spawned_branches = interaction.spawned_branches
 	return mech_result

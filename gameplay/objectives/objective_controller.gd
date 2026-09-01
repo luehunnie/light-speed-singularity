@@ -28,6 +28,11 @@ var _objective_model: _ObjectiveModel = null
 ## 时间 seam（()->float 秒；默认空 Callable 表示取引擎毫秒钟）。测试注入可控时间源。
 var _time_now: Callable
 
+## 命中去重键集合（C-08 冻结裁决：同一 emission 对同一水晶格只计一次；不同水晶 / 不同 emission 仍分别计）。
+## [br]键 = "generation|emission_id|cell"；generation 入键使 R / 新 epoch 历史天然隔离（旧键永不匹配新命中，无需显式清理）。
+## [br]emission_id <= 0（未关联 emission 的遗留测试桩）不参与去重，保持既有测试行为不变。
+var _hit_dedup_keys: Dictionary = {}
+
 
 ## 构造目标控制器；只持有 Registry 引用，不复制水晶集合。time_now 可选注入时间 seam。
 func _init(registry: _LevelObjectRegistry, time_now: Callable = Callable()) -> void:
@@ -46,6 +51,8 @@ func has_objective_model() -> bool:
 
 
 ## 应用一次目标命中事实（Guide B §25.1 ObjectiveHitContext）。
+## [br]C-08 命中去重：同一 emission 对同一水晶格只计一次（键含 generation / emission_id / cell）——
+##   重复命中按幂等通过返回 true，不再路由模型、不再触发点亮（先于模型路由拦截）。
 ## [br]已绑定模型：按格路由求值（条件 AND / Base Success），通过则登记成功、通报所属组并调用
 ## [br]  try_activate_crystal_at 做点亮视觉联动（条件失败不点亮）；返回是否通过。
 ## [br]未绑定模型：等价水晶原型路径（Base Success 语义），委托 try_activate_crystal_at。
@@ -53,6 +60,12 @@ func apply_hit(hit: Variant) -> bool:
 	var hit_context: _ObjectiveHitContext = hit as _ObjectiveHitContext
 	if hit_context == null:
 		return false
+	if hit_context.get_emission_id() > 0:
+		var dedup_key: String = "%d|%d|%s" % [
+			hit_context.get_runtime_generation(), hit_context.get_emission_id(), hit_context.get_cell()]
+		if _hit_dedup_keys.has(dedup_key):
+			return true
+		_hit_dedup_keys[dedup_key] = true
 	if _objective_model == null:
 		return try_activate_crystal_at(hit_context.get_cell())
 	var passed: bool = _objective_model.apply_hit(hit_context, _now_seconds())
@@ -80,8 +93,9 @@ func try_activate_crystal_at(cell: Vector2i) -> bool:
 
 
 ## 重置所有已登记水晶为未点亮；完成事实因水晶全部未点亮而自然恢复为 false（is_completed() 将返回 false）。
-## [br]已绑定模型时同步重置模型（目标成功记录 / 组步数 / 锁定全部归零）。重复调用安全。
+## [br]已绑定模型时同步重置模型（目标成功记录 / 组步数 / 锁定全部归零）；C-08 命中去重历史同步清空。重复调用安全。
 func reset_runtime() -> void:
+	_hit_dedup_keys.clear()
 	for crystal: BasicCrystal in _registry.get_all_crystals():
 		crystal.reset_runtime()
 	if _objective_model != null:

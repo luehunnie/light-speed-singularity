@@ -37,6 +37,16 @@ var form_change_target: int = -1
 ## 形态转换的出射八方向；仅 form_change_target != -1 时有意义，否则恒为 Vector2i.ZERO。
 var form_change_direction: Vector2i = Vector2i.ZERO
 
+## 分光分支载荷（C-08 冻结；元素为 LightInteractionResult.BranchSpec，color 已由执行层按入射状态盖章）。
+## [br]传播全程累积（途经机关各自追加）；新 emission 的生成守卫/树级预算全在执行适配层（FormChangeEmissionSpawner），
+##   本对象只保存事实，不生成 emission。元素类型跨模块内类不做静态标注，Contract validate 已强制合法性。
+var spawned_branches: Array = []
+
+
+## 追加一个分光分支载荷（C-08；由 RayExecutionModule 在收集机关分支时调用，颜色为盖章后的继承色）。
+func add_spawned_branch(branch: Variant) -> void:
+	spawned_branches.append(branch)
+
 
 ## 追加一个传播步骤：cell 为光进入的格子，incoming_direction 为进入该格时的方向（用于光路视觉），has_crystal 表示该格是否存在需尝试激活的水晶。
 ## [br]无返回值；只向 steps 末尾追加一个 _Step，不修改其他字段。

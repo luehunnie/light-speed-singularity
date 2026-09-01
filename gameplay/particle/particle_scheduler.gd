@@ -227,6 +227,9 @@ func _apply_move_event(
 	state.apply_move(
 		result.entered_cell, result.outgoing_direction, new_speed,
 		_current_tick, next_move_tick)
+	# C-08：跨格 pending 改向写穿（StepResult.next_pending_redirect = 本步后 state 应有 pending 值；
+	# REDIRECT_CROSS 写入改向，跨格消费步写回 ZERO；state 入口自身校验方向合法性）。
+	state.set_pending_redirect_direction(result.next_pending_redirect)
 	var ev: BatchEvent = BatchEvent.new()
 	ev.runtime_id = runtime_id
 	ev.generation = state.get_generation()
