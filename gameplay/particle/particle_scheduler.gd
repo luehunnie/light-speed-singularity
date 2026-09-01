@@ -92,6 +92,11 @@ class BatchEvent:
 	var next_move_tick: int = 0
 	## M4-E4 executor 前瞻：MOVE 离开方向再下一格是否墙 / 越界；TERMINATE 恒 false。
 	var next_step_blocked: bool = false
+	## FORM_CHANGE 转换载荷（阶段C-01 光形式转换器）：TERMINATE(MECHANISM_BLOCK) 携带转换载荷时为目标形态
+	##   （LightForm 值；entered_cell 即转换器格）；其余事件恒 -1。本类只透传 executor 结果，不生成 emission。
+	var form_change_target: int = -1
+	## FORM_CHANGE 出射八方向；非转换事件恒 Vector2i.ZERO。
+	var form_change_direction: Vector2i = Vector2i.ZERO
 
 
 # ===== generation / 发射 =====
@@ -264,6 +269,9 @@ func _apply_terminate_event(
 	ev.has_crystal = result.has_crystal
 	ev.termination_reason = result.termination_reason
 	# D7-4 B4b-1 MF-1：TERMINATE 不写 next_move_tick，保持默认 0——不伪造下一步 timing（entered_cell 是未进入的阻挡格，不得 Tween）。
+	# 阶段C-01：FORM_CHANGE 载荷透传（仅 MECHANISM_BLOCK + 转换器携带；普通 BLOCK 恒 -1 / ZERO）。
+	ev.form_change_target = result.form_change_target
+	ev.form_change_direction = result.form_change_direction
 	events.append(ev)
 
 

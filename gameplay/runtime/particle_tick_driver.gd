@@ -39,8 +39,9 @@ var _publish_event: Callable
 var _get_generation: Callable
 ## 读 RunStateController.is_current_pulse_active 的 Callable。
 var _is_pulse_active: Callable
-## 逐 runtime TERMINATE 上报 LRC 的 Callable（M4-E2；签名 (expected_generation: int, runtime_id: int) -> void；→ LRC._on_particle_terminated）。
-## LRC 据此反查 emission_id、解绑 runtime、该 emission 无 runtime 时 _finish_emission。
+## 逐 runtime TERMINATE 上报的 Callable（M4-E2；阶段C-01 签名扩为
+##   (expected_generation: int, runtime_id: int, form_change_target: int, form_change_direction: Vector2i, converter_cell: Vector2i) -> void；
+##   → FormChangeEmissionSpawner.handle_particle_terminated——解绑 runtime + FORM_CHANGE 载荷生成新 emission + per-emission 结算）。
 var _on_particle_terminated: Callable
 ## 技术 drain 上报 LRC 的 Callable（M4-E2；签名 (expected_generation: int) -> void；→ LRC._on_particle_subsystem_drained）。
 ## 仅技术事实（停泵语义），LRC 不得据此完成 emission / 切 RunState（emission 结算已由 on_particle_terminated 完成）。
@@ -114,7 +115,13 @@ func on_tick(expected_generation: int) -> bool:
 	#    drained_provisional 已在回调前清 flag，故若 callback 内同步产生新 Particle，新泵可正确启动。
 	for event in events:
 		if event.outcome == _ParticleStepExecutor.Outcome.TERMINATE:
-			_on_particle_terminated.call(expected_generation, event.runtime_id)
+			# 阶段C-01：透传 FORM_CHANGE 载荷（非转换事件恒 -1 / ZERO，spawner 按普通终止结算）。
+			_on_particle_terminated.call(
+				expected_generation,
+				event.runtime_id,
+				event.form_change_target,
+				event.form_change_direction,
+				event.entered_cell)
 	# ⑦ 【stale drained 修复】仅当调用瞬间仍真正 drained（gen 仍匹配 + 仍 PULSE_ACTIVE + scheduler 仍 drained）才 on_drained + 停本链。
 	#    TERMINATE callback 同步创建新 Particle 时 is_drained() 已 false → 不报告 drained；旧链 return false 停止，新泵由 callback 启动。
 	if drained_provisional \

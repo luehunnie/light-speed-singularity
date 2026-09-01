@@ -72,6 +72,13 @@ static func execute(
 			match mech_result.kind:
 				_RayMechanismResult.Kind.REDIRECT:
 					direction = mech_result.outgoing_direction
+				_RayMechanismResult.Kind.FORM_CHANGE:
+					# 阶段C-01 光形式转换器：转换发生在机关格内（该格步骤已记录于 steps 末尾），
+					#   传播按 MECHANISM_BLOCK 终止并携带转换载荷（目标形态+输出方向）；新 emission 由执行适配层生成。
+					result.stop_reason = _RayExecutionResult.StopReason.MECHANISM_BLOCK
+					result.form_change_target = mech_result.target_form
+					result.form_change_direction = mech_result.outgoing_direction
+					break
 				_RayMechanismResult.Kind.BLOCK:
 					result.stop_reason = _RayExecutionResult.StopReason.MECHANISM_BLOCK
 					break

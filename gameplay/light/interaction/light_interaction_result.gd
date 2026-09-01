@@ -3,9 +3,10 @@ extends RefCounted
 
 ## 光交互正式结果（冻结 Guide §22）：1 个 Propagation Decision + 0..N 个有限 Typed Effects。
 ## 机关只“请求结果”，不直接改 Runtime；不开放任意 Effect 字典或自由命令数组（§22 禁止）。
-## Decision（§22.1）：CONTINUE / BLOCK / REDIRECT(direction)。
+## Decision（§22.1）：CONTINUE / BLOCK / REDIRECT(direction)；阶段C-01 扩展 FORM_CHANGE(target_form, direction)
+##   （光形式转换器：转换发生在机关格内，出射沿 direction、形态变为 target_form，速度/颜色规则由执行适配层按平台默认生成）。
 ## Typed Effects（§22.2）：PARTICLE_SPEED_DELTA(delta)（只允许 ±1，Guide §24）/ OUTPUT_EVENT(event_id) / COLOR_CHANGE(target_color)。
-## 不可变意图：经 continue_result / block_result / redirect_result 构造，add_* 追加效果后交 Runtime；
+## 不可变意图：经 continue_result / block_result / redirect_result / form_change_result 构造，add_* 追加效果后交 Runtime；
 ##   Runtime 校验入口 validate(light_form) 返回问题清单，校验失败由 Runtime 安全降级（Contract 分发层负责）。
 ## 类型约束：调用方一律通过 preload() 引用以避开全局 class_name 缓存问题。
 
@@ -19,6 +20,7 @@ enum Decision {
 	CONTINUE,
 	BLOCK,
 	REDIRECT,
+	FORM_CHANGE,
 }
 
 ## Typed Effect 种类（§22.2 冻结；新增种类须冻结变更）。
@@ -43,10 +45,12 @@ class TypedEffect:
 	var target_color: int
 
 
-## Propagation Decision（三值之一）。
+## Propagation Decision（CONTINUE / BLOCK / REDIRECT / FORM_CHANGE）。
 var decision: int = Decision.CONTINUE
-## REDIRECT 的出射八方向；CONTINUE / BLOCK 时恒为 Vector2i.ZERO。
+## REDIRECT 与 FORM_CHANGE 共用的出射八方向；CONTINUE / BLOCK 时恒为 Vector2i.ZERO。
 var redirect_direction: Vector2i = Vector2i.ZERO
+## FORM_CHANGE 的目标形态（LightForm 值：RAY / PARTICLE）；其余 Decision 时恒为 -1 哨兵。
+var target_form: int = -1
 ## 有序 Typed Effects（0..N）。
 var effects: Array[TypedEffect] = []
 
@@ -69,6 +73,16 @@ static func block_result() -> LightInteractionResult:
 static func redirect_result(direction: Vector2i) -> LightInteractionResult:
 	var result: LightInteractionResult = LightInteractionResult.new()
 	result.decision = Decision.REDIRECT
+	result.redirect_direction = direction
+	return result
+
+
+## 构造 FORM_CHANGE 结果（阶段C-01 光形式转换器）；target_form 须为 LightForm 值，
+##   direction 须为合法八方向（非法由 validate 拒绝）。转换发生在机关格内，出射方向 = 本机关朝向。
+static func form_change_result(target_form: int, direction: Vector2i) -> LightInteractionResult:
+	var result: LightInteractionResult = LightInteractionResult.new()
+	result.decision = Decision.FORM_CHANGE
+	result.target_form = target_form
 	result.redirect_direction = direction
 	return result
 
@@ -136,14 +150,21 @@ func get_color_change() -> int:
 ##   COLOR_CHANGE 仅 RAY 形态合法、target_color 须为真实四色、至多一个。
 func validate(light_form: int) -> PackedStringArray:
 	var problems: PackedStringArray = PackedStringArray()
-	if decision != Decision.CONTINUE and decision != Decision.BLOCK and decision != Decision.REDIRECT:
+	if decision != Decision.CONTINUE and decision != Decision.BLOCK and decision != Decision.REDIRECT and decision != Decision.FORM_CHANGE:
 		problems.append("未知 Propagation Decision：%d。" % [decision])
 		return problems
 	if decision == Decision.REDIRECT:
 		if not _DirectionDomain.is_valid(redirect_direction):
 			problems.append("REDIRECT 须携带合法八方向，实际 %s。" % [redirect_direction])
+	elif decision == Decision.FORM_CHANGE:
+		if not _DirectionDomain.is_valid(redirect_direction):
+			problems.append("FORM_CHANGE 须携带合法八方向，实际 %s。" % [redirect_direction])
+		if target_form != _LightEmissionTypes.LightForm.RAY and target_form != _LightEmissionTypes.LightForm.PARTICLE:
+			problems.append("FORM_CHANGE 的 target_form 须为 RAY / PARTICLE，实际 %d。" % [target_form])
 	elif redirect_direction != Vector2i.ZERO:
 		problems.append("CONTINUE / BLOCK 不得携带 redirect_direction。")
+	if decision != Decision.FORM_CHANGE and target_form != -1:
+		problems.append("仅 FORM_CHANGE 可携带 target_form（其余 Decision 恒 -1），实际 %d。" % [target_form])
 	var speed_delta_count: int = 0
 	var event_count: int = 0
 	var color_change_count: int = 0

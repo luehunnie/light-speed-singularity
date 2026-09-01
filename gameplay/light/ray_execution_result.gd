@@ -29,6 +29,14 @@ var reached_step_limit: bool = false
 ## 按光进入顺序排列的传播步骤；每步保存该格坐标、进入该格时的入射方向与该格是否存在水晶（镜面格记入射方向，反射后出射方向从下一步起生效）。
 var steps: Array[_Step] = []
 
+## 形态转换载荷（阶段C-01 光形式转换器）：stop_reason == MECHANISM_BLOCK 且本字段 != -1 时表示
+##   光线在停止格（steps 末格）机关内转换为 target_form 形态并沿 form_change_direction 出射；
+##   其余停止原因（含普通机关 BLOCK）恒为 -1 / ZERO。新 emission 由执行适配层生成，本对象只保存事实。
+var form_change_target: int = -1
+
+## 形态转换的出射八方向；仅 form_change_target != -1 时有意义，否则恒为 Vector2i.ZERO。
+var form_change_direction: Vector2i = Vector2i.ZERO
+
 
 ## 追加一个传播步骤：cell 为光进入的格子，incoming_direction 为进入该格时的方向（用于光路视觉），has_crystal 表示该格是否存在需尝试激活的水晶。
 ## [br]无返回值；只向 steps 末尾追加一个 _Step，不修改其他字段。

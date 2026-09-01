@@ -50,6 +50,10 @@ static func evaluate(
 	match interaction.decision:
 		_LightInteractionResult.Decision.REDIRECT:
 			mech_result = _RayMechanismResult.redirect_to(interaction.redirect_direction)
+		_LightInteractionResult.Decision.FORM_CHANGE:
+			# 阶段C-01 光形式转换器：转换载荷（目标形态+输出方向）经本结果透传给传播核心，
+			#   新 emission 的生成由执行适配层（RayEmissionDriver 回调 → FormChangeEmissionSpawner）消费，本类不生成。
+			mech_result = _RayMechanismResult.form_change(interaction.target_form, interaction.redirect_direction)
 		_LightInteractionResult.Decision.BLOCK:
 			if OS.is_debug_build():
 				print_debug("RayMechanismAdapter: 机关 BLOCK 停止传播。")

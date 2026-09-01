@@ -214,6 +214,9 @@ func _init(tree: SceneTree) -> void:
 ## light_form 为 FixedEmitter 光形态（默认 RAY；B3b-1 起 PARTICLE 接 Runtime，传 _LightEmissionTypes.LightForm.PARTICLE 构造光粒发射器）。
 ## walls 为墙体格集合（默认空；B3b-2 起 Particle 墙体 terminate 用例可注入墙格，LevelWorldQuery 经 walls 兼容路径识别）。
 ## allow_form_switch 为关卡 Q 形态切换开关（M4-E4；默认 false 与正式默认一致，Q 切换用例传 true）。
+## placed_node_resolver 为机关节点解析 seam（阶段C-01 光形式转换器）：默认无效时与既有用例一致走 PlacementController.get_placed_node；
+## 传入 (stable_id: StringName) -> Variant Callable 时替换 level_query 的节点解析来源——测试自行向 env.occupancy
+## register_single_cell(id, cell) 登记预置机关占用并经此 Callable 返回节点（模拟"固定预放置机关不在放置表"的真实布局）。
 func make_env(
 		emitter_cell: Vector2i,
 		emitter_dir: Vector2i,
@@ -222,7 +225,8 @@ func make_env(
 		observe_ray_queries: bool = false,
 		light_form: int = _LightEmissionTypes.LightForm.RAY,
 		walls: Array[Vector2i] = [],
-		allow_form_switch: bool = false
+		allow_form_switch: bool = false,
+		placed_node_resolver: Callable = Callable()
 ) -> _Env:
 	var env: _Env = _Env.new()
 	env.rsc = _RunStateController.new()
@@ -241,9 +245,13 @@ func make_env(
 		registry.register_crystal(&"c001", cell, crystal)
 	env.registry = registry
 	env.objective_controller = _ObjectiveController.new(registry)
+	# 阶段C-01 机关节点解析 seam：默认走 PlacementController（既有用例零变化）；传入 resolver 时替换解析来源（预置机关布局）。
+	var node_resolver: Callable = (
+		placed_node_resolver if placed_node_resolver.is_valid()
+		else Callable(env.placement_controller, "get_placed_node"))
 	var level_query: _LevelWorldQuery = _LevelWorldQuery.new(
 		_MAP_BOUNDS, walls, emitter_cell, registry, env.occupancy,
-		Callable(env.placement_controller, "get_placed_node")
+		node_resolver
 	)
 	env.placement_controller.set_level_world_query(level_query)
 	if observe_ray_queries:

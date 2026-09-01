@@ -119,6 +119,8 @@ const _SingleCellMirrorScene: PackedScene = preload("res://gameplay/mechanisms/m
 # direction 唯一事实与八方向循环逻辑唯一存在于各机关脚本，核心保持「只转发、不实现」的边界。
 const _ParticleAccelerator: GDScript = preload("res://gameplay/mechanisms/speed/particle_accelerator.gd")
 const _ParticleDecelerator: GDScript = preload("res://gameplay/mechanisms/speed/particle_decelerator.gd")
+# 阶段C-01 光形式转换器（右键类型分发用）：玩家道具版右键顺时针轮转八向朝向，与加减速器同一映射边界。
+const _LightFormConverter: GDScript = preload("res://gameplay/mechanisms/converter/light_form_converter.gd")
 const _InventorySlotViewScript: GDScript = preload("res://gameplay/ui/inventory_slot_view.gd")
 # D7-3 正式「开始运行」UI 视图：拥有按钮/状态提示/invalid 最小反馈，只由真实 RunState 驱动；core_loop 只构造接线与公开转发。
 const _RunStartView: GDScript = preload("res://gameplay/ui/run_start_view.gd")
@@ -659,6 +661,8 @@ func _apply_cycle_configuration_action(token: Variant) -> void:
 		(token as _ParticleAccelerator).cycle_direction()
 	elif token is _ParticleDecelerator:
 		(token as _ParticleDecelerator).cycle_direction()
+	elif token is _LightFormConverter:
+		(token as _LightFormConverter).cycle_direction()
 	else:
 		return
 
