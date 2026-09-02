@@ -1,7 +1,7 @@
 # 《光速奇点》Godot GUI 无代码关卡 / UI 内容生产工作流冻结总结 v1.0
 
 > 日期：2026-08-17  
-> 适用对象：关卡 / UI 内容制作人员（主要面向张梓涵）  
+> 适用对象：关卡 / UI 内容制作人员（主要面向youki-creat）  
 > 目标：在不要求内容人员写代码的前提下，基于 Godot 原生 2D、Inspector、TileMapLayer、Control、Theme 等编辑能力，配合少量项目级 EditorPlugin / InspectorPlugin / Dock / Overlay，完成正式关卡、地图、美术、UI、Objective、Inventory、控制连接、验证与运行测试。  
 > 本文是本轮逐项讨论后的冻结方案。后续实现时应以本文为设计基线，不再回到“大而全自研关卡编辑器”的方向。
 
@@ -315,7 +315,7 @@ UI 上独立存在，但底层调用统一 Validator Core。
 
 ## 7.1 用户不可见 / 不手填
 
-Stable ID 不作为普通 Inspector 文本字段暴露给张梓涵。
+Stable ID 不作为普通 Inspector 文本字段暴露给youki-creat。
 
 ## 7.2 保持 ID 的操作
 
@@ -1101,7 +1101,7 @@ Wall：
 
 # 27. Map Visual Theme 制作
 
-张梓涵不直接以 Godot TileSet 底层结构作为标准入口。
+youki-creat不直接以 Godot TileSet 底层结构作为标准入口。
 
 Visual Asset Workbench 提供语义槽位。
 
@@ -1831,7 +1831,7 @@ Workbench 管理项目级 Visual Style Profile。
 - Success 可压过普通 Hit；
 - Disabled 与 Selected 的规则由项目固定。
 
-张梓涵不能改这些系统级语义。
+youki-creat不能改这些系统级语义。
 
 Workbench 提供常见组合预览：
 
@@ -2408,7 +2408,7 @@ Objective 系统根据真实结构自动产生基础摘要。
 - Group；
 - 等。
 
-Presentation 允许张梓涵覆盖成自然玩家文案。
+Presentation 允许youki-creat覆盖成自然玩家文案。
 
 Validator / Editor 始终显示：
 
@@ -2479,7 +2479,7 @@ Validator / Editor 始终显示：
 
 # 82. Global UI Layout
 
-标准布局允许张梓涵通过 Godot 原生 Control / Container 编辑器维护。
+标准布局允许youki-creat通过 Godot 原生 Control / Container 编辑器维护。
 
 可以调整：
 
@@ -2501,7 +2501,7 @@ Validator / Editor 始终显示：
 - Hint Host；
 - Fire / Reset Host。
 
-张梓涵可以移动 / 排版，但不能：
+youki-creat可以移动 / 排版，但不能：
 
 - 删除必要 Slot；
 - 改业务含义；
@@ -3286,7 +3286,7 @@ Current Level Validator：
 
 # 102. 当前结论
 
-到这里，本轮“张梓涵如何通过 Godot GUI 完成关卡 / UI / 美术 / Objective / Inventory / Connection / Validation / Run Test”的关键架构问题已经基本问完。
+到这里，本轮“youki-creat如何通过 Godot GUI 完成关卡 / UI / 美术 / Objective / Inventory / Connection / Validation / Run Test”的关键架构问题已经基本问完。
 
 后续最合理的下一步不是继续无限讨论，而是：
 

@@ -4,7 +4,7 @@ extends RefCounted
 ## 职责：集中保存世界逻辑格边长、半格偏移和单格世界机关默认占位尺寸三组最小常量，
 ## 供关卡控制器和世界机关视觉脚本通过 preload() 读取，避免 64 世界格尺寸分散手写形成新的技术债。
 ## 位置：位于 gameplay/grid 下，是 32→64 世界坐标迁移后唯一的"世界单格尺寸"事实来源；
-## 后续张梓涵制作的 64×64 正式美术素材应以本模块的 SINGLE_CELL_WORLD_SIZE 作为 1:1 替换基准。
+## 后续youki-creat制作的 64×64 正式美术素材应以本模块的 SINGLE_CELL_WORLD_SIZE 作为 1:1 替换基准。
 ## 依赖：不 preload 任何游戏脚本，不引用 CoreLoopPrototype、PlaceableToken、SingleCellMirror 或 OccupancyRegistry，
 ## 因此不会形成循环依赖；其他脚本只单向 preload 本模块。
 ## 不负责：关卡数据、动态状态、坐标转换服务、场景树读取、Autoload、UI 尺寸或机关占用规则。

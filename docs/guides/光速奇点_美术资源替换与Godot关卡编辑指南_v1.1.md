@@ -5,7 +5,7 @@
 > 适用角色：美术与关卡制作人员
 > 适用环境：Godot 4.6.1 Standard
 > 项目路径：`E:\godot_project\light-speed-singularity`
-> 文档定位：本指南同时包含**当前可操作流程**和**未来目标流程**。当前可用能力包括：已实现的视觉接口（`VisualStateTexture`、`ObjectVisualProfile`、`ObjectVisualView`、`InventorySlotView`、`LightSegmentVisualProfile`、`LightSegmentView`）、`GridPlacedObject` 位置契约（`position` 为事实、`cell` 派生）、`EmitterConfigNode`/`EmissionPreview`，以及唯一的美术 Profile 编辑器插件 `addons/light_speed_art_profile/`。未实现的目标流程（方法 B 多格、`FixedEmitter` 独立预制场景与统一 `EmissionRequest`、一键创建独立 Profile 副本）**不得作为张梓涵当前的验收前置条件**。（~~方法 B 单格、`LevelValidator` v0、完整关卡模板、`READY_TO_FIRE` 与开始运行按钮、光粒运行时~~ 均已实现：D5/D6、D7-2/D7-3、D7-4。）
+> 文档定位：本指南同时包含**当前可操作流程**和**未来目标流程**。当前可用能力包括：已实现的视觉接口（`VisualStateTexture`、`ObjectVisualProfile`、`ObjectVisualView`、`InventorySlotView`、`LightSegmentVisualProfile`、`LightSegmentView`）、`GridPlacedObject` 位置契约（`position` 为事实、`cell` 派生）、`EmitterConfigNode`/`EmissionPreview`，以及唯一的美术 Profile 编辑器插件 `addons/light_speed_art_profile/`。未实现的目标流程（方法 B 多格、`FixedEmitter` 独立预制场景与统一 `EmissionRequest`、一键创建独立 Profile 副本）**不得作为youki-creat当前的验收前置条件**。（~~方法 B 单格、`LevelValidator` v0、完整关卡模板、`READY_TO_FIRE` 与开始运行按钮、光粒运行时~~ 均已实现：D5/D6、D7-2/D7-3、D7-4。）
 
 ---
 
@@ -13,7 +13,7 @@
 
 本指南区分两类内容：
 
-- **当前可用**：基于已实现视觉接口（`VisualStateTexture`、`ObjectVisualProfile`、`ObjectVisualView`、`InventorySlotView`、`LightSegmentVisualProfile`、`LightSegmentView`）、`GridPlacedObject` 位置契约、`EmitterConfigNode`/`EmissionPreview`、现有原型场景，以及唯一的美术 Profile 编辑器插件 `addons/light_speed_art_profile/` 的流程，张梓涵现在就可以执行；
+- **当前可用**：基于已实现视觉接口（`VisualStateTexture`、`ObjectVisualProfile`、`ObjectVisualView`、`InventorySlotView`、`LightSegmentVisualProfile`、`LightSegmentView`）、`GridPlacedObject` 位置契约、`EmitterConfigNode`/`EmissionPreview`、现有原型场景，以及唯一的美术 Profile 编辑器插件 `addons/light_speed_art_profile/` 的流程，youki-creat现在就可以执行；
 - **目标 / 未实现**：方法 B 多格编辑与父节点移动一致性完整流程、`FixedEmitter` 独立预制场景与统一 `EmissionRequest`、一键创建独立 Profile 副本等，属于未来目标，当前不具备可依赖的代码或字段。（方法 B 单格路径、`LevelValidator` v0 与 Runtime 自动 Validation Gate（D7-1/D7-3）、正式关卡模板、Godot 原生 GUI 关卡编辑基础、墙体方向编辑、`READY_TO_FIRE` 与正式“开始运行”入口（D7-2/D7-3）、光粒运行时与 Particle 八方向（D7-4）均已完成。）
 
 契约存在不等于代码已经实现。已实现视觉接口的路径、`class_name`、基类和公开方法以真实代码为准（详见《永久视觉与关卡编辑接口设计 v1.1》§6、§7–§10、§14.4、§15）。
@@ -70,10 +70,10 @@
 → 保存
 → 在已有原型场景和 TileMapLayer 中运行验证
 → 检查 Output 和 Debugger
-→ 记录问题并反馈给陈俊贤或对应模块负责人
+→ 记录问题并反馈给luehunnie或对应模块负责人
 ```
 
-目标工作流（当前未实现，不得作为张梓涵当前验收前置条件）：
+目标工作流（当前未实现，不得作为youki-creat当前验收前置条件）：
 
 ```text
 复制完整关卡模板
@@ -340,7 +340,7 @@ ObjectVisualView
 
 ## 6.2 使用美术 Profile 编辑器插件（当前可用）
 
-项目当前唯一的正式编辑器插件是 `addons/light_speed_art_profile/`（右侧 Dock“光速奇点：美术资源”）。张梓涵替换美术的正式操作：
+项目当前唯一的正式编辑器插件是 `addons/light_speed_art_profile/`（右侧 Dock“光速奇点：美术资源”）。youki-creat替换美术的正式操作：
 
 1. 在场景树中选择一个支持 `ObjectVisualProfile` 的目标对象（如水晶、镜面、发射器等继承 `GridPlacedObject` 的组件，或其内部 `ObjectVisualView`）；
 2. 打开唯一的美术 Profile 插件 Dock（插件已在 `project.godot` 启用）；
@@ -359,7 +359,7 @@ ObjectVisualView
 - 素材必须位于 `res://assets/art/`，保存只允许写入 `res://assets/visual_profiles/`；
 - 一键创建独立 Profile 副本、自动将共享 Profile 转为实例独立资源、批量替换等功能**尚未实现**，不要假定存在相关按钮或菜单。
 
-张梓涵**不应**被要求：编写 GDScript；手动维护复杂 Dictionary；修改底层 Registry；手写 UID；直接编辑资源文本；用 `Node.name` 管理对象身份。
+youki-creat**不应**被要求：编写 GDScript；手动维护复杂 Dictionary；修改底层 Registry；手写 UID；直接编辑资源文本；用 `Node.name` 管理对象身份。
 
 ---
 
@@ -596,7 +596,7 @@ LegalAreaLayer
 
 # 14. 固定对象的复制
 
-> **状态：当前可用（Godot 原生）+ 目标校验未实现。** 复制与 64 格吸附由 Godot 原生负责；运行时注册器校验依赖 `LevelObjectRegistry` 完整扫描（`LevelValidator` v0 已实现 D6，但 `LevelObjectRegistry` 仅实现水晶双向索引、完整扫描仍为目标）。张梓涵当前可复制对象节点，但不得依赖注册器自动校验。复制生成稳定 ID 的自动化能力尚未实现，需按显式字段（如 `crystal_id`）手工配置，不用 `Node.name` 作为正式 ID。
+> **状态：当前可用（Godot 原生）+ 目标校验未实现。** 复制与 64 格吸附由 Godot 原生负责；运行时注册器校验依赖 `LevelObjectRegistry` 完整扫描（`LevelValidator` v0 已实现 D6，但 `LevelObjectRegistry` 仅实现水晶双向索引、完整扫描仍为目标）。youki-creat当前可复制对象节点，但不得依赖注册器自动校验。复制生成稳定 ID 的自动化能力尚未实现，需按显式字段（如 `crystal_id`）手工配置，不用 `Node.name` 作为正式 ID。
 
 目标操作：
 
@@ -838,7 +838,7 @@ mixed_level_01.tscn
 
 # 22. 标准关卡制作流程
 
-> **状态：基础已完成，多格/自动校验为目标。** 正式关卡模板（D5）、`LevelValidator` v0（D6）、方法 B 单格路径（2D 视图直接拖动编辑与位置写回）均已完成。多格对象完整编辑流程、Runtime 自动 Validation Gate（运行期自动调用 `LevelValidator`）仍为目标。节点拖动/复制/64 格吸附由 Godot 原生负责。张梓涵当前可在已实现模板与原型场景内进行美术替换与基础配置验证；以下为完整目标流程，待方法 B 多格编辑、Runtime 自动 Validation Gate 等落地后方可完整执行。
+> **状态：基础已完成，多格/自动校验为目标。** 正式关卡模板（D5）、`LevelValidator` v0（D6）、方法 B 单格路径（2D 视图直接拖动编辑与位置写回）均已完成。多格对象完整编辑流程、Runtime 自动 Validation Gate（运行期自动调用 `LevelValidator`）仍为目标。节点拖动/复制/64 格吸附由 Godot 原生负责。youki-creat当前可在已实现模板与原型场景内进行美术替换与基础配置验证；以下为完整目标流程，待方法 B 多格编辑、Runtime 自动 Validation Gate 等落地后方可完整执行。
 
 ```text
 确定章节和机制
@@ -997,7 +997,7 @@ mixed_level_01.tscn
 
 ## 运行（目标 / 未实现，不在当前验收项）
 
-> `READY_TO_FIRE`、开始运行按钮与光粒运行时均已实现（D7-2/D7-3、D7-4），相关运行行为已可验证，但仍**不作为张梓涵当前验收项**（美术验收范围以已实现视觉接口的素材替换为准）。`EmitterConfigNode`/`EmissionPreview` 已实现。
+> `READY_TO_FIRE`、开始运行按钮与光粒运行时均已实现（D7-2/D7-3、D7-4），相关运行行为已可验证，但仍**不作为youki-creat当前验收项**（美术验收范围以已实现视觉接口的素材替换为准）。`EmitterConfigNode`/`EmissionPreview` 已实现。
 
 - [ ] 初始 Space 无效；
 - [ ] 点击“开始运行”；
@@ -1143,7 +1143,7 @@ Debugger错误
 
 # 32. 最终完成标准
 
-> 本节描述的是接口完成后的**目标最终标准**，其中方法 B 多格编辑、三章节正式关卡制作等当前未实现（方法 B 单格、`LevelValidator` v0、Runtime 自动 Validation Gate（D7-1/D7-3）、`READY_TO_FIRE`/开始运行入口（D7-2/D7-3）、光粒运行时（D7-4）已完成）。`GridPlacedObject` 位置契约、`EmitterConfigNode`/`EmissionPreview`、美术 Profile 插件已实现。节点拖动/复制/64 格吸附由 Godot 原生负责。张梓涵当前可执行的部分为已实现视觉接口的美术替换（含插件）、发射器配置与原型场景验证。
+> 本节描述的是接口完成后的**目标最终标准**，其中方法 B 多格编辑、三章节正式关卡制作等当前未实现（方法 B 单格、`LevelValidator` v0、Runtime 自动 Validation Gate（D7-1/D7-3）、`READY_TO_FIRE`/开始运行入口（D7-2/D7-3）、光粒运行时（D7-4）已完成）。`GridPlacedObject` 位置契约、`EmitterConfigNode`/`EmissionPreview`、美术 Profile 插件已实现。节点拖动/复制/64 格吸附由 Godot 原生负责。youki-creat当前可执行的部分为已实现视觉接口的美术替换（含插件）、发射器配置与原型场景验证。
 
 最终编辑方式目标上必须达到：
 

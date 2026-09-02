@@ -40,7 +40,7 @@ const STATE_BACKSLASH: StringName = &"backslash"
 # 调试方向线节点：正式纹理配置正常时默认隐藏，仅作占位后备，不参与玩法状态，不得成为正式美术表现。
 @onready var _mirror_line: Line2D = $MirrorLine
 
-# 镜面方向线占位点位，覆盖 64 世界格内可读范围（±28），不碰格边；仅用于调试后备，最终以张梓涵 64×64 正式美术素材为准。
+# 镜面方向线占位点位，覆盖 64 世界格内可读范围（±28），不碰格边；仅用于调试后备，最终以youki-creat 64×64 正式美术素材为准。
 var _slash_points: PackedVector2Array = PackedVector2Array([Vector2(-28.0, 28.0), Vector2(28.0, -28.0)])
 var _backslash_points: PackedVector2Array = PackedVector2Array([Vector2(-28.0, -28.0), Vector2(28.0, 28.0)])
 const _DEBUG_LINE_COLOR: Color = Color(0.03, 0.09, 0.14, 1.0)

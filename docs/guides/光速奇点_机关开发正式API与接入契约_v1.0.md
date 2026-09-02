@@ -22,7 +22,7 @@
 
 # 1. 总目标
 
-最终希望潘陈俣开发一个普通新机关时，只需要：
+最终希望qingfengdengying开发一个普通新机关时，只需要：
 
 ```text
 拿到正式机关规则
@@ -1569,7 +1569,7 @@ LightInteractionResult assertions
 
 # 37. API 稳定性分层
 
-## 37.1 Stable — 潘陈俣可长期依赖
+## 37.1 Stable — qingfengdengying可长期依赖
 
 本轮实现完成后应作为稳定公共 API：
 
@@ -1840,7 +1840,7 @@ Split 会改变传播拓扑，不应简单塞成普通 Effect。
 
 ## 42.1 玩家可放置机关
 
-潘陈俣：
+qingfengdengying：
 
 1. 阅读机关规则；
 2. 选择 / 定义稳定 `content_type_id`；
@@ -1858,7 +1858,7 @@ Split 会改变传播拓扑，不应简单塞成普通 Effect。
 14. 写 Contract Tests；
 15. 写机关玩法 Test。
 
-张梓涵随后在 Inventory Editor 中直接看到该类型，只配置：
+youki-creat随后在 Inventory Editor 中直接看到该类型，只配置：
 
 ```text
 类型
@@ -1866,13 +1866,13 @@ Split 会改变传播拓扑，不应简单塞成普通 Effect。
 顺序
 ```
 
-无需陈俊贤再修改 Slot / Factory / Drag 白名单。
+无需luehunnie再修改 Slot / Factory / Drag 白名单。
 
 ---
 
 ## 42.2 设计者预置机关
 
-潘陈俣：
+qingfengdengying：
 
 1. 机关脚本 / PackedScene；
 2. MechanismDefinition；
@@ -1883,7 +1883,7 @@ Split 会改变传播拓扑，不应简单塞成普通 Effect。
 7. 如有特殊关卡约束，提供 Validator Rule Provider；
 8. Tests。
 
-张梓涵：
+youki-creat：
 
 ```text
 Content Palette
@@ -1941,7 +1941,7 @@ Definition 声明 Action IDs + Params + Conflict Semantics
 
 ---
 
-# 43. 潘陈俣需要阅读的 Stable API 文档
+# 43. qingfengdengying需要阅读的 Stable API 文档
 
 正式文档不能只给函数签名。
 
