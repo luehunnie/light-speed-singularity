@@ -1,7 +1,7 @@
 # 《光速奇点》Git 分支命名规范
 
 > 适用项目：光速奇点
-> 适用成员：陈俊贤、潘陈俣、张梓涵
+> 适用成员：luehunnie、qingfengdengying、youki-creat
 > 当前仓库：`light-speed-singularity`
 > 更新日期：2026 年 7 月 27 日
 >
@@ -49,23 +49,23 @@ test/zhang-mechanism-template-visual
 
 | 姓名 | 主要职责 | 分支身份标识 |
 |---|---|---|
-| 陈俊贤 | 技术负责人、核心系统、工程管理 | `kud` |
-| 潘陈俣 | 玩法系统、机关逻辑、光传播 | `pan` |
-| 张梓涵 | 关卡、内容、美术配置、科学家宣传内容 | `zhang` |
+| luehunnie | 技术负责人、核心系统、工程管理 | `kud` |
+| qingfengdengying | 玩法系统、机关逻辑、光传播 | `pan` |
+| youki-creat | 关卡、内容、美术配置、科学家宣传内容 | `zhang` |
 
 ### 3.1 身份标识使用示例
 
-陈俊贤：
+luehunnie：
 ```text
 feat/kud-mechanism-interface
 ```
 
-潘陈俣：
+qingfengdengying：
 ```text
 feat/pan-single-mirror-rule-adapter
 ```
 
-张梓涵：
+youki-creat：
 ```text
 test/zhang-mechanism-template-visual
 ```
@@ -130,7 +130,7 @@ test/pan-mechanism-contract-cases
 docs/zhang-mechanism-art-requirements
 ```
 
-# 6. 陈俊贤分支命名
+# 6. luehunnie分支命名
 
 > 状态说明（适用于 §6–§8 全部职责表示例）：
 > - 以下分支名属于长期或未来阶段参考命名库；
@@ -140,7 +140,7 @@ docs/zhang-mechanism-art-requirements
 
 ## 6.1 职责范围
 
-陈俊贤主要负责：
+luehunnie主要负责：
 
 - 核心技术底座；
 - 网格与坐标系统；
@@ -151,7 +151,7 @@ docs/zhang-mechanism-art-requirements
 - 工程配置；
 - 测试与构建。
 
-陈俊贤不需要亲自完成所有机关的具体玩法逻辑。
+luehunnie不需要亲自完成所有机关的具体玩法逻辑。
 
 ## 6.2 项目基础与公共系统
 
@@ -212,11 +212,11 @@ docs/zhang-mechanism-art-requirements
 | 性能调试工具 | `test/kud-performance-debug` |
 | 核心架构重构 | `refactor/kud-core-architecture` |
 
-# 7. 潘陈俣分支命名
+# 7. qingfengdengying分支命名
 
 ## 7.1 职责范围
 
-潘陈俣主要负责：
+qingfengdengying主要负责：
 
 - 发射源；
 - 光线与光粒传播；
@@ -312,11 +312,11 @@ docs/zhang-mechanism-art-requirements
 | 光学行为触发 | `feat/pan-achievement-light-triggers` |
 | 成就触发整合 | `feat/pan-achievement-triggers` |
 
-# 8. 张梓涵分支命名
+# 8. youki-creat分支命名
 
 ## 8.1 职责范围
 
-张梓涵主要负责：
+youki-creat主要负责：
 - 关卡地图；
 - 教学顺序；
 - 难度曲线；
@@ -421,9 +421,9 @@ content/zhang-achievement-content
 
 | 成员 | 负责内容 |
 |---|---|
-| 陈俊贤 | 成就数据、存档、弹窗和展示框架 |
-| 潘陈俣 | 在玩法中判断何时解锁成就 |
-| 张梓涵 | 成就名称、图标、文案和科学家内容 |
+| luehunnie | 成就数据、存档、弹窗和展示框架 |
+| qingfengdengying | 在玩法中判断何时解锁成就 |
+| youki-creat | 成就名称、图标、文案和科学家内容 |
 
 ## 9.2 正式关卡
 
@@ -435,9 +435,9 @@ content/zhang-level-03
 
 | 成员 | 负责内容 |
 |---|---|
-| 陈俊贤 | 关卡加载、重置和切换 |
-| 潘陈俣 | 水晶、检测器和胜利判定 |
-| 张梓涵 | 第三关地图、机关位置和提示文字 |
+| luehunnie | 关卡加载、重置和切换 |
+| qingfengdengying | 水晶、检测器和胜利判定 |
+| youki-creat | 第三关地图、机关位置和提示文字 |
 
 ## 9.3 单格镜接入公共机关契约与最小模板
 
@@ -450,11 +450,11 @@ test/zhang-mechanism-template-visual
 
 | 成员 | 负责内容 |
 |---|---|
-| 陈俊贤 | 公共机关契约、最小机关模板、核心接线边界 |
-| 潘陈俣 | 单格镜规则适配和玩法测试 |
-| 张梓涵 | 视觉/Profile 与关卡编辑侧验证 |
+| luehunnie | 公共机关契约、最小机关模板、核心接线边界 |
+| qingfengdengying | 单格镜规则适配和玩法测试 |
+| youki-creat | 视觉/Profile 与关卡编辑侧验证 |
 
-三人不在同一分支同时修改同一个核心脚本；公共契约由陈俊贤先合并，潘陈俣与张梓涵从最新 `main` 接入。
+三人不在同一分支同时修改同一个核心脚本；公共契约由luehunnie先合并，qingfengdengying与youki-creat从最新 `main` 接入。
 
 # 10. 旧分支说明（历史提醒）
 
@@ -478,17 +478,17 @@ git pull --ff-only origin main
 
 然后创建自己的任务分支。
 
-陈俊贤示例：
+luehunnie示例：
 ```bash
 git switch -c refactor/kud-grid-placed-object
 ```
 
-潘陈俣示例：
+qingfengdengying示例：
 ```bash
 git switch -c feat/pan-single-mirror-rule-adapter
 ```
 
-张梓涵示例：
+youki-creat示例：
 ```bash
 git switch -c test/zhang-mechanism-template-visual
 ```
@@ -591,6 +591,6 @@ refactor/kud-level-validator
 
 # 14. 核心分工总结
 
-> 陈俊贤搭建核心技术底座，潘陈俣实现玩法和机关逻辑，张梓涵制作关卡、视觉和科学家宣传内容。
+> luehunnie搭建核心技术底座，qingfengdengying实现玩法和机关逻辑，youki-creat制作关卡、视觉和科学家宣传内容。
 
 > 每个分支必须带成员身份标识，每个分支只处理一个可以独立测试、审查和合并的任务。

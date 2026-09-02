@@ -6,7 +6,7 @@ extends PanelContainer
 ## 职责：
 ## 仅负责一个道具栏槽位的 UI 表现——根据 visual_profile.inventory_icon 选择显示正式图标或 ColorRect 占位符，
 ## 显示剩余数量文本，并按当前是否允许从道具栏拿取切换启用 / 禁用视觉。每次刷新都显式重置全部 visible、
-## texture、color 与 self_modulate 状态，使张梓涵未来只需在 ObjectVisualProfile 的 .tres 中填写
+## texture、color 与 self_modulate 状态，使youki-creat未来只需在 ObjectVisualProfile 的 .tres 中填写
 ## inventory_icon 即可替换道具栏图标，不需要修改脚本或场景结构。
 ##
 ## 在当前系统中的位置：
@@ -26,7 +26,7 @@ extends PanelContainer
 ## - visual_profile 为空或 inventory_icon 为空时只显示 ColorRect 占位符，不读取 world_texture / drag_texture，不输出 warning。
 ## - 正式图标与占位符互斥显示：同一时刻只有一个可见。
 ## - 即使当前 inventory_icon 为空，禁用 / 启用对正式图标 self_modulate 的设置分支也完整实现，
-##   以便张梓涵未来填入 inventory_icon 后无需改动脚本即可直接生效。
+##   以便youki-creat未来填入 inventory_icon 后无需改动脚本即可直接生效。
 ## - mouse_filter 与命中：InventoryIcon 设为 MOUSE_FILTER_IGNORE，不干扰 PrototypeTokenSlot 的 get_global_rect() 命中逻辑。
 
 
