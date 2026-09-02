@@ -73,17 +73,8 @@ func build(level_root: Node2D, skip_node: Node = null) -> bool:
 		var occupant_id := StringName(str(node.get("stable_instance_id")))
 		if str(occupant_id).is_empty():
 			occupant_id = StringName(_FALLBACK_PREFIX + str(node.get_instance_id()))
-		var cell: Vector2i = _GridCoordinateRules.world_to_cell((node as Node2D).position)
-		# C-08 多格最小接线：实例提供 get_occupied_offsets（D7-R4 footprint 契约）时自锚格展开全部占格登记；
-		# 其余正式对象（发射器/水晶等单格）回退单格、行为不变。register_cells 原子提交（任一冲突整体拒绝），
-		# 与原 register_single_cell 相同不读返回值：冲突事实由后续 evaluate 的 OBJECT_OCCUPIED 归因呈现。
-		var occupied: Array[Vector2i] = []
-		if (node as Node2D).has_method("get_occupied_offsets"):
-			for offset: Variant in (node as Node2D).call("get_occupied_offsets"):
-				occupied.append(cell + (offset as Vector2i))
-		else:
-			occupied.append(cell)
-		occupancy.register_cells(occupant_id, occupied)
+		# C-08 多格最小接线：占格语义收口在 _occupied_cells_of（单格回退 + get_occupied_offsets 展开）。
+		occupancy.register_cells(occupant_id, _occupied_cells_of(node as Node2D))
 		_occupancy_ids_by_node[node] = occupant_id
 	_level_world_query = _LevelWorldQuery.new(
 		snapshot.get_terrain_bounds(), no_walls, _find_emitter_cell(level_root),
@@ -112,6 +103,28 @@ func evaluate(cells: Array, ignored_node: Node = null) -> _SharedPlacementQuery.
 # 查询是否已成功构建。
 func is_ready() -> bool:
 	return _shared_query != null
+
+
+# 单节点占格：自锚格 = world_to_cell(position)（正式对象挂 RuntimeObjects，父局部==关卡局部）；
+# 实例提供 get_occupied_offsets（D7-R4 footprint 契约）时展开全部占格，否则单格回退。
+static func _occupied_cells_of(node: Node2D) -> Array[Vector2i]:
+	var cell: Vector2i = _GridCoordinateRules.world_to_cell(node.position)
+	var occupied: Array[Vector2i] = []
+	if node.has_method("get_occupied_offsets"):
+		for offset: Variant in node.call("get_occupied_offsets"):
+			occupied.append(cell + (offset as Vector2i))
+	else:
+		occupied.append(cell)
+	return occupied
+
+
+# 墙体作者（D-03）：关卡内全部正式对象占格（含多格足迹）只读快照；build() 与墙体规划共用同一语义。
+static func collect_occupied_cells(level_root: Node2D) -> Array[Vector2i]:
+	var occupied: Array[Vector2i] = []
+	for node: Node in _StableIdService.find_formal_objects(level_root):
+		if node is Node2D:
+			occupied.append_array(_occupied_cells_of(node as Node2D))
+	return occupied
 
 
 # Terrain used cells 外包矩形（Palette 扫描首个空格的迭代域）；未构建返回零矩形。

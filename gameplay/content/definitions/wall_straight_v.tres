@@ -1,0 +1,12 @@
+[gd_resource type="Resource" script_class="WallContentDefinition" format=3]
+
+[ext_resource type="Script" path="res://gameplay/content/wall_content_definition.gd" id="1_walldef"]
+[ext_resource type="PackedScene" path="res://gameplay/content/wall/wall_structure_v.tscn" id="2_scene"]
+
+[resource]
+script = ExtResource("1_walldef")
+content_type_id = &"wall_straight_v"
+display_name = "三格竖墙"
+category = &"wall"
+scene = ExtResource("2_scene")
+static_footprint_offsets = Array[Vector2i]([Vector2i(0, -1), Vector2i(0, 0), Vector2i(0, 1)])

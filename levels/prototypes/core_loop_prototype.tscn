@@ -9,6 +9,7 @@
 [ext_resource type="TileSet" uid="uid://def2ipanaqi3u" path="res://assets/art/tilesets/wall_tileset.tres" id="13_wall"]
 [ext_resource type="TileSet" uid="uid://cv15gkq3ahuni" path="res://assets/art/tilesets/legal_area_tileset.tres" id="14_legal"]
 [ext_resource type="TileSet" uid="uid://bmbflag7qp3n6" path="res://assets/art/tilesets/decoration_tileset.tres" id="15_decoration"]
+[ext_resource type="PackedScene" path="res://gameplay/content/wall/wall_block.tscn" id="16_wall_block"]
 
 [node name="CoreLoopPrototype" type="Node2D" unique_id=1552304930]
 script = ExtResource("2_proto")
@@ -40,8 +41,6 @@ tile_map_data = PackedByteArray("AAAAAAAAAAAAAAAAAAABAAAAAAAAAAAAAAACAAAAAAAAAAA
 tile_set = ExtResource("12_terrain")
 
 [node name="WallLayer" type="TileMapLayer" parent="." unique_id=1679900448]
-visible = false
-tile_map_data = PackedByteArray("AAAFAAMAAAAAAAAAAAA=")
 tile_set = ExtResource("13_wall")
 
 [node name="LegalAreaLayer" type="TileMapLayer" parent="." unique_id=925931149]
@@ -53,15 +52,6 @@ tile_set = ExtResource("14_legal")
 visible = false
 tile_set = ExtResource("15_decoration")
 
-[node name="Walls" type="Node2D" parent="." unique_id=2031640143]
-
-[node name="Wall5x3" type="ColorRect" parent="Walls" unique_id=1708163415]
-offset_left = 320.0
-offset_top = 192.0
-offset_right = 384.0
-offset_bottom = 256.0
-color = Color(0.25, 0.25, 0.28, 1)
-
 [node name="RuntimeObjects" type="Node2D" parent="." unique_id=820444864]
 
 [node name="Emitter" parent="RuntimeObjects" unique_id=1264479859 instance=ExtResource("11_emitter_scene")]
@@ -71,6 +61,10 @@ allow_form_switch = true
 [node name="Crystal" parent="RuntimeObjects" unique_id=1716045995 instance=ExtResource("10_crystal_scene")]
 position = Vector2(224, 96)
 crystal_id = &"crystal_001"
+
+[node name="WallBlock" parent="RuntimeObjects" unique_id=1410436600 instance=ExtResource("16_wall_block")]
+position = Vector2(352, 224)
+stable_instance_id = "fci_0000002"
 
 [node name="LightPathLayer" type="Node2D" parent="." unique_id=1467401346]
 
