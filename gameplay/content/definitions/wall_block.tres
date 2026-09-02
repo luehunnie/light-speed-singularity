@@ -1,0 +1,11 @@
+[gd_resource type="Resource" script_class="WallContentDefinition" format=3]
+
+[ext_resource type="Script" path="res://gameplay/content/wall_content_definition.gd" id="1_walldef"]
+[ext_resource type="PackedScene" path="res://gameplay/content/wall/wall_block.tscn" id="2_scene"]
+
+[resource]
+script = ExtResource("1_walldef")
+content_type_id = &"wall_block"
+display_name = "单格墙体"
+category = &"wall"
+scene = ExtResource("2_scene")

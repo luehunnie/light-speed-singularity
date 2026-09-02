@@ -1,0 +1,13 @@
+[gd_scene load_steps=2 format=3]
+
+[ext_resource type="Script" path="res://gameplay/content/wall/wall_structure.gd" id="1_script"]
+
+[node name="WallStructureH" type="Node2D"]
+script = ExtResource("1_script")
+structure = 0
+
+[node name="WallSeg0" type="Sprite2D" parent="."]
+
+[node name="WallSeg1" type="Sprite2D" parent="."]
+
+[node name="WallSeg2" type="Sprite2D" parent="."]

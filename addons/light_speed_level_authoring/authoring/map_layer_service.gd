@@ -143,3 +143,103 @@ static func _erase_in(layer: TileMapLayer, cells: Array[Vector2i]) -> Array[Vect
 			layer.erase_cell(cell)
 			erased.append(cell)
 	return erased
+
+
+# ===== D-04 正式墙体对象规划 =====
+# 墙体的正式作者入口是 Content Palette（wall 域定义 → GridPlacedObject 派生墙节点）；
+# 本服务仅保留"一键包裹全边界"的纯数据规划（cells + 样式 token），节点创建由面板经
+# PaletteService.place_wall_at 编辑事务完成（输出为正式墙对象，非匿名 TileMap 格）。
+# D-03 的 12 样式网格 / 6 盖章按钮 / 单格涂刷 / 占位迁移（视口点击武装流）已删除：
+# 被 Human 否决的地图辅助主工作流不再保留，避免与 Palette 双入口重叠。
+
+# 边界自动样式：按格四邻的 LegalArea 事实选直墙/外角(large_bend)/内角(small_bend)。
+# 1 邻=贴该邻边的直墙；2 对邻=轴向直墙（N/S→上、W/E→左，确定性约定）；2 邻邻接=外角（贴两邻边）；
+# 3 邻=内角（小角饰置缺失边顺时针端角：缺N→右上/缺E→右下/缺S→左下/缺W→左上，固定约定、可逐格重样式）；
+# 4 邻=右下内角；0 邻=默认直墙上（确定性约定）。
+# 返回样式 token（与 gameplay/content/wall/wall_style_catalog.gd STYLE_ORDER 冻结 token 一致）。
+static func resolve_boundary_style(legal_n: bool, legal_s: bool, legal_w: bool, legal_e: bool) -> String:
+	var count := (1 if legal_n else 0) + (1 if legal_s else 0) + (1 if legal_w else 0) + (1 if legal_e else 0)
+	if count == 1:
+		if legal_n:
+			return "straight_up"
+		if legal_s:
+			return "straight_down"
+		if legal_w:
+			return "straight_left"
+		return "straight_right"
+	if count == 2:
+		if legal_n and legal_s:
+			return "straight_up"
+		if legal_w and legal_e:
+			return "straight_left"
+		if legal_n and legal_w:
+			return "large_bend_lu"
+		if legal_n and legal_e:
+			return "large_bend_ru"
+		if legal_s and legal_w:
+			return "large_bend_ld"
+		return "large_bend_rd"
+	if count == 3:
+		if not legal_n:
+			return "small_bend_tr"
+		if not legal_e:
+			return "small_bend_br"
+		if not legal_s:
+			return "small_bend_bl"
+		return "small_bend_tl"
+	if count == 4:
+		return "small_bend_br"
+	# 0 邻=默认直墙上（确定性冻结约定；token 与 wall_style_catalog STYLE_ORDER 一致）。
+	return "straight_up"
+
+
+# 全边界一键包裹规划（纯数据）：LegalArea 外侧相邻（4 邻）Terrain 格=包裹候选；
+# 逐格局部判定天然覆盖多区域与洞口；不消耗 LegalArea。第一版只做全边界，不做局部框选。
+# D-04 起 cells 的落点为正式单格墙对象（wall_block 定义 + 样式 token），不再是 WallLayer tile 写入。
+static func plan_wall_wrap(level_root: Node2D) -> Dictionary:
+	var legal: TileMapLayer = _find_role(level_root, _EditorPlacementQuery.ROLE_LEGAL)
+	var terrain: TileMapLayer = _find_role(level_root, _EditorPlacementQuery.ROLE_TERRAIN)
+	if legal == null or terrain == null:
+		return {"ok": false, "reasons": PackedStringArray(["缺少 LegalArea / Terrain 层，拒绝包裹。"]), "cells": []}
+	var candidates: Dictionary = {}
+	for cell: Vector2i in legal.get_used_cells():
+		for offset: Vector2i in [Vector2i(0, -1), Vector2i(0, 1), Vector2i(-1, 0), Vector2i(1, 0)]:
+			var ring: Vector2i = cell + offset
+			if legal.get_cell_source_id(ring) == -1 and terrain.get_cell_source_id(ring) != -1:
+				candidates[ring] = true
+	var cells: Array = []
+	for cell: Variant in candidates:
+		var wrapped: Vector2i = cell
+		cells.append({"cell": wrapped, "style": resolve_boundary_style(
+			legal.get_cell_source_id(wrapped + Vector2i(0, -1)) != -1,
+			legal.get_cell_source_id(wrapped + Vector2i(0, 1)) != -1,
+			legal.get_cell_source_id(wrapped + Vector2i(-1, 0)) != -1,
+			legal.get_cell_source_id(wrapped + Vector2i(1, 0)) != -1)})
+	return _finish_plan(level_root, cells)
+
+
+# 汇总规划结果：合法性校验通过→ok 规划；否则整次拒绝（零部分写入）。
+static func _finish_plan(level_root: Node2D, cells: Array) -> Dictionary:
+	var reasons: PackedStringArray = _wall_cell_rejections(level_root, cells)
+	if not reasons.is_empty():
+		return {"ok": false, "reasons": reasons, "cells": []}
+	return {"ok": true, "reasons": PackedStringArray(), "cells": cells}
+
+
+# 墙格合法性（D-04 正式墙对象规则：Terrain 内 + 非 WallLayer 旧墙格 + 无正式对象占用 → 可放置；
+# 任一格非法整次拒绝。不再拒绝 LegalArea 格——墙对象可与 LegalArea 同格（Validator 警告级），与
+# 迁移保留的 (5,3) 内侧墙口径一致）。
+static func _wall_cell_rejections(level_root: Node2D, cells: Array) -> PackedStringArray:
+	var terrain: TileMapLayer = _find_role(level_root, _EditorPlacementQuery.ROLE_TERRAIN)
+	var wall: TileMapLayer = _find_role(level_root, _EditorPlacementQuery.ROLE_WALL)
+	var occupied: Array[Vector2i] = _EditorPlacementQuery.collect_occupied_cells(level_root)
+	var reasons: PackedStringArray = PackedStringArray()
+	for entry: Variant in cells:
+		var cell: Vector2i = (entry as Dictionary)["cell"]
+		if terrain == null or terrain.get_cell_source_id(cell) == -1:
+			reasons.append("格 %s 越界/非 Terrain。" % [cell])
+		elif wall != null and wall.get_cell_source_id(cell) != -1:
+			reasons.append("格 %s 已有 WallLayer 旧墙格（兼容输入，拒绝重复墙体数据）。" % [cell])
+		elif occupied.has(cell):
+			reasons.append("格 %s 被正式对象占用。" % [cell])
+	return reasons

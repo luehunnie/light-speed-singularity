@@ -43,16 +43,21 @@ static func validate_layers(
 
 ## 构造四层只读快照：逐层复制 used cells 并计算 Terrain 外包矩形。复制完成后不再保留传入的 TileMapLayer 引用。
 ## 存在性/类型校验由 validate_layers 负责；调用方须先通过 validate_layers 再 new()，直接 new() 须自行保证四层非 null。
+## D-04：extra_wall_cells 为正式墙体对象（GridPlacedObject 派生墙节点）footprint 的绝对占格合集，
+## 与 WallLayer used cells 并入同一墙格事实（is_wall_cell 单一真值，节点视觉与阻挡同源，无第二套手工同步）。
 func _init(
 		terrain_layer: TileMapLayer,
 		wall_layer: TileMapLayer,
 		legal_area_layer: TileMapLayer,
-		decoration_layer: TileMapLayer
+		decoration_layer: TileMapLayer,
+		extra_wall_cells: Array[Vector2i] = []
 ) -> void:
 	_terrain_cells = _copy_used_cells_of(terrain_layer)
 	_wall_cells = _copy_used_cells_of(wall_layer)
 	_legal_cells = _copy_used_cells_of(legal_area_layer)
 	_decoration_cells = _copy_used_cells_of(decoration_layer)
+	for cell: Vector2i in extra_wall_cells:
+		_wall_cells[cell] = true
 	_terrain_bounds = _compute_bounds(_terrain_cells)
 
 

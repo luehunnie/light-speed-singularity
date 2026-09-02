@@ -36,7 +36,9 @@ const INVALID_CELL: Vector2i = Vector2i(-999999, -999999)
 
 
 @export var map_bounds: Rect2i = Rect2i(0, 0, 16, 16)
-@export var wall_cells: Array[Vector2i] = [Vector2i(5, 3)]
+## D-04 起默认空：正式墙体对象（Palette 墙节点）经墙格快照合并成为唯一墙体事实；
+## 本数组仅为无快照旧兼容路径（旧测试/旧构造）保留，不再承载真实墙数据，避免与新墙对象双真值。
+@export var wall_cells: Array[Vector2i] = []
 
 ## 运行期移动次数上限。仅在 PULSE_ACTIVE 或 MOVE_WINDOW 中成功跨格移动已放置机关时消耗；SETUP 移动不受此限制。
 @export_range(0, 99, 1) var runtime_move_limit: int = 1
@@ -156,6 +158,9 @@ const _LevelWorldQuery: GDScript = preload("res://gameplay/world/level_world_que
 const _LightWorldQuery: GDScript = preload("res://gameplay/world/light_world_query.gd")
 # 四层 TileMapLayer 只读快照（D5-B.1）：validate_layers 校验后 new() 构造，构造时复制 used cells，不持有 TileMapLayer；D5-B.2A 起作为正式运行事实接入 LevelWorldQuery。
 const _LevelTileLayerSnapshot: GDScript = preload("res://gameplay/world/level_tile_layer_snapshot.gd")
+# D-04 正式墙体对象墙格采集：Palette 墙节点（GridPlacedObject 派生）footprint 并入快照墙格事实，
+# 节点视觉与运行阻挡同源（is_wall_cell 单一真值），不再要求 WallLayer 手工同步。
+const _WallStyleCatalog: GDScript = preload("res://gameplay/content/wall/wall_style_catalog.gd")
 # 关卡稳定对象索引所有者（D3-C）：水晶按显式 crystal_id 与 cell 双向索引，LevelWorldQuery 据此查询水晶，不暴露可写字典。
 const _LevelObjectRegistry: GDScript = preload("res://gameplay/level/level_object_registry.gd")
 # 目标完成事实唯一所有者（D3-D）：按 cell 激活水晶、判断完成、运行期重置水晶；核心只读取 is_completed()/reset_runtime()，不保留第二套目标业务实现。
@@ -473,6 +478,8 @@ func _resolve_mechanism_node(mechanism_id: StringName) -> Variant:
 
 ## 构造四层 TileMapLayer 只读快照（D5-B.1；D5-B.1R 两段式构造）：先调静态校验 validate_layers 检查四层有效；校验失败保持 _tile_layer_snapshot 为 null 并安全返回，不退回 map_bounds；成功则直接 new() 构造快照。
 ## D5-B.2A 起校验失败（null 快照）由 _ready 中止后续世界查询初始化；成功则接入 LevelWorldQuery 作为正式运行 Terrain/LegalArea/Wall 唯一事实。
+## D-04：正式墙体对象（Palette 墙节点）footprint 由 WallStyleCatalog.collect_wall_cells 采集，
+## 经 extra_wall_cells 并入同一墙格事实——节点视觉与运行阻挡同源，杜绝双真值。
 func _build_tile_layer_snapshot() -> void:
 	if not _LevelTileLayerSnapshot.validate_layers(
 		terrain_layer, wall_layer, legal_area_layer, decoration_layer
@@ -480,7 +487,8 @@ func _build_tile_layer_snapshot() -> void:
 		_tile_layer_snapshot = null
 		return
 	_tile_layer_snapshot = _LevelTileLayerSnapshot.new(
-		terrain_layer, wall_layer, legal_area_layer, decoration_layer
+		terrain_layer, wall_layer, legal_area_layer, decoration_layer,
+		_WallStyleCatalog.collect_wall_cells(runtime_objects)
 	)
 
 
