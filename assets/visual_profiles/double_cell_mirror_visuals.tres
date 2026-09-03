@@ -1,0 +1,25 @@
+[gd_resource type="Resource" script_class="ObjectVisualProfile" format=3]
+
+[ext_resource type="Script" path="res://gameplay/visuals/object_visuals/object_visual_profile.gd" id="1_profile"]
+[ext_resource type="Script" path="res://gameplay/visuals/visual_state_texture.gd" id="2_state"]
+
+[sub_resource type="Resource" id="VisualStateTexture_bottom"]
+script = ExtResource("2_state")
+state_id = &"bottom"
+
+[sub_resource type="Resource" id="VisualStateTexture_right"]
+script = ExtResource("2_state")
+state_id = &"right"
+
+[sub_resource type="Resource" id="VisualStateTexture_top"]
+script = ExtResource("2_state")
+state_id = &"top"
+
+[sub_resource type="Resource" id="VisualStateTexture_left"]
+script = ExtResource("2_state")
+state_id = &"left"
+
+[resource]
+script = ExtResource("1_profile")
+default_state_id = &"right"
+states = Array[ExtResource("2_state")]([SubResource("VisualStateTexture_bottom"), SubResource("VisualStateTexture_right"), SubResource("VisualStateTexture_top"), SubResource("VisualStateTexture_left")])

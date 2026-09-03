@@ -1,0 +1,20 @@
+[gd_scene load_steps=4 format=3]
+
+[ext_resource type="Script" path="res://gameplay/mechanisms/mirrors/double_cell_mirror.gd" id="1_script"]
+[ext_resource type="PackedScene" path="res://gameplay/visuals/object_visuals/object_visual_view.tscn" id="2_view"]
+[ext_resource type="Resource" path="res://assets/visual_profiles/double_cell_mirror_visuals.tres" id="3_profile"]
+
+[node name="DoubleCellMirror" type="Node2D"]
+script = ExtResource("1_script")
+
+[node name="VisualView" parent="." instance=ExtResource("2_view")]
+visual_profile = ExtResource("3_profile")
+initial_state_id = &"right"
+
+[node name="MirrorLine" type="Line2D" parent="."]
+visible = false
+points = PackedVector2Array(32, -32, 32, 96)
+default_color = Color(0.03, 0.09, 0.14, 1)
+width = 5.0
+begin_cap_mode = 2
+end_cap_mode = 2

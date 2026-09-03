@@ -1,0 +1,31 @@
+[gd_resource type="Resource" script_class="MechanismDefinition" format=3]
+
+[ext_resource type="PackedScene" path="res://gameplay/mechanisms/mirrors/double_cell_mirror.tscn" id="1_scene"]
+[ext_resource type="Script" path="res://gameplay/content/mechanism_definition.gd" id="2_mechdef"]
+[ext_resource type="Script" path="res://gameplay/content/configuration/mechanism_field_definition.gd" id="3_field"]
+[ext_resource type="Script" path="res://gameplay/control/control_event_definition.gd" id="4_event"]
+
+[sub_resource type="Resource" id="Resource_orientation"]
+script = ExtResource("3_field")
+field_id = &"orientation"
+display_name = "镜面朝向"
+enum_max = 3
+default_value = 1
+player_action = &"cycle_internal_state"
+
+[sub_resource type="Resource" id="Resource_beam_redirected"]
+script = ExtResource("4_event")
+event_id = &"beam_redirected"
+display_name = "光束经镜面转向"
+
+[resource]
+script = ExtResource("2_mechdef")
+light_interaction_forms = Array[StringName]([&"RAY", &"PARTICLE"])
+configuration_fields = [SubResource("Resource_orientation")]
+player_interaction_actions = Array[StringName]([&"cycle_internal_state"])
+control_output_events = [SubResource("Resource_beam_redirected")]
+content_type_id = &"basic_double_cell_mirror"
+display_name = "基础双格镜"
+category = &"optics"
+scene = ExtResource("1_scene")
+inventory_eligible = true
