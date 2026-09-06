@@ -1,0 +1,24 @@
+[gd_resource type="Resource" script_class="MechanismDefinition" format=3]
+
+[ext_resource type="PackedScene" path="res://gameplay/mechanisms/splitters/t_cell_splitter.tscn" id="1_scene"]
+[ext_resource type="Script" path="res://gameplay/content/mechanism_definition.gd" id="2_mechdef"]
+[ext_resource type="Script" path="res://gameplay/content/configuration/mechanism_field_definition.gd" id="3_field"]
+
+[sub_resource type="Resource" id="Resource_orientation"]
+script = ExtResource("3_field")
+field_id = &"orientation"
+display_name = "分光朝向"
+enum_max = 3
+default_value = 0
+player_action = &"cycle_internal_state"
+
+[resource]
+script = ExtResource("2_mechdef")
+light_interaction_forms = Array[StringName]([&"RAY", &"PARTICLE"])
+configuration_fields = [SubResource("Resource_orientation")]
+player_interaction_actions = Array[StringName]([&"cycle_internal_state"])
+content_type_id = &"t_cell_splitter"
+display_name = "四格T型分光器"
+category = &"optics"
+scene = ExtResource("1_scene")
+inventory_eligible = true

@@ -1633,7 +1633,6 @@ Extension 必须由真实冻结玩法倒逼，不能为了“未来也许”提�
 
 尚未有冻结玩法且只可用于原型：
 
-- Splitter topology；
 - Form conversion exact lifecycle；
 - future neighborhood-aware mechanisms；
 - runtime-spawn targets in normal Control Connection。
@@ -1659,14 +1658,16 @@ Extension 必须由真实冻结玩法倒逼，不能为了“未来也许”提�
 
 Split 会改变传播拓扑，不应简单塞成普通 Effect。
 
-未来应作为明确的 Propagation Topology Extension 讨论：
+已冻结（Q49/Q53）：分光规则冻结于机制文档（三格直条分光器 / 四格T型分光器 v0.1），经 Propagation Topology Extension 实现——
 
 ```text
 单输入
-→ 多个合法 outgoing branches
+→ 多个合法 outgoing branches（BranchSpec 派生 emission，仅 RAY）
 ```
 
-在正式分光规则未冻结前不实现 Stable `SPLIT` API。
+- 分光分支 = 派生 emission（BranchSpec{source_cell, direction, color}，Q49）；
+- 消耗式分光 = spawned_branches 允许挂在 BLOCK 决策上（Q53）；
+- 仍不实现 Stable `SPLIT` Decision——分光经 BLOCK + spawned_branches 表达，不新增 Decision 枚举值。
 
 ## 38.3 Gameplay Color
 
@@ -1698,7 +1699,7 @@ Split 会改变传播拓扑，不应简单塞成普通 Effect。
 | Particle 形态目标 | Target + FormCondition(PARTICLE) | Preplaced | Not satisfied | Satisfied | Objective | 同上 |
 | Main Emitter | EmitterDefinition | Preplaced Stable ID | Source | Source | 非 Inventory | 与 MechanismDefinition 分域 |
 | Form Converter | Extension | 未定 | Extension | Extension | - | 规则冻结后再正式化 |
-| Splitter | Extension | 未定 | Topology Extension | Topology Extension | - | 不塞进普通 Effect |
+| Splitter | MechanismDefinition；orientation Field | 多格 Footprint；Anchor；Atomic Rotate | BLOCK + spawned_branches（分光） | BLOCK | - | 消耗式分光（Q53），不塞进普通 Effect |
 | 滤光片 | MechanismDefinition；orientation + color Field | Preplaced；1-cell；Fixed Profile | 平行 BLOCK / 穿过 COLOR_CHANGE / 吸收 BLOCK | BLOCK | ColorCondition（Extension） | 验证 Gameplay Color + COLOR_CHANGE |
 
 ---
@@ -2159,6 +2160,7 @@ CoreLoop
 | Q50 | 多格 footprint = 机关实例 `get_occupied_offsets(orientation) -> Array[Vector2i]`（锚格相对、与朝向无关线形、默认 `[Vector2i.ZERO]`）；放置/移动/收编/编辑快照/Validator 事务层展开绝对占格，经 OccupancyRegistry register_cells/move_cells 原子提交；保存仍由 position+orientation 派生，不新增持久化自由字段，不扩 Stable Contract | FROZEN |
 | Q51 | 命中聚合：同一 emission 对同一水晶格只计一次（generation\|emission_id\|cell 去重键，重复命中幂等），不同水晶格/不同 emission 分别计；emission_id=0 遗留测试桩豁免去重 | FROZEN |
 | Q52 | 分光器默认朝向 RIGHT（DEFAULT_SPLITTER_ORIENTATION，仅接口默认值；分光器机关本体留后续内容批次实现） | FROZEN |
+| Q53 | 分光器消耗式分光（内容批次 C-09）：spawned_branches 允许挂在 BLOCK 决策上（与 CONTINUE / REDIRECT 同级合法），语义 = 主路径在机关格停止（消耗入射光）、分支经 FormChangeEmissionSpawner 派生为独立 RAY emission（继承色由执行层盖章）；FORM_CHANGE / REDIRECT_CROSS 仍不得携带分支（单输出），PARTICLE 形态仍不得携带分支，分支 color 仍须 NONE 哨兵 | FROZEN |
 
 `AUTO-FROZEN` 表示：用户明确授权“后续全部按推荐方案”，由本轮收口直接冻结。
 
