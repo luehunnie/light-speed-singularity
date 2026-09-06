@@ -1633,7 +1633,6 @@ Extension 必须由真实冻结玩法倒逼，不能为了“未来也许”提�
 
 尚未有冻结玩法且只可用于原型：
 
-- Splitter topology；
 - Form conversion exact lifecycle；
 - future neighborhood-aware mechanisms；
 - runtime-spawn targets in normal Control Connection。
@@ -1659,14 +1658,16 @@ Extension 必须由真实冻结玩法倒逼，不能为了“未来也许”提�
 
 Split 会改变传播拓扑，不应简单塞成普通 Effect。
 
-未来应作为明确的 Propagation Topology Extension 讨论：
+已冻结（Q49/Q53）：分光规则冻结于机制文档（三格直条分光器 / 四格T型分光器 v0.1），经 Propagation Topology Extension 实现——
 
 ```text
 单输入
-→ 多个合法 outgoing branches
+→ 多个合法 outgoing branches（BranchSpec 派生 emission，仅 RAY）
 ```
 
-在正式分光规则未冻结前不实现 Stable `SPLIT` API。
+- 分光分支 = 派生 emission（BranchSpec{source_cell, direction, color}，Q49）；
+- 消耗式分光 = spawned_branches 允许挂在 BLOCK 决策上（Q53）；
+- 仍不实现 Stable `SPLIT` Decision——分光经 BLOCK + spawned_branches 表达，不新增 Decision 枚举值。
 
 ## 38.3 Gameplay Color
 
@@ -1698,7 +1699,7 @@ Split 会改变传播拓扑，不应简单塞成普通 Effect。
 | Particle 形态目标 | Target + FormCondition(PARTICLE) | Preplaced | Not satisfied | Satisfied | Objective | 同上 |
 | Main Emitter | EmitterDefinition | Preplaced Stable ID | Source | Source | 非 Inventory | 与 MechanismDefinition 分域 |
 | Form Converter | Extension | 未定 | Extension | Extension | - | 规则冻结后再正式化 |
-| Splitter | Extension | 未定 | Topology Extension | Topology Extension | - | 不塞进普通 Effect |
+| Splitter | MechanismDefinition；orientation Field | 多格 Footprint；Anchor；Atomic Rotate | BLOCK + spawned_branches（分光） | BLOCK | - | 消耗式分光（Q53），不塞进普通 Effect |
 | 滤光片 | MechanismDefinition；orientation + color Field | Preplaced；1-cell；Fixed Profile | 平行 BLOCK / 穿过 COLOR_CHANGE / 吸收 BLOCK | BLOCK | ColorCondition（Extension） | 验证 Gameplay Color + COLOR_CHANGE |
 
 ---
