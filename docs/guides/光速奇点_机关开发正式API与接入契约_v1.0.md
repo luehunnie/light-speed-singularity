@@ -2159,6 +2159,7 @@ CoreLoop
 | Q50 | 多格 footprint = 机关实例 `get_occupied_offsets(orientation) -> Array[Vector2i]`（锚格相对、与朝向无关线形、默认 `[Vector2i.ZERO]`）；放置/移动/收编/编辑快照/Validator 事务层展开绝对占格，经 OccupancyRegistry register_cells/move_cells 原子提交；保存仍由 position+orientation 派生，不新增持久化自由字段，不扩 Stable Contract | FROZEN |
 | Q51 | 命中聚合：同一 emission 对同一水晶格只计一次（generation\|emission_id\|cell 去重键，重复命中幂等），不同水晶格/不同 emission 分别计；emission_id=0 遗留测试桩豁免去重 | FROZEN |
 | Q52 | 分光器默认朝向 RIGHT（DEFAULT_SPLITTER_ORIENTATION，仅接口默认值；分光器机关本体留后续内容批次实现） | FROZEN |
+| Q53 | 分光器消耗式分光（内容批次 C-09）：spawned_branches 允许挂在 BLOCK 决策上（与 CONTINUE / REDIRECT 同级合法），语义 = 主路径在机关格停止（消耗入射光）、分支经 FormChangeEmissionSpawner 派生为独立 RAY emission（继承色由执行层盖章）；FORM_CHANGE / REDIRECT_CROSS 仍不得携带分支（单输出），PARTICLE 形态仍不得携带分支，分支 color 仍须 NONE 哨兵 | FROZEN |
 
 `AUTO-FROZEN` 表示：用户明确授权“后续全部按推荐方案”，由本轮收口直接冻结。
 

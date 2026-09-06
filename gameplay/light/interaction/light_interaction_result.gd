@@ -6,7 +6,7 @@ extends RefCounted
 ## Decision（§22.1）：CONTINUE / BLOCK / REDIRECT(direction)；阶段C-01 扩展 FORM_CHANGE(target_form, direction)
 ##   （光形式转换器：转换发生在机关格内，出射沿 direction、形态变为 target_form，速度/颜色规则由执行适配层按平台默认生成）；
 ##   阶段C-08 扩展 REDIRECT_CROSS(redirect_direction, cross_direction)（穿邻格：跨界格透明通过）与分光分支载荷
-##   spawned_branches: Array[BranchSpec]（仅 CONTINUE / REDIRECT 且 RAY 形态可携带；扩展已登记 Freeze Ledger §47，此后冻结）。
+##   spawned_branches: Array[BranchSpec]（仅 CONTINUE / REDIRECT / BLOCK 且 RAY 形态可携带；扩展已登记 Freeze Ledger §47，此后冻结）。
 ## Typed Effects（§22.2）：PARTICLE_SPEED_DELTA(delta)（只允许 ±1，Guide §24）/ OUTPUT_EVENT(event_id) / COLOR_CHANGE(target_color)。
 ## 不可变意图：经 continue_result / block_result / redirect_result / form_change_result 构造，add_* 追加效果后交 Runtime；
 ##   Runtime 校验入口 validate(light_form) 返回问题清单，校验失败由 Runtime 安全降级（Contract 分发层负责）。
@@ -77,7 +77,7 @@ var cross_direction: Vector2i = Vector2i.ZERO
 var target_form: int = -1
 ## 有序 Typed Effects（0..N）。
 var effects: Array[TypedEffect] = []
-## 有序分光分支载荷（C-08 冻结；仅 CONTINUE / REDIRECT 且 RAY 形态可非空，其余 Decision / 形态须为空——validate 强制；
+## 有序分光分支载荷（C-08 冻结；仅 CONTINUE / REDIRECT / BLOCK 且 RAY 形态可非空，其余 Decision / 形态须为空——validate 强制；
 ##   REDIRECT_CROSS 穿邻格为单输出，不得携带分支）。派生 emission 由执行适配层经既有 spawner 范式生成。
 var spawned_branches: Array[BranchSpec] = []
 
@@ -125,7 +125,7 @@ static func redirect_cross_result(redirect_direction: Vector2i, cross_direction:
 	return result
 
 
-## 追加一个分光分支载荷（C-08；仅 CONTINUE / REDIRECT 决策且 RAY 形态合法，validate 强制）。
+## 追加一个分光分支载荷（C-08；仅 CONTINUE / REDIRECT / BLOCK 决策且 RAY 形态合法，validate 强制）。
 ## [br]color 留 NONE 哨兵，由执行层按入射状态盖章（机关不得自设色）；返回自身便于链式表达。
 func add_spawned_branch(source_cell: Vector2i, direction: Vector2i) -> LightInteractionResult:
 	var branch: BranchSpec = BranchSpec.new()
@@ -264,10 +264,10 @@ func validate(light_form: int) -> PackedStringArray:
 		problems.append("同一次交互至多一个 OUTPUT_EVENT（实际 %d 个）。" % [event_count])
 	if color_change_count > 1:
 		problems.append("同一次交互至多一个 COLOR_CHANGE（实际 %d 个）。" % [color_change_count])
-	# 分支载荷校验（C-08）：仅 CONTINUE / REDIRECT 且 RAY 形态可非空；分支方向合法、颜色须为 NONE（执行层盖章）。
+	# 分支载荷校验（C-08）：仅 CONTINUE / REDIRECT / BLOCK 且 RAY 形态可非空；分支方向合法、颜色须为 NONE（执行层盖章）。
 	if not spawned_branches.is_empty():
-		if decision != Decision.CONTINUE and decision != Decision.REDIRECT:
-			problems.append("仅 CONTINUE / REDIRECT 可携带 spawned_branches，实际 Decision %d 携带 %d 个分支。" % [decision, spawned_branches.size()])
+		if decision != Decision.CONTINUE and decision != Decision.REDIRECT and decision != Decision.BLOCK:
+			problems.append("仅 CONTINUE / REDIRECT / BLOCK 可携带 spawned_branches，实际 Decision %d 携带 %d 个分支。" % [decision, spawned_branches.size()])
 		if light_form != _LightEmissionTypes.LightForm.RAY:
 			problems.append("spawned_branches 仅 RAY 形态合法。")
 		for branch: BranchSpec in spawned_branches:

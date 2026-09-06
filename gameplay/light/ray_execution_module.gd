@@ -103,6 +103,12 @@ static func execute(
 					break
 				_RayMechanismResult.Kind.BLOCK:
 					result.stop_reason = _RayExecutionResult.StopReason.MECHANISM_BLOCK
+					# C-08 分光器扩展（Q53 消耗式分光）：BLOCK 也可携带 spawned_branches——主路径在机关格停止、
+					#   分支由 spawner 派生为独立 RAY emission。继承色用当前 current_color 盖章（分光器 color_change 恒 NONE，不改色）；
+					#   break 前收集，否则分支丢失。普通 BLOCK 机关（光屏障/镜面背面）spawned_branches 恒空，此改动零影响。
+					for branch in mech_result.spawned_branches:
+						result.add_spawned_branch(_LightInteractionResult.make_branch_spec(
+							branch.source_cell, branch.direction, current_color))
 					break
 				_:
 					pass # CONTINUE：保持原方向，与旧循环 incoming_direction 返回一致。
@@ -111,7 +117,7 @@ static func execute(
 			if mech_result.color_change != _RayColor.ColorValue.NONE:
 				current_color = mech_result.color_change
 			# C-08：分光分支载荷收集——复制为独立 BranchSpec 并按入射状态盖章继承色（机关侧构造恒 NONE）；
-			#   仅 CONTINUE / REDIRECT 可能携带（Contract validate 强制；BLOCK / FORM_CHANGE 已 break，REDIRECT_CROSS 禁带）。
+			#   此处处理 CONTINUE / REDIRECT（REDIRECT_CROSS 正常跨格亦经过、但分支恒空）；BLOCK 已在其 arm 内 break 前收集。
 			#   传播全程累积（途经机关各自追加）；派生 emission 由执行适配层生成，本模块不生成。
 			for branch in mech_result.spawned_branches:
 				result.add_spawned_branch(_LightInteractionResult.make_branch_spec(

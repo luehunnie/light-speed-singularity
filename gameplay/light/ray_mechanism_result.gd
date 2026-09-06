@@ -36,7 +36,7 @@ var target_form: int = -1
 var cross_direction: Vector2i = Vector2i.ZERO
 
 ## 分光分支载荷透传（C-08；元素为 LightInteractionResult.BranchSpec——跨模块内类不做静态元素类型标注，
-##   类型与合法性由 Contract 层 validate 强制）。仅 CONTINUE / REDIRECT 时可能非空；本类只透传引用，不改写分支。
+##   类型与合法性由 Contract 层 validate 强制）。仅 CONTINUE / REDIRECT / BLOCK 时可能非空；本类只透传引用，不改写分支。
 var spawned_branches: Array = []
 
 ## COLOR_CHANGE 目标色（ColorValue 枚举值）；无颜色变更时恒为 NONE 哨兵，供核心在响应后更新光线颜色。
